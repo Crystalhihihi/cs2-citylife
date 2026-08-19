@@ -207,7 +207,7 @@
     border-radius: 4px;
     color: #e8eaed;
     font-size: 12px;
-    font-family: inherit;
+    font-family: "Noto Sans SC", "Noto Sans", sans-serif; /* 显式指定 CJK 字体：游戏自带 NotoSansSC-Regular.ttf；textarea 不继承根字体栈，inherit 会变豆腐块（2026-08-19 实机） */
     padding: 4px 6px;
     outline: none;
     word-break: break-all;          /* 中文长句输入时不顶破输入框 */

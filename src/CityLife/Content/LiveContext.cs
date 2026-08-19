@@ -16,6 +16,9 @@ namespace CityLife.Content
         /// <summary>最近一条突发事件文本（下一炉变热议串的引信）。</summary>
         public static string? LastBreaking;
 
+        /// <summary>信息流面板当前是否展开（feedMode=openOnly/throttled 时导演据此调节拍）。</summary>
+        public static bool PanelOpen;
+
         public static void PublishMayor(string text)
         {
             MayorPost = text;

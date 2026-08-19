@@ -37,6 +37,7 @@ namespace CityLife.GameBridge
             AddBinding(m_PostsBinding = new ValueBinding<string>("CityLife", "posts", "[]"));
             AddBinding(new TriggerBinding<string>("CityLife", "uiLog", msg => Mod.Log.Info("[UI] " + msg)));
             AddBinding(new TriggerBinding<string>("CityLife", "mayorPost", OnMayorPost));
+            AddBinding(new TriggerBinding<int>("CityLife", "panelState", v => Content.LiveContext.PanelOpen = v == 1));
 
             // 双闸引用（找不到=版本变动，仅警告不影响其他功能）
             try { m_VanillaChirper = World.GetOrCreateSystemManaged<Game.UI.InGame.ChirperUISystem>(); }

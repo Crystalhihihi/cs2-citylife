@@ -3,12 +3,12 @@ import {
     useMemo,
     useRef,
     useState,
-    PointerEvent as ReactPointerEvent,
+    MouseEvent as ReactMouseEvent,
     KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { Button } from "cs2/ui";
 import { useValue } from "cs2/api";
-import { postsBinding, uiLog, mayorPost, FeedPost } from "mods/bindings";
+import { postsBinding, uiLog, mayorPost, panelState, FeedPost } from "mods/bindings";
 import styles from "./CityLifePanel.module.css";
 
 // 内联 SVG 聊天气泡图标（硬编码 fill；禁用 emoji/符号字形——游戏字体缺字形会变豆腐块）
@@ -72,7 +72,8 @@ export const CityLifeButton = () => {
     const [open, setOpen] = useState(false);
 
     const toggle = () => {
-        // 验证 UI → C# 通道：开合时经 uiLog TriggerBinding 转发一行进 Mod.Log
+        // 开合状态上报 C#（feedMode 联动：openOnly/throttled 模式据此调生成节拍）+ 日志通道验证
+        panelState(!open);
         uiLog(open ? "面板关闭" : "面板打开");
         setOpen(!open);
     };
@@ -193,25 +194,26 @@ const CityLifePanel = () => {
         readMetrics();
     };
 
-    // 拖拽/缩放/拖 thumb 共用的指针跟踪：pointerdown 起手后在 window 上跟 move/up。
-    // （city-storytelling-mod 的 useDrag 先例证实 pointer 事件在 cohtml 可用）
-    const trackPointer = (onMove: (ev: PointerEvent) => void) => {
+    // 拖拽/缩放/拖 thumb 共用的指针跟踪。
+    // 2026-08-19 实机教训：cohtml 里 window 上的 pointermove/pointerup 不可靠（缩放失效），
+    // 改用 mouse 三件套（mousedown 起手 → window mousemove/mouseup）。
+    const trackMouse = (onMove: (ev: MouseEvent) => void) => {
         const onUp = () => {
-            window.removeEventListener("pointermove", onMove);
-            window.removeEventListener("pointerup", onUp);
+            window.removeEventListener("mousemove", onMove);
+            window.removeEventListener("mouseup", onUp);
         };
-        window.addEventListener("pointermove", onMove);
-        window.addEventListener("pointerup", onUp);
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
     };
 
     // 头部拖拽移动（钳在屏幕内，防止拖丢）
-    const onHeaderPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const onHeaderMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
         if (e.button !== 0) return;
         e.preventDefault();
         const sx = e.clientX;
         const sy = e.clientY;
         const orig = pos;
-        trackPointer((ev) => {
+        trackMouse((ev) => {
             setPos({
                 x: clamp(orig.x + ev.clientX - sx, 0, window.innerWidth - 60),
                 y: clamp(orig.y + ev.clientY - sy, 0, window.innerHeight - 40),
@@ -220,7 +222,7 @@ const CityLifePanel = () => {
     };
 
     // 右下角缩放手柄：min 280x320 / max 720x80vh
-    const onResizePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const onResizeMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
         if (e.button !== 0) return;
         e.preventDefault();
         e.stopPropagation();
@@ -228,7 +230,7 @@ const CityLifePanel = () => {
         const sy = e.clientY;
         const orig = size;
         const maxH = Math.round(window.innerHeight * 0.8);
-        trackPointer((ev) => {
+        trackMouse((ev) => {
             setSize({
                 w: clamp(orig.w + ev.clientX - sx, kMinW, kMaxW),
                 h: clamp(orig.h + ev.clientY - sy, kMinH, maxH),
@@ -250,7 +252,7 @@ const CityLifePanel = () => {
         : 0;
 
     // 拖动 thumb：位移按 内容可滚距离/thumb 可走距离 换算成 scrollTop
-    const onThumbPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const onThumbMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
         if (e.button !== 0) return;
         e.preventDefault();
         e.stopPropagation();
@@ -260,7 +262,7 @@ const CityLifePanel = () => {
         const startTop = el.scrollTop;
         const ratio =
             (el.scrollHeight - el.clientHeight) / Math.max(1, listH - thumbH);
-        trackPointer((ev) => {
+        trackMouse((ev) => {
             el.scrollTop = startTop + (ev.clientY - sy) * ratio;
         });
     };
@@ -311,7 +313,7 @@ const CityLifePanel = () => {
                 height: size.h,
             }}
         >
-            <div className={styles.header} onPointerDown={onHeaderPointerDown}>
+            <div className={styles.header} onMouseDown={onHeaderMouseDown}>
                 市民信息流
             </div>
             <div className={styles.tabs}>
@@ -361,7 +363,7 @@ const CityLifePanel = () => {
                                 height: thumbH,
                                 transform: `translateY(${thumbY}px)`,
                             }}
-                            onPointerDown={onThumbPointerDown}
+                            onMouseDown={onThumbMouseDown}
                         />
                     </div>
                 )}
@@ -386,7 +388,7 @@ const CityLifePanel = () => {
             </div>
             <div
                 className={styles.resizeHandle}
-                onPointerDown={onResizePointerDown}
+                onMouseDown={onResizeMouseDown}
             >
                 {ResizeIcon}
             </div>

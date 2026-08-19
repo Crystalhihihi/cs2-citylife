@@ -37,6 +37,7 @@ namespace CityLife.GameBridge
         private Content.Topic m_BatchTopic;      // 在飞那一炉的话题（收炉时给池帖用）
         private uint m_Seed;
         private uint m_BatchCount;               // 炉计数（Daily 话题/形态轮换用——别用 m_Seed：它按 k_BatchSize 步进会与池长撞车）
+        private uint m_Tick;                     // 导演自身节拍计数（feedMode=throttled 降频用）
         private bool m_BatchPending;
 
         protected override void OnCreate()
@@ -112,8 +113,15 @@ namespace CityLife.GameBridge
             if (m_Seed == 0 && m_BatchCount == 0 && !m_BatchPending)
                 Mod.Feed.Record(new Content.Post("市民圈", "市民圈已接入本市网络，首批帖子生成中……", Content.Topic.Daily, "system"));
 
+            // feedMode 门控（2026-08-19 玩家定案）：always 常跑 / openOnly 仅面板展开 / throttled 收起降频保温
+            var panelOpen = Content.LiveContext.PanelOpen;
+            var mode = Content.ModSettings.FeedMode;
+            var paused = mode == "openOnly" && !panelOpen;
+            var slowMo = mode == "throttled" && !panelOpen;
+
             // ② 放一条进信息流：池帖优先（锚点实体坐标随帖入库，面板点击聚焦预留）；空则 T0 兜底（开关可控）
-            if (m_Pool.TryTake(out var entry))
+            var allowRelease = !paused && (!slowMo || m_Tick % 4 == 0); // throttled 收起时 1/4 速滴灌
+            if (allowRelease && m_Pool.TryTake(out var entry))
             {
                 var entityIndex = 0;
                 var entityVersion = 0;
@@ -125,7 +133,7 @@ namespace CityLife.GameBridge
                 Mod.Feed.Record(entry.Post, entityIndex, entityVersion, entry.Comments);
                 RememberPosted(entry.Post.Text, entry.Post.PersonaId);
             }
-            else if (Content.ModSettings.T0Fallback)
+            else if (allowRelease && Content.ModSettings.T0Fallback)
             {
                 // T0 兜底帖（"又下雨了"式模板）。settings.json 里 t0Fallback=true 才启用——本质是 AI mod，默认关
                 var topic = Content.ContentDirector.DetectTopic(snapshot, m_LastTopic);
@@ -135,8 +143,9 @@ namespace CityLife.GameBridge
                 RememberPosted(t0.Text, t0.PersonaId);
             }
 
-            // ③ 补炉：池低位 + 无在飞 + 网关可用 + 非 MUTE（MUTE=纯模板零 token，§4 M3）
-            if (!m_BatchPending && m_Pool.Count < k_RefillWatermark
+            // ③ 补炉：池低位 + 无在飞 + 网关可用 + 非 MUTE + feedMode 门控（throttled 收起时仅池空才补）
+            var allowRefill = !paused && (!slowMo || m_Pool.Count == 0);
+            if (allowRefill && !m_BatchPending && m_Pool.Count < k_RefillWatermark
                 && Mod.Gateway != null && !Llm.CliGateway.Mute && m_Personas.Count > 0)
             {
                 // 突发联动：新闻入刊 → 本炉变热议串（事件文本进尾 + 热帖评论配额）
@@ -167,6 +176,8 @@ namespace CityLife.GameBridge
                 m_BatchPending = true;
                 m_BatchCount++;
             }
+
+            m_Tick++;
         }
 
         /// <summary>已发正文登记：去重反馈池 + 人格卡前情（连载机制数据源）。</summary>

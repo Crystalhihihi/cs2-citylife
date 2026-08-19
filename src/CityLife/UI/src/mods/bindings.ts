@@ -18,6 +18,9 @@ export const uiLog = (msg: string) => trigger("CityLife", "uiLog", msg);
 // 入参约定：UI 侧已 trim 且保证非空；C# 侧仍应做一次防御性校验。
 export const mayorPost = (text: string) => trigger("CityLife", "mayorPost", text);
 
+// 面板开合状态上报（feedMode 联动：openOnly/throttled 模式下 C# 据此调整生成节拍）
+export const panelState = (open: boolean) => trigger("CityLife", "panelState", open ? 1 : 0);
+
 // 帖子结构（短键名与 FeedStore.ToJson 对应；e/c 为 v2 新增可选键，向后兼容 M2-A 数据）
 export interface FeedPost {
     a: string;               // 作者

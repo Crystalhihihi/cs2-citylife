@@ -140,7 +140,9 @@ namespace CityLife.GameBridge
             var slowMo = mode == "throttled" && !panelOpen;
 
             // ② 放一条进信息流：池帖优先（锚点实体坐标随帖入库，面板点击聚焦预留）；空则 T0 兜底（开关可控）
-            var allowRelease = !paused && (!slowMo || m_Tick % 4 == 0); // throttled 收起时 1/4 速滴灌
+            // 昼夜节律：深夜（23-6 点）释放减半——夜里刷帖本来就稀
+            var night = snapshot.HourOfDay >= 23 || snapshot.HourOfDay < 6;
+            var allowRelease = !paused && (!slowMo || m_Tick % 4 == 0) && (!night || m_Tick % 2 == 0);
             if (allowRelease && m_Pool.TryTake(out var entry))
             {
                 var entityIndex = 0;

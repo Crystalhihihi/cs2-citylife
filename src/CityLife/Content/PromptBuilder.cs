@@ -151,7 +151,7 @@ namespace CityLife.Content
         {
             var weather = s.IsSnowing ? "雪" : s.IsRaining ? "雨" : "晴/阴";
             var season = string.IsNullOrEmpty(s.SeasonName) ? "未知" : s.SeasonName;
-            return $"人口{FuzzPeople(s.Citizens)}，失业率{Qual(s.UnemploymentPercent, 5f, 12f)}，幸福度{Qual(s.Happiness, 40f, 70f)}，天气{weather}，季节{season}";
+            return $"人口{FuzzPeople(s.Citizens)}，失业率{Qual(s.UnemploymentPercent, 5f, 12f)}，幸福度{Qual(s.Happiness, 40f, 70f)}，天气{weather}，季节{season}，时刻{s.HourOfDay}点";
         }
 
         // Daily 生活话题池（"日常，没有大事"零素材导致模型只能围着天气写的教训）：

@@ -22,6 +22,7 @@
 - 每个扩展点（`ICliProvider`、事件包 schema、原语执行器）必须配"如何扩展"的注释或文档链接——社区贡献是本项目的主要生长方式
 - 新系统（ECS System）必须遵守读侧纪律：查询 OnCreate 缓存、降频错峰、`RequireForUpdate`、排除 Temp/Deleted
 - ECS 系统更新间隔（`GetUpdateInterval`）必须是 **2 的幂**——非 2 幂在 mod 初始化时抛 `System update interval not power of 2`，系统整个注册不上（2026-08-19 实机踩坑）
+- **禁用 `SystemAPI.*`**（Query/GetSingleton 等）：它依赖 Unity 源码生成器在编译期生成实现，我们的纯 `dotnet build` 不跑生成器，运行时抛 `No suitable code replacement generated`（2026-08-20 CRITICAL 实锤）。单例读取用 `GetEntityQuery(...).GetSingleton<T>()`；同理别用依赖生成器的特性（IJobEntity 的自动调度参数等），手写 IJobChunk/IJob
 - mod 间互操作（如 CustomChirps）一律**惰性解析**：加载顺序不定，禁止在 OnCreate 做一次性反射绑定
 - 改动若涉及设计决策，先更新设计文档（含 §12 决策记录），再写码
 

@@ -17,6 +17,7 @@ namespace CityLife.Content
         public bool IsSnowing;
         public float Temperature;
         public string? SeasonName;
+        public int HourOfDay;           // 游戏时刻 0-23（昼夜节律：深夜帖少且内容不同）
 
         /// <summary>失业率百分数。原始值量纲未实测（可能 0-1 或 0-100），>1.5 视为已是百分数。</summary>
         public readonly float UnemploymentPercent => UnemploymentRate > 1.5f ? UnemploymentRate : UnemploymentRate * 100f;

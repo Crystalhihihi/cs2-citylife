@@ -14,8 +14,12 @@ namespace CityLife.GameBridge
     {
         private EntityQuery m_CitizenQuery = default!;
         private EntityQuery m_HouseholdQuery = default!;
+        private EntityQuery m_TimeDataQuery = default!;
+        private EntityQuery m_TimeSettingsQuery = default!;
         private CountHouseholdDataSystem m_HouseholdData = default!;
         private ClimateSystem m_Climate = default!;
+        private TimeSystem m_TimeSystem = default!;
+        private SimulationSystem m_SimulationSystem = default!;
 
         /// <summary>最近一次采样快照。主线程专用；内容引擎只读，不写。</summary>
         public Content.CitySnapshot Latest { get; private set; }
@@ -27,6 +31,11 @@ namespace CityLife.GameBridge
             m_HouseholdQuery = GetEntityQuery(ComponentType.ReadOnly<Household>());
             m_HouseholdData = World.GetOrCreateSystemManaged<CountHouseholdDataSystem>();
             m_Climate = World.GetOrCreateSystemManaged<ClimateSystem>();
+            m_TimeSystem = World.GetOrCreateSystemManaged<TimeSystem>();
+            m_SimulationSystem = World.GetOrCreateSystemManaged<SimulationSystem>();
+            // 单例走 EntityQuery.GetSingleton——SystemAPI 依赖源码生成器，我们的构建不跑（2026-08-20 实锤）
+            m_TimeDataQuery = GetEntityQuery(ComponentType.ReadOnly<Game.Common.TimeData>());
+            m_TimeSettingsQuery = GetEntityQuery(ComponentType.ReadOnly<Game.Prefabs.TimeSettingsData>());
             RequireForUpdate(m_CitizenQuery);
         }
 
@@ -34,6 +43,10 @@ namespace CityLife.GameBridge
 
         protected override void OnUpdate()
         {
+            var settings = m_TimeSettingsQuery.GetSingleton<Game.Prefabs.TimeSettingsData>();
+            var data = m_TimeDataQuery.GetSingleton<Game.Common.TimeData>();
+            var tod = m_TimeSystem.GetTimeOfDay(settings, data, m_SimulationSystem.frameIndex); // 0..1
+
             Latest = new Content.CitySnapshot
             {
                 Citizens = m_CitizenQuery.CalculateEntityCount(),
@@ -46,6 +59,7 @@ namespace CityLife.GameBridge
                 IsSnowing = m_Climate.isSnowing,
                 Temperature = m_Climate.temperature.value,
                 SeasonName = m_Climate.currentSeasonName,
+                HourOfDay = System.Math.Clamp((int)(tod * 24f), 0, 23),
             };
         }
     }

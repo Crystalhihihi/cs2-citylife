@@ -8,6 +8,8 @@
     <Nullable>enable</Nullable>
     <AssemblyName>CityLife</AssemblyName>
     <RootNamespace>CityLife</RootNamespace>
+    <!-- NuGet 包程序集复制到输出（0Harmony.dll 随包；游戏 Reference 不受影响——它们是 Private=false） -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,6 +22,8 @@
                Exclude="$(Cities2Path)\Cities2_Data\Managed\netstandard.dll;$(Cities2Path)\Cities2_Data\Managed\mscorlib.dll;$(Cities2Path)\Cities2_Data\Managed\System*.dll;$(Cities2Path)\Cities2_Data\Managed\Mono*.dll">
       <Private>false</Private>
     </Reference>
+    <!-- Harmony 补丁库（原版 chirp 发布侧过滤器用，M2-C 收尾）。游戏不附带，随 mod 打包（deploy.sh 拷贝）。 -->
+    <PackageReference Include="Lib.Harmony" Version="2.2.2" />
   </ItemGroup>
 
 </Project>

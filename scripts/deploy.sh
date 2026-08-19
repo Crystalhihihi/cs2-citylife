@@ -47,6 +47,8 @@ mkdir -p "$MOD_DIR"
 cp "$OUT/$DLL_NAME" "$MOD_DIR/"
 # pdb 一并复制：-developerMode 下异常堆栈才有行号
 if [ -f "$OUT/CityLife.pdb" ]; then cp "$OUT/CityLife.pdb" "$MOD_DIR/"; fi
+# Harmony 运行时（原版 chirp 过滤器用，M2-C 起引入；游戏不附带，必须随包）
+if [ -f "$OUT/0Harmony.dll" ]; then cp "$OUT/0Harmony.dll" "$MOD_DIR/"; fi
 
 # UI 构建产物（cohtml 从 Mods/CityLife/ 目录加载 CityLife.mjs / 同名 .css / images）
 UI_DIST="$ROOT/src/CityLife/UI/dist"

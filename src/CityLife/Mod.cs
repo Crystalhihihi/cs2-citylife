@@ -30,6 +30,18 @@ namespace CityLife
         {
             Log.Info($"[{nameof(CityLife)}] OnLoad：T1 内容引擎 + 突发新闻钩子 + M0 探针/spike");
 
+            // 原版 chirp 发布侧过滤器（Harmony 前缀，M2-C 收尾）：
+            // PublishAddedChirps 前把新 chirp 标记 Deleted。补丁失败仅警告（原版会继续显示，不影响其他功能）。
+            try
+            {
+                new HarmonyLib.Harmony(nameof(CityLife)).PatchAll(typeof(Mod).Assembly);
+                Log.Info("[Filter] 原版 chirp 过滤补丁已应用");
+            }
+            catch (System.Exception e)
+            {
+                Log.Warn($"[Filter] Harmony 补丁应用失败（原版 chirp 会继续显示，不影响其他功能）：{e.Message}");
+            }
+
             // M1 CLI 网关装配：日志注入 + 启动后台泵。供给不可用不致命，
             // 请求会走失败重试路径并计数，游戏照常（T0 模板兜底）。
             Llm.CliGateway.Log = msg => Log.Info(msg);

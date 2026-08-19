@@ -79,6 +79,15 @@ namespace CityLife.GameBridge
                     HandleMayorReply(r);
                     continue;
                 }
+                // M4 意图解析炉路由：命中事件包则进活动链（确认弹窗）
+                if (r.RequestId != null && r.RequestId.StartsWith("intent:"))
+                {
+                    if (r.Result.Success)
+                        World.GetOrCreateSystemManaged<EventChainSystem>().OnIntentJson(r.Result.Text);
+                    else
+                        Mod.Log.Info($"[LLM] 意图解析炉失败：{r.Result.Error}");
+                    continue;
+                }
 
                 m_BatchPending = false;
                 if (r.Result.Success)
@@ -179,10 +188,13 @@ namespace CityLife.GameBridge
                     if (Content.LiveContext.MayorBatchesLeft <= 0)
                         Content.LiveContext.MayorPost = null;
                 }
+                // 活动结果上下文：结算一次喂一炉，市民议论现场/财政账
+                var outcomeCtx = Content.LiveContext.LastEventOutcome;
+                Content.LiveContext.LastEventOutcome = null;
                 var prompt = Content.PromptBuilder.BuildBatch(
                     m_Head, snapshot, m_BatchTopic, m_CurrentAssigned,
                     new List<string>(m_Recent), m_BatchCount, anchorTexts, prevPosts,
-                    breaking, mayorCtx);
+                    breaking, mayorCtx, outcomeCtx);
                 Mod.Gateway.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Normal, 600));
                 m_BatchPending = true;
                 m_BatchCount++;

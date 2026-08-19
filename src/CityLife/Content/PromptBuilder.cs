@@ -35,6 +35,24 @@ namespace CityLife.Content
         }
 
         /// <summary>
+        /// 意图解析的固定前缀（M4）：市长发言 → 事件包 id + 参数。缓存纪律同主头——卡包不变则逐字节稳定。
+        /// </summary>
+        public static string BuildIntentHead(IReadOnlyList<EventPack> packs)
+        {
+            var sb = new StringBuilder(1024);
+            sb.Append("你是意图解析器。玩家扮演市长，他的发言若在说\"要办某活动/安排某事\"，映射到下列事件包之一；只是闲聊/吐槽/提问则不算。\n");
+            sb.Append("【事件包】\n");
+            foreach (var p in packs)
+                sb.Append("- ").Append(p.Id).Append('：').Append(p.Match).Append('\n');
+            sb.Append("【输出】匹配：{\"pack\":\"包id\",\"venue\":\"地点原文或空\",\"budget\":\"低|中|高\",\"time\":\"时间原文或空\"}；不匹配：{\"pack\":null}。只输出 JSON，禁止任何其他字符。\n");
+            return sb.ToString();
+        }
+
+        /// <summary>意图解析完整 prompt = 意图头 + 市长发言。</summary>
+        public static string BuildIntentPrompt(string intentHead, string mayorText)
+            => intentHead + "【市长发言】\"" + mayorText + "\"\n";
+
+        /// <summary>
         /// 市长回应炉的固定前缀（M2-C 追加）：与主头同一套缓存纪律——启动时拼一次复用。
         /// 只写评论，卡库共享主卡册（评论的 persona 任选）。
         /// </summary>
@@ -68,7 +86,8 @@ namespace CityLife.Content
                                         IReadOnlyList<Assignment> assigned, IReadOnlyList<string> recent, uint seed,
                                         IReadOnlyList<string?>? anchors = null,
                                         IReadOnlyList<string?>? prevPosts = null,
-                                        string? breaking = null, string? mayorContext = null)
+                                        string? breaking = null, string? mayorContext = null,
+                                        string? eventOutcome = null)
         {
             var sb = new StringBuilder(head.Length + 896);
             sb.Append(head);
@@ -111,6 +130,9 @@ namespace CityLife.Content
             if (!string.IsNullOrEmpty(mayorContext))
                 sb.Append("【市长说】市长刚刚发言：\"").Append(mayorContext)
                   .Append("\"。市民会读到；帖子和评论可以回应他（夸怼随意，对事不对人）。\n");
+            if (!string.IsNullOrEmpty(eventOutcome))
+                sb.Append("【活动结果】上次活动结算：").Append(eventOutcome)
+                  .Append("。市民还在议论这事（有人晒现场、有人算财政账、有人吐槽）。\n");
             if (recent.Count > 0)
             {
                 // 去重反馈：one-shot 无记忆，已发内容必须喂回来模型才知道避开

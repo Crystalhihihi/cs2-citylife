@@ -5,19 +5,20 @@ using Game.UI;
 namespace CityLife.GameBridge
 {
     /// <summary>
-    /// M2 信息流面板数据桥：把 <see cref="Content.FeedStore"/> 的帖子 JSON 经 binding 推给 cohtml/React 面板。
+    /// M2 信息流面板数据桥 + M4 活动确认弹窗数据桥。
     ///
     /// 数据契约（与 UI 侧 src/CityLife/UI/src/mods/bindings.ts 一一对应）：
-    /// - group 固定 "CityLife"；
     /// - posts（ValueBinding&lt;string&gt;）：FeedStore.ToJson() 的产物（最新在后）；
     /// - uiLog（TriggerBinding&lt;string&gt;）：UI → C# 单向日志通道；
-    /// - mayorPost（TriggerBinding&lt;string&gt;）：市长发帖（M2-C）——写入信息流 + LiveContext，
-    ///   随后 3 炉的 prompt 带【市长说】上下文让市民回应；意图→游戏效果是 M4 写回层的事。
+    /// - mayorPost（TriggerBinding&lt;string&gt;）：市长发帖——入信息流 + LiveContext + 市民回应炉 + M4 意图解析炉；
+    /// - replyPost（TriggerBinding&lt;string&gt;）：市长回复市民帖（"seq|text"）；
+    /// - panelState（TriggerBinding&lt;int&gt;）：面板开合（feedMode 联动）；
+    /// - eventConfirm（ValueBinding&lt;string&gt;）：活动确认卡 JSON，空串=不显示（M4）；
+    /// - eventConfirmResult（TriggerBinding&lt;string&gt;）：确认回执 "{id}:{1|0}"（M4）。
     ///
-    /// 原版 Chirper 双闸关停（M2-C 收尾，2026-08-19）：
-    /// 显示闸 ChirperUISystem + 生成闸 Game.Triggers.CreateChirpSystem（dump 实测）。
-    /// 生成闸一关 chirp 实体根本不产生——比 CustomChirps 的发布侧过滤更上游，CustomChirps 从此完全可选。
-    /// 注意必须**持续执法**：载入存档时游戏会按 gameMode 重排系统复活它们（实机踩坑）。
+    /// 为什么脏检查：ToJson 每次全量序列化环形缓冲（最多 100 条），
+    /// 逐帧无脑重推既浪费主线程又刷 binding 流量；Feed.Version 每次新增自增，
+    /// 比对 Version 没变就直接跳过（FeedStore 设计即为此服务）。
     /// </summary>
     public partial class CityLifeUISystem : UISystemBase
     {
@@ -25,7 +26,9 @@ namespace CityLife.GameBridge
         public override GameMode gameMode => GameMode.Game;
 
         private ValueBinding<string> m_PostsBinding = default!;
+        private ValueBinding<string> m_EventConfirmBinding = default!;
         private int m_LastVersion = -1;
+        private int m_LastConfirmVersion = -1;
         private Game.UI.InGame.ChirperUISystem? m_VanillaChirper;   // 显示闸（可关：无副作用实锤）
         private uint m_EnforceCounter;
 
@@ -34,21 +37,23 @@ namespace CityLife.GameBridge
             base.OnCreate();
             // 先 ValueBinding 后 TriggerBinding（先例顺序；顺序本身无强制，保持范本形态便于对照）
             AddBinding(m_PostsBinding = new ValueBinding<string>("CityLife", "posts", "[]"));
+            AddBinding(m_EventConfirmBinding = new ValueBinding<string>("CityLife", "eventConfirm", ""));
             AddBinding(new TriggerBinding<string>("CityLife", "uiLog", msg => Mod.Log.Info("[UI] " + msg)));
             AddBinding(new TriggerBinding<string>("CityLife", "mayorPost", OnMayorPost));
             AddBinding(new TriggerBinding<string>("CityLife", "replyPost", OnReplyPost));
+            AddBinding(new TriggerBinding<string>("CityLife", "eventConfirmResult", OnEventConfirmResult));
             AddBinding(new TriggerBinding<int>("CityLife", "panelState", v => Content.LiveContext.PanelOpen = v == 1));
 
             // 关停原版 Chirper 显示闸。两条实机教训：
             // 1) 一次性关停无效——载入存档时游戏会按 gameMode 复活系统，必须持续执法（见 OnUpdate）；
             // 2) **生成闸 CreateChirpSystem 绝不可关**（2026-08-19 CRITICAL 实锤）：GetQueue() 有运行断言，
             //    LifePathEventSystem 等生产侧系统每帧调它，关了等于让游戏自己每帧抛 AssertionException。
-            //    实体级过滤的正路是发布侧过滤补丁（CustomChirps 的 PublishAddedChirps 模式），M2-C 后补。
+            //    实体级过滤走发布侧补丁（VanillaChirpFilterPatch）。
             try { m_VanillaChirper = World.GetOrCreateSystemManaged<Game.UI.InGame.ChirperUISystem>(); }
             catch (System.Exception e) { Mod.Log.Warn($"[UI] 找不到 ChirperUISystem：{e.Message}"); }
         }
 
-        /// <summary>市长发帖：清洗 → 入信息流 → 存 LiveContext（下几炉市民会回应）→ 发"市民回应"专项炉（评论挂到该帖）。</summary>
+        /// <summary>市长发帖：清洗 → 入信息流 → LiveContext → 市民回应炉 + M4 意图解析炉。</summary>
         private void OnMayorPost(string text)
         {
             var t = (text ?? "").Trim().Replace("\n", " ").Replace("\r", " ");
@@ -61,13 +66,24 @@ namespace CityLife.GameBridge
             Content.LiveContext.PublishMayor(t);
             Mod.Log.Info($"[UI] 市长发帖：{t.Substring(0, System.Math.Min(24, t.Length))}…");
 
-            // 市民回应炉（高优先级）：结果由 ContentDirectorSystem 按 requestId 路由挂载
-            if (Mod.Gateway != null && !Llm.CliGateway.Mute && ContentDirectorSystem.ReplyHead != null)
+            if (Mod.Gateway == null || Llm.CliGateway.Mute)
+                return;
+
+            // 市民回应炉（高优先级）：结果由导演按 requestId "mayor-reply:" 路由挂载
+            if (ContentDirectorSystem.ReplyHead != null)
             {
                 var count = 4 + (int)(seq % 4); // 4-7 条，别千篇整数
                 Mod.Gateway.Enqueue(new Llm.CliRequest(
                     Content.PromptBuilder.BuildReplyPrompt(ContentDirectorSystem.ReplyHead, t, count),
                     Llm.CliPriority.High, 300, "mayor-reply:" + seq));
+            }
+
+            // M4 意图解析炉：命中事件包则进活动链（确认弹窗）；不命中静默走舆情层
+            if (EventChainSystem.IntentHead != null)
+            {
+                Mod.Gateway.Enqueue(new Llm.CliRequest(
+                    Content.PromptBuilder.BuildIntentPrompt(EventChainSystem.IntentHead, t),
+                    Llm.CliPriority.Normal, 300, "intent:" + seq));
             }
         }
 
@@ -88,6 +104,16 @@ namespace CityLife.GameBridge
                 Mod.Log.Info($"[UI] 市长回复帖 #{seq}：{t.Substring(0, System.Math.Min(24, t.Length))}…");
         }
 
+        /// <summary>活动确认回执："{id}:{1|0}" → 路由给活动链（id 不匹配的迟到回执丢弃）。</summary>
+        private void OnEventConfirmResult(string payload)
+        {
+            var sep = (payload ?? "").IndexOf(':');
+            if (sep <= 0 || !int.TryParse(payload.Substring(0, sep), out var id))
+                return;
+            var ok = payload.Substring(sep + 1) == "1";
+            EventChainSystem.SetConfirmResult(id, ok);
+        }
+
         protected override void OnUpdate()
         {
             // 显示闸持续执法：原版 Chirper 复活就按死（每 128 帧查一次，2 的幂）
@@ -98,6 +124,13 @@ namespace CityLife.GameBridge
                     m_VanillaChirper.Enabled = false;
                     Mod.Log.Info("[UI] 原版 Chirper 显示闸已关停");
                 }
+            }
+
+            // 活动确认卡：版本变了才推（含清空）
+            if (EventChainSystem.PendingConfirmVersion != m_LastConfirmVersion)
+            {
+                m_LastConfirmVersion = EventChainSystem.PendingConfirmVersion;
+                m_EventConfirmBinding.Update(EventChainSystem.PendingConfirmJson);
             }
 
             // 脏检查：Feed 没新增就不序列化、不推送

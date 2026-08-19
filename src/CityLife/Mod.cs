@@ -79,6 +79,9 @@ namespace CityLife
             updateSystem.UpdateAt<GameBridge.EventNewsSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<GameBridge.EntityAnchorSystem>(SystemUpdatePhase.GameSimulation);
 
+            // M4 写回层：活动链状态机（意图解析 → 确认 → 扣款 → 注入 → 数人 → 结算 → 恢复）
+            updateSystem.UpdateAt<GameBridge.EventChainSystem>(SystemUpdatePhase.GameSimulation);
+
             // M2-A 信息流面板：UI 数据桥挂 UIUpdate 阶段
             // （先例 city-storytelling-mod PromptUISystem / 官方 UI 系统均注册在此阶段）
             updateSystem.UpdateAt<GameBridge.CityLifeUISystem>(SystemUpdatePhase.UIUpdate);

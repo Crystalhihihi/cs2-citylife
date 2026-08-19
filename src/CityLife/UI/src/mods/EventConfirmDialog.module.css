@@ -1,0 +1,88 @@
+/* M4 活动确认弹窗（cohtml overlay，挂 "Game" 层）：对标游戏原生确认框——
+   半透明压暗背景 + 居中卡片 + 标题 + 行列表 + 双按钮。
+   关键纪律：无内容时组件返回 null 完全不渲染（见 EventConfirmDialog.tsx），
+   故 .backdrop 只在显示时存在于 DOM，pointer-events 无需条件切换——不存在即不拦截。 */
+
+.backdrop {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;                  /* 居中卡片：单子项 flex 居中在 cohtml 可用 */
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(0, 0, 0, 0.5);   /* 半透明压暗；点击此处 = 取消（见 tsx） */
+    pointer-events: auto;
+    z-index: 1000;                  /* 压过游戏 HUD 与市民信息流面板 */
+    font-family: "Noto Sans SC";    /* 显式指定中文字体（豆腐块教训），不 inherit */
+}
+
+.card {
+    min-width: 320px;
+    max-width: 480px;
+    background-color: rgba(24, 28, 35, 0.97);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 16px 20px;
+    color: #e8eaed;
+    font-size: 14px;
+    pointer-events: auto;
+}
+
+.title {
+    font-size: 17px;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+
+/* danger=true：标题警示色 */
+.titleDanger {
+    font-size: 17px;
+    font-weight: bold;
+    margin-bottom: 10px;
+    color: rgba(255, 95, 80, 0.95);
+}
+
+.line {
+    padding: 2px 0;
+    word-break: break-all;          /* 中文长行不顶破卡片 */
+}
+
+/* danger=true：首行警告样式 */
+.lineWarn {
+    padding: 2px 0;
+    color: rgba(255, 95, 80, 0.95);
+    font-weight: bold;
+    word-break: break-all;
+}
+
+.buttons {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 14px;
+}
+
+.btnConfirm {
+    padding: 0 14px;
+    line-height: 30px;
+    font-size: 13px;
+    color: #ffffff;
+    background-color: rgba(60, 130, 246, 0.9);
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.btnCancel {
+    margin-left: 8px;
+    padding: 0 14px;
+    line-height: 28px;              /* 30 - border 上下各 1，与确认按钮视觉同高 */
+    font-size: 13px;
+    color: rgba(232, 234, 237, 0.85);
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+}

@@ -15,12 +15,15 @@ namespace CityLife.Content
     ///   "always" 常开（城市自己在活着，打开面板时平台已运转）；
     ///   "openOnly" 仅限展开（收起即停生成，省 token，但打开会有一段冷场期）；
     ///   "throttled" 折中（收起时降频保温：释放 1/4 速、仅池空才补炉）。
+    /// - writeBackTier（string，默认 "normal"）：写回强度档（§6 红线）——
+    ///   "mild" 体验档（注入规模 ×0.5）/"normal" 正常档（×1.0）/"crazy" 疯狂档（×2.0，确认卡带警示）。
     /// 如何扩展：加字段 = 这里加属性 + Load 加一行 + 消费处读属性。
     /// </summary>
     public static class ModSettings
     {
         public static bool T0Fallback { get; private set; } = false;
         public static string FeedMode { get; private set; } = "always";
+        public static string WriteBackTier { get; private set; } = "normal";
 
         public static void Load(string cfgDir, Action<string> log)
         {
@@ -39,7 +42,10 @@ namespace CityLife.Content
                 var fm = JsonMini.GetStr(json, "feedMode");
                 if (fm == "always" || fm == "openOnly" || fm == "throttled")
                     FeedMode = fm;
-                log($"[Settings] t0Fallback={T0Fallback} feedMode={FeedMode}");
+                var wt = JsonMini.GetStr(json, "writeBackTier");
+                if (wt == "mild" || wt == "normal" || wt == "crazy")
+                    WriteBackTier = wt;
+                log($"[Settings] t0Fallback={T0Fallback} feedMode={FeedMode} writeBackTier={WriteBackTier}");
             }
             catch (Exception e)
             {

@@ -184,6 +184,38 @@ Section("Chirp 生成链（2026-08-19 M2-C 收尾：关停生成侧用）", () =
         Console.WriteLine($"  {t.FullName} ({KindOf(t)})");
 });
 
+Section("财政与弹窗（2026-08-20 M4 spike：预算真扣+原生确认弹窗）", () =>
+{
+    // 城市钱袋子：CitySystem / 含 Money / Budget 的类型
+    Console.WriteLine("### 名称含 CitySystem/Money/Budget 的类型");
+    foreach (var t in allTypes.Where(t => t.Name.Contains("CitySystem") || t.Name.Contains("Money") || t.Name.Contains("Budget")).OrderBy(t => t.FullName))
+        Console.WriteLine($"  {t.FullName} ({KindOf(t)})");
+    Console.WriteLine();
+    Dump("Game.City.CitySystem", fields: true, methods: true);
+    Dump("Game.Simulation.CitySystem", fields: true, methods: true);
+    // 弹窗：含 Dialog/Modal 的类型
+    Console.WriteLine("### 名称含 Dialog/Modal 的类型");
+    foreach (var t in allTypes.Where(t => t.Name.Contains("Dialog") || t.Name.Contains("Modal")).OrderBy(t => t.FullName))
+        Console.WriteLine($"  {t.FullName} ({KindOf(t)})");
+    Console.WriteLine();
+    Find("MessageDialog", fields: true);
+    Find("DialogSystem", fields: true, methods: true);
+    Find("MessageDialogSystem", fields: true, methods: true);
+    // M4 spike 追问：钱袋子组件 + 弹窗确切签名
+    Dump("Game.City.PlayerMoney", fields: true);
+    Console.WriteLine("### AppBindings 里含 Dialog 的方法");
+    var appBindings = allTypes.FirstOrDefault(t => t.FullName == "Game.UI.AppBindings");
+    if (appBindings != null)
+        foreach (var m in appBindings.GetMethods().Where(m => m.Name.Contains("Dialog")))
+            Console.WriteLine($"  {m}");
+    Console.WriteLine("### ConfirmationDialog 构造与成员");
+    Find("ConfirmationDialog", fields: true, methods: true);
+    Find("DialogAction", fields: true, methods: true);
+    // M4 spike 追问 2：游戏时间读取（活动时长/冷却都按游戏时间）
+    Find("TimeSystem", fields: true, methods: true);
+    Find("TimeSettings", fields: true);
+});
+
 return 0;
 
 // ================== helpers ==================

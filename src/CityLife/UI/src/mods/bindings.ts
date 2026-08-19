@@ -27,6 +27,17 @@ export const replyPost = (n: number, text: string) =>
 // 面板开合状态上报（feedMode 联动：openOnly/throttled 模式下 C# 据此调整生成节拍）
 export const panelState = (open: boolean) => trigger("CityLife", "panelState", open ? 1 : 0);
 
+// 活动确认弹窗（M4）：空串 "" = 不显示；非空 = JSON：
+//   {"id":7,"title":"活动确认","lines":["活动：周末市集",...],"danger":false}
+// lines 逐行渲染；danger=true 时标题警示色 + 首行警告样式（危险操作用，如透支财政）。
+// 同一时刻最多一张，新 id 替换旧的；C# 在收到应答后清空回 ""。
+export const eventConfirmBinding = bindValue<string>("CityLife", "eventConfirm", "");
+
+// 弹窗应答通道：线格式 "{id}:{1|0}"，1=确认执行，0=取消（Esc/点压暗背景都算取消）。
+// UI 侧应答后立即本地隐藏，不等 C# 清空 binding。
+export const eventConfirmResult = (id: number, accept: boolean) =>
+    trigger("CityLife", "eventConfirmResult", `${id}:${accept ? 1 : 0}`);
+
 // 帖子结构（短键名与 FeedStore.ToJson 对应；e/c 为 v2 新增可选键，向后兼容 M2-A 数据）
 export interface FeedPost {
     a: string;               // 作者

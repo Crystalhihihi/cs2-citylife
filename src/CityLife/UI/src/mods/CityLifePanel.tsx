@@ -8,7 +8,7 @@ import {
 } from "react";
 import { Button } from "cs2/ui";
 import { useValue } from "cs2/api";
-import { focusEntity } from "cs2/bindings";
+import { camera } from "cs2/bindings";
 import { postsBinding, uiLog, mayorPost, replyPost, panelState, FeedPost } from "mods/bindings";
 import styles from "./CityLifePanel.module.css";
 
@@ -406,7 +406,7 @@ const CityLifePanel = () => {
                                         className={styles.goLink}
                                         title="镜头飞到现场"
                                         onClick={() =>
-                                            focusEntity({ index: p.e![0], version: p.e![1] })
+                                            camera.focusEntity({ index: p.e![0], version: p.e![1] })
                                         }
                                     >
                                         前往现场

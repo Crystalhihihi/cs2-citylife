@@ -1,0 +1,12 @@
+# 构建产物
+bin/
+obj/
+.vs/
+*.user
+
+# UI 前端依赖与构建产物（dist 由 deploy.sh 拷入游戏 Mods 目录）
+node_modules/
+src/CityLife/UI/dist/
+
+# 本地实测输出（日志含 LLM 原始响应，不进库）
+logs/

@@ -1,0 +1,1011 @@
+# Managed dir: D:\SteamLibrary\steamapps\common\Cities Skylines II\Cities2_Data\Managed
+# 依赖 dll 数: 173
+
+## 程序集信息
+TargetFramework: (未标注)
+AssemblyName: Game, Version: 0.0.0.0
+类型总数: 8903
+
+## 市民 Game.Citizens
+
+### Game.Citizens.Citizen
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public System.UInt16 m_PseudoRandom
+  public Game.Citizens.CitizenFlags m_State
+  public System.Byte m_WellBeing
+  public System.Byte m_Health
+  public System.Byte m_LeisureCounter
+  public System.Byte m_PenaltyCounter
+  public System.Int32 m_UnemploymentCounter
+  public System.Int16 m_BirthDay
+  public System.Single m_UnemploymentTimeCounter
+  public System.Int32 m_SicknessPenalty
+
+### Game.Citizens.Household
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public Game.Citizens.HouseholdFlags m_Flags
+  public System.Int32 m_Resources
+  public System.Int16 m_ConsumptionPerDay
+  public System.UInt32 m_ShoppedValuePerDay
+  public System.UInt32 m_ShoppedValueLastDay
+  public System.UInt32 m_LastDayFrameIndex
+  public System.Int32 m_SalaryLastDay
+  public System.Int32 m_MoneySpendOnBuildingLevelingLastDay
+
+### Game.Citizens.HouseholdMember
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public Unity.Entities.Entity m_Household
+
+### Game.Citizens.Worker
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public Unity.Entities.Entity m_Workplace
+  public System.Single m_LastCommuteTime
+  public System.Byte m_Level
+  public Game.Companies.Workshift m_Shift
+
+### Game.Citizens.Student
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public Unity.Entities.Entity m_School
+  public System.Single m_LastCommuteTime
+  public System.Byte m_Level
+
+### Game.Citizens.TravelPurpose
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public Game.Citizens.Purpose m_Purpose
+  public System.Int32 m_Data
+  public Game.Economy.Resource m_Resource
+
+### Game.Citizens.TripNeeded
+种类: struct; 基类: System.ValueType
+接口: IBufferElementData
+字段:
+  public Unity.Entities.Entity m_TargetAgent
+  public Game.Citizens.Purpose m_Purpose
+  public System.Int32 m_Data
+  public Game.Economy.Resource m_Resource
+  public System.Byte m_Priority
+
+## 公司 Game.Companies
+
+### Game.Companies.Profitability
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public System.Byte m_Profitability
+  public System.Int32 m_LastTotalWorth
+
+### Game.Serialization.DataMigration.CompanyAndCargoFixSystem+ProfitabilityFixJob
+种类: struct; 基类: System.ValueType
+字段:
+  public Unity.Entities.ComponentTypeHandle<Game.Companies.Profitability> m_ProfitabilityType
+  public Unity.Entities.ComponentTypeHandle<Game.Prefabs.PrefabRef> m_PrefabRefType
+  public Unity.Entities.BufferTypeHandle<Game.Economy.Resources> m_ResourcesBufType
+  public Unity.Entities.BufferTypeHandle<Game.Vehicles.OwnedVehicle> m_OwnedVehicleType
+  public Unity.Entities.ComponentTypeHandle<Game.Companies.ServiceAvailable> m_ServiceAvailabilityType
+  public Unity.Entities.ComponentLookup<Game.Prefabs.ResourceData> m_ResourceDatas
+  public Unity.Entities.ComponentLookup<Game.Prefabs.IndustrialProcessData> m_IndustrialProcessDatas
+  public Unity.Entities.ComponentLookup<Game.Vehicles.DeliveryTruck> m_DeliveryTrucks
+  public Unity.Entities.BufferLookup<Game.Vehicles.LayoutElement> m_LayoutElementBufs
+  public Game.Prefabs.ResourcePrefabs m_ResourcePrefabs
+
+### Game.UI.InGame.ProfitabilitySection
+种类: class; 基类: Game.UI.InGame.InfoSectionBase
+字段:
+  private/protected Game.Simulation.TaxSystem m_TaxSystem
+  private/protected Game.Prefabs.ResourceSystem m_ResourceSystem
+  private/protected Unity.Entities.EntityQuery m_DistrictBuildingQuery
+  private/protected Unity.Entities.EntityQuery m_ProcessQuery
+  private/protected Unity.Entities.EntityQuery m_EconomyParameterQuery
+  public Unity.Collections.NativeArray<System.Int32> m_Results
+  private/protected Game.UI.InGame.CompanyProfitability <profitability>k__BackingField
+  private/protected Unity.Collections.NativeArray<Unity.Mathematics.int2> m_Factors
+  private/protected Unity.Collections.NativeList<Game.UI.InGame.FactorInfo> <profitabilityFactors>k__BackingField
+  private/protected Game.UI.InGame.ProfitabilitySection+TypeHandle __TypeHandle
+
+### Game.UI.InGame.ProfitabilitySection+ProfitabilityJob
+种类: struct; 基类: System.ValueType
+字段:
+  public Unity.Entities.Entity m_SelectedEntity
+  public Unity.Entities.Entity m_SelectedPrefab
+  public Unity.Entities.BufferLookup<Game.Companies.Employee> m_EmployeeFromEntity
+  public Unity.Entities.BufferLookup<Game.Buildings.Renter> m_RenterFromEntity
+  public Unity.Entities.BufferLookup<Game.Net.ResourceAvailability> m_ResourceAvailabilityFromEntity
+  public Unity.Entities.BufferLookup<Game.Companies.TradeCost> m_TradeCostFromEntity
+  public Unity.Entities.ComponentLookup<Game.Buildings.Abandoned> m_AbandonedFromEntity
+  public Unity.Entities.ComponentLookup<Game.Buildings.Building> m_BuildingFromEntity
+  public Unity.Entities.BufferLookup<Game.Buildings.Efficiency> m_BuildingEfficiencyFromEntity
+  public Unity.Entities.ComponentLookup<Game.Citizens.Citizen> m_CitizenFromEntity
+  public Unity.Entities.ComponentLookup<Game.Companies.CompanyData> m_CompanyDataFromEntity
+  public Unity.Entities.ComponentLookup<Game.Citizens.HealthProblem> m_HealthProblemFromEntity
+  public Unity.Entities.ComponentLookup<Game.Prefabs.BuildingData> m_BuildingDataFromEntity
+  public Unity.Entities.ComponentLookup<Game.Prefabs.BuildingPropertyData> m_BuildingPropertyDataFromEntity
+  public Unity.Entities.ComponentLookup<Game.Prefabs.IndustrialProcessData> m_IndustrialProcessDataFromEntity
+  public Unity.Entities.ComponentLookup<Game.Prefabs.OfficeBuilding> m_OfficeBuildingFromEntity
+  public Unity.Entities.ComponentLookup<Game.Prefabs.PrefabRef> m_PrefabRefFromEntity
+  public Unity.Entities.ComponentLookup<Game.Prefabs.ResourceData> m_ResourceDataFromEntity
+  public Unity.Entities.ComponentLookup<Game.Prefabs.SpawnableBuildingData> m_SpawnableBuildingDataFromEntity
+  public Unity.Entities.ComponentLookup<Game.Prefabs.WorkplaceData> m_WorkplaceDataFromEntity
+  public Unity.Entities.ComponentLookup<Game.Prefabs.ZonePropertiesData> m_ZonePropertyDataFromEntity
+  public Unity.Entities.ComponentLookup<Game.Companies.Profitability> m_ProfitabilityFromEntity
+  public Unity.Entities.ComponentLookup<Game.Companies.ServiceAvailable> m_ServiceAvailableFromEntity
+  public Unity.Entities.ComponentLookup<Game.Companies.ServiceCompanyData> m_ServiceCompanyDataFromEntity
+  public Unity.Entities.ComponentLookup<Game.Companies.WorkProvider> m_WorkProviderFromEntity
+  public Game.Prefabs.EconomyParameterData m_EconomyParameters
+  public Game.Prefabs.ResourcePrefabs m_ResourcePrefabs
+  public Unity.Collections.NativeArray<System.Int32> m_TaxRates
+  public Unity.Collections.NativeArray<Unity.Entities.Entity> m_Processes
+  public Unity.Collections.NativeArray<Unity.Mathematics.int2> m_Factors
+  public Unity.Collections.NativeArray<System.Int32> m_Results
+
+### Game.Companies.CommercialCompany
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  (无实例/静态字段)
+
+### Game.Companies.WorkProvider
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public System.Int32 m_MaxWorkers
+  public System.Int16 m_UneducatedCooldown
+  public System.Int16 m_EducatedCooldown
+  public Unity.Entities.Entity m_UneducatedNotificationEntity
+  public Unity.Entities.Entity m_EducatedNotificationEntity
+  public System.Int16 m_EfficiencyCooldown
+
+### Game.Companies.Employee
+种类: struct; 基类: System.ValueType
+接口: IBufferElementData
+字段:
+  public Unity.Entities.Entity m_Worker
+  public System.Byte m_Level
+
+## 事件/事故
+
+### Game.Events.AccidentSite
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public Unity.Entities.Entity m_Event
+  public Unity.Entities.Entity m_PoliceRequest
+  public Game.Events.AccidentSiteFlags m_Flags
+  public System.UInt32 m_CreationFrame
+  public System.UInt32 m_SecuredFrame
+
+### Game.Simulation.AccidentSiteSystem
+种类: class; 基类: Game.GameSystemBase
+公开方法:
+  System.Int32 GetUpdateInterval(Game.SystemUpdatePhase phase)
+
+### Game.Citizens.CrimeVictim
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public System.Byte m_Effect
+
+### Game.Events 命名空间类型一览（仅类型名）
+- <get_eventPrefabs>d__31 (class)
+- AccidentSite (struct)
+- AccidentSiteFlags (enum)
+- AddAccidentSite (struct)
+- AddAccidentSiteJob (struct)
+- AddAccidentSiteSystem (class)
+- AddCriminal (struct)
+- AddCriminalJob (struct)
+- AddCriminalSystem (class)
+- AddEventJournalData (struct)
+- AddHealthProblem (struct)
+- AddHealthProblemJob (struct)
+- AddHealthProblemSystem (class)
+- AddImpactJob (struct)
+- AddMeeting (struct)
+- AddMeetingSystem (class)
+- AttendingEvent (struct)
+- CalendarEvent (struct)
+- CheckJournalTrackingEndJob (struct)
+- Crime (struct)
+- DangerFlags (enum)
+- DangerLevel (struct)
+- DeletedEventsJob (struct)
+- Destruction (struct)
+- Duration (struct)
+- Endanger (struct)
+- EndangerJob (struct)
+- EndangerSystem (class)
+- Event (struct)
+- EventCityEffectTrackingType (enum)
+- EventDataTrackingType (enum)
+- EventJournalCityEffect (struct)
+- EventJournalCompleted (struct)
+- EventJournalData (struct)
+- EventJournalEntry (struct)
+- EventJournalInitializeSystem (class)
+- EventJournalPending (struct)
+- EventJournalSystem (class)
+- EventJournalUtils (class)
+- EventUtils (class)
+- FaceWeather (struct)
+- FaceWeatherJob (struct)
+- FaceWeatherSystem (class)
+- FacingWeather (struct)
+- FindCitizensInBuildingJob (struct)
+- FindingEventParticipants (struct)
+- Fire (struct)
+- Flood (struct)
+- Flooded (struct)
+- HealthEvent (struct)
+- HotspotFrame (struct)
+- IEventJournalSystem (interface)
+- Ignite (struct)
+- IgniteFireJob (struct)
+- IgniteSystem (class)
+- Impact (struct)
+- ImpactSystem (class)
+- InDanger (struct)
+- InitEventJournalEntriesJob (struct)
+- InitializeSystem (class)
+- InvolvedInAccident (struct)
+- JournalEvent (struct)
+- JournalSortingInfo (struct)
+- LightningStrike (struct)
+- OnFire (struct)
+- RandomEventTargetJob (struct)
+- Spectate (struct)
+- SpectateJob (struct)
+- SpectateSystem (class)
+- SpectatorEvent (struct)
+- SpectatorSite (struct)
+- StartedEventsJob (struct)
+- Submerge (struct)
+- SubmergeJob (struct)
+- SubmergeSystem (class)
+- TargetElement (struct)
+- TrackCityEffectsJob (struct)
+- TrackDataJob (struct)
+- TrafficAccident (struct)
+- TravelJob (struct)
+- TypeHandle (struct)
+- TypeHandle (struct)
+- TypeHandle (struct)
+- TypeHandle (struct)
+- TypeHandle (struct)
+- TypeHandle (struct)
+- TypeHandle (struct)
+- TypeHandle (struct)
+- TypeHandle (struct)
+- TypeHandle (struct)
+- TypeHandle (struct)
+- TypeHandle (struct)
+- TypeHandle (struct)
+- VehicleLaunch (struct)
+- VehicleLaunchFlags (enum)
+- WaterLevelChange (struct)
+- WeatherPhenomenon (struct)
+
+
+### Game.Events.EventJournalSystem
+种类: class; 基类: Game.GameSystemBase
+字段:
+  private/protected Unity.Entities.EntityQuery m_StartedJournalQuery
+  private/protected Unity.Entities.EntityQuery m_DeletedEventQuery
+  private/protected Unity.Entities.EntityQuery m_JournalDataEventQuery
+  private/protected Unity.Entities.EntityQuery m_ActiveJournalEffectQuery
+  private/protected Unity.Entities.EntityQuery m_JournalEventPrefabQuery
+  private/protected Unity.Entities.EntityQuery m_LoadedJournalQuery
+  private/protected Game.Simulation.ISimulationSystem m_SimulationSystem
+  private/protected Game.Simulation.IBudgetSystem m_BudgetSystem
+  private/protected Game.Simulation.ICityServiceBudgetSystem m_CityServiceBudgetSystem
+  private/protected Game.Simulation.CitySystem m_CitySystem
+  private/protected Game.Common.ModificationBarrier5 m_ModificationBarrier
+  private/protected Unity.Collections.NativeQueue<Unity.Entities.Entity> m_Started
+  private/protected Unity.Collections.NativeQueue<Unity.Entities.Entity> m_Changed
+  private/protected Unity.Collections.NativeArray<System.Int32> m_CityEffects
+  private/protected Unity.Collections.NativeList<Unity.Entities.Entity> <eventJournal>k__BackingField
+  private/protected System.Action<Unity.Entities.Entity> <eventEventDataChanged>k__BackingField
+  private/protected System.Action <eventEntryAdded>k__BackingField
+  private/protected Game.Events.EventJournalSystem+TypeHandle __TypeHandle
+公开方法:
+  Game.Events.EventJournalEntry GetInfo(Unity.Entities.Entity journalEntity)
+  Unity.Entities.Entity GetPrefab(Unity.Entities.Entity journalEntity)
+  System.Boolean TryGetData(Unity.Entities.Entity journalEntity, ref Unity.Entities.DynamicBuffer<Game.Events.EventJournalData> data)
+  System.Boolean TryGetCityEffects(Unity.Entities.Entity journalEntity, ref Unity.Entities.DynamicBuffer<Game.Events.EventJournalCityEffect> data)
+公开属性:
+  Unity.Collections.NativeList<Unity.Entities.Entity> eventJournal { get; set; }
+  System.Action<Unity.Entities.Entity> eventEventDataChanged { get; set; }
+  System.Action eventEntryAdded { get; set; }
+  System.Collections.Generic.IEnumerable<Game.Prefabs.JournalEventComponent> eventPrefabs { get; }
+
+### Game.Events.EventJournalEntry
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public Unity.Entities.Entity m_Event
+  public System.UInt32 m_StartFrame
+
+### Game.Events.EventJournalData
+种类: struct; 基类: System.ValueType
+接口: IBufferElementData
+字段:
+  public Game.Events.EventDataTrackingType m_Type
+  public System.Int32 m_Value
+
+## 旅游
+
+### Game.Simulation.TouristSpawnSystem
+种类: class; 基类: Game.GameSystemBase
+字段:
+  private/protected Unity.Entities.EntityQuery m_HouseholdPrefabQuery
+  private/protected Unity.Entities.EntityQuery m_OutsideConnectionQuery
+  private/protected Unity.Entities.EntityQuery m_AttractivenessParameterQuery
+  private/protected Unity.Entities.EntityQuery m_DemandParameterQuery
+  private/protected Game.EndFrameBarrier m_EndFrameBarrier
+  private/protected Game.Simulation.SimulationSystem m_SimulationSystem
+  private/protected Game.Simulation.ClimateSystem m_ClimateSystem
+  private/protected Game.Simulation.CitySystem m_CitySystem
+  private/protected Game.Simulation.CityStatisticsSystem m_CityStatisticsSystem
+  private/protected Game.Simulation.TouristSpawnSystem+TypeHandle __TypeHandle
+公开方法:
+  System.Int32 GetUpdateInterval(Game.SystemUpdatePhase phase)
+
+### Game.Citizens.TouristHousehold
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public Unity.Entities.Entity m_Hotel
+  public System.UInt32 m_LeavingTime
+
+### Game.Simulation.TourismSystem
+种类: class; 基类: Game.GameSystemBase
+字段:
+  private/protected Unity.Mathematics.int2 m_CachedLodging
+  private/protected Game.Simulation.CitySystem m_CitySystem
+  private/protected Game.Simulation.ClimateSystem m_ClimateSystem
+  private/protected Game.Simulation.CountHouseholdDataSystem m_CountHouseholdDataSystem
+  private/protected Unity.Entities.EntityQuery m_AttractivenessProviderGroup
+  private/protected Unity.Entities.EntityQuery m_HotelGroup
+  private/protected Unity.Entities.EntityQuery m_ParameterQuery
+  private/protected Game.Simulation.TourismSystem+TypeHandle __TypeHandle
+公开方法:
+  System.Int32 GetUpdateInterval(Game.SystemUpdatePhase phase)
+  System.Int32 GetTouristRandomStay()
+  System.Single GetRawTouristProbability(System.Int32 attractiveness)
+  System.Int32 GetTargetTourists(System.Int32 attractiveness)
+  System.Single GetSpawnProbability(System.Int32 attractiveness, System.Int32 currentTourists)
+  System.Single GetTouristProbability(Game.Prefabs.AttractivenessParameterData parameterData, System.Int32 attractiveness, System.Int32 numberOfCurrentTourists, Game.Simulation.ClimateSystem+WeatherClassification weatherClassification, System.Single temperature, System.Single precipitation, System.Boolean isRaining, System.Boolean isSnowing)
+  System.Single GetWeatherEffect(Game.Prefabs.AttractivenessParameterData parameterData, Game.Simulation.ClimateSystem+WeatherClassification weatherClassification, System.Single temperature, System.Single precipitation, System.Boolean isRaining, System.Boolean isSnowing)
+
+### Game.Citizens.LodgingSeeker
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  (无实例/静态字段)
+
+### Game.Companies.LodgingProvider
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public System.Int32 m_FreeRooms
+  public System.Int32 m_Price
+
+### Game.Simulation.LodgingProviderSystem
+种类: class; 基类: Game.GameSystemBase
+字段:
+  public static System.Int32 kUpdatesPerDay
+  private/protected Game.Simulation.SimulationSystem m_SimulationSystem
+  private/protected Game.EndFrameBarrier m_EndFrameBarrier
+  private/protected Game.Prefabs.ResourceSystem m_ResourceSystem
+  private/protected Game.Simulation.CityProductionStatisticSystem m_CityProductionStatisticSystem
+  private/protected Unity.Entities.EntityQuery m_ProviderQuery
+  private/protected Unity.Entities.EntityQuery m_LeisureParameterQuery
+  private/protected Unity.Collections.NativeQueue<System.Int32> m_ConsumptionLodgingQueue
+  private/protected Game.Simulation.LodgingProviderSystem+TypeHandle __TypeHandle
+
+### Game.Simulation.LodgingProviderSystem+LodgingCitizenConsumptionCountJob
+种类: struct; 基类: System.ValueType
+字段:
+  public Unity.Collections.NativeArray<System.Int32> m_CitizensConsumptionAccumulator
+  public Unity.Collections.NativeQueue<System.Int32> m_ConsumptionQueue
+
+### Game.Simulation.LodgingProviderSystem+LodgingProviderJob
+种类: struct; 基类: System.ValueType
+字段:
+  public Unity.Entities.EntityTypeHandle m_EntityType
+  public Unity.Entities.ComponentTypeHandle<Game.Companies.ServiceAvailable> m_ServiceAvailableType
+  public Unity.Entities.SharedComponentTypeHandle<Game.Simulation.UpdateFrame> m_UpdateFrameType
+  public Unity.Entities.ComponentTypeHandle<Game.Companies.LodgingProvider> m_LodgingProviderType
+  public Unity.Entities.BufferTypeHandle<Game.Buildings.Renter> m_RenterType
+  public Unity.Entities.BufferLookup<Game.Economy.Resources> m_Resources
+  public Unity.Entities.ComponentLookup<Game.Companies.CompanyStatisticData> m_CompanyStatisticData
+  public Unity.Entities.ComponentLookup<Game.Buildings.PropertyRenter> m_PropertyRenters
+  public Unity.Entities.ComponentLookup<Game.Prefabs.BuildingData> m_BuildingDatas
+  public Unity.Entities.ComponentLookup<Game.Prefabs.BuildingPropertyData> m_BuildingPropertyDatas
+  public Unity.Entities.ComponentLookup<Game.Prefabs.SpawnableBuildingData> m_SpawnableBuildingDatas
+  public Unity.Entities.ComponentLookup<Game.Prefabs.PrefabRef> m_Prefabs
+  public Unity.Entities.ComponentLookup<Game.Citizens.TouristHousehold> m_TouristHouseholds
+  public Unity.Entities.ComponentLookup<Game.Prefabs.ResourceData> m_ResourceDatas
+  public Game.Prefabs.ResourcePrefabs m_ResourcePrefabs
+  public Game.Prefabs.LeisureParametersData m_LeisureParameters
+  public Unity.Entities.EntityCommandBuffer+ParallelWriter m_CommandBuffer
+  public Unity.Collections.ParallelWriter<System.Int32> m_ConsumptionQueue
+  public System.UInt32 m_UpdateFrameIndex
+### Attractiveness —— 未找到
+
+
+## 外部连接/交通
+
+### Game.Net.OutsideConnection
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public System.Single m_Delay
+
+### Game.Objects.OutsideConnection
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  (无实例/静态字段)
+
+### Game.Prefabs.OutsideConnection
+种类: class; 基类: Game.Prefabs.ComponentBase
+字段:
+  public Game.Economy.ResourceInEditor[] m_TradedResources
+  public System.Boolean m_Commuting
+  public Game.Prefabs.OutsideConnectionTransferType m_TransferType
+  public System.Single m_Remoteness
+
+### Game.Buildings.TrafficSpawner
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public Unity.Entities.Entity m_TrafficRequest
+公开方法:
+  System.Void Serialize(TWriter writer)
+  System.Void Deserialize(TReader reader)
+
+### Game.Prefabs.TrafficSpawner
+种类: class; 基类: Game.Prefabs.ComponentBase
+字段:
+  public Game.Net.RoadTypes m_RoadType
+  public Game.Net.TrackTypes m_TrackType
+  public System.Single m_SpawnRate
+  public System.Boolean m_NoSlowVehicles
+公开方法:
+  System.Void GetPrefabComponents(System.Collections.Generic.HashSet<Unity.Entities.ComponentType> components)
+  System.Void GetArchetypeComponents(System.Collections.Generic.HashSet<Unity.Entities.ComponentType> components)
+  System.Void Initialize(Unity.Entities.EntityManager entityManager, Unity.Entities.Entity entity)
+
+### Game.Simulation.RandomTrafficRequest
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public Unity.Entities.Entity m_Target
+  public Game.Net.RoadTypes m_RoadType
+  public Game.Net.TrackTypes m_TrackType
+  public Game.Vehicles.EnergyTypes m_EnergyTypes
+  public Game.Vehicles.SizeClass m_SizeClass
+  public Game.Simulation.RandomTrafficRequestFlags m_Flags
+
+## 聚合
+
+### Game.Simulation.CountHouseholdDataSystem
+种类: class; 基类: Game.GameSystemBase
+公开方法:
+  System.Int32 GetUpdateInterval(Game.SystemUpdatePhase phase)
+  Game.Simulation.CountHouseholdDataSystem+HouseholdData GetHouseholdCountData()
+  Unity.Collections.NativeArray<System.Int32> GetResourceNeeds(ref Unity.Jobs.JobHandle deps)
+  System.Boolean IsCountDataNotReady()
+  Unity.Collections.NativeArray<System.Int32> GetEmployables(ref Unity.Jobs.JobHandle deps)
+  System.Void AddHouseholdDataReader(Unity.Jobs.JobHandle reader)
+  System.Void Serialize(TWriter writer)
+  System.Void Deserialize(TReader reader)
+  System.Void SetDefaults(Colossal.Serialization.Entities.Context context)
+公开属性:
+  System.Int32 MovingInHouseholdCount { get; }
+  System.Int32 MovingInCitizenCount { get; }
+  System.Int32 MovingAwayHouseholdCount { get; }
+  System.Int32 CommuterHouseholdCount { get; }
+  System.Int32 TouristCitizenCount { get; }
+  System.Int32 HomelessHouseholdCount { get; }
+  System.Int32 HomelessCitizenCount { get; }
+  System.Int32 MovedInHouseholdCount { get; }
+  System.Int32 MovedInCitizenCount { get; }
+  System.Int32 ChildrenCount { get; }
+  System.Int32 AdultCount { get; }
+  System.Int32 TeenCount { get; }
+  System.Int32 SeniorCount { get; }
+  System.Int32 StudentCount { get; }
+  System.Int32 UneducatedCount { get; }
+  System.Int32 PoorlyEducatedCount { get; }
+  System.Int32 EducatedCount { get; }
+  System.Int32 WellEducatedCount { get; }
+  System.Int32 HighlyEducatedCount { get; }
+  System.Int32 WorkableCitizenCount { get; }
+  System.Int32 CityWorkerCount { get; }
+  System.Int32 DeadCitizenCount { get; }
+  System.Int32 AverageCitizenHappiness { get; }
+  System.Int32 AverageCitizenHealth { get; }
+  System.Single UnemploymentRate { get; }
+  System.Single HomelessnessRate { get; }
+
+## 气候
+
+### Game.Simulation.ClimateSystem
+种类: class; 基类: Game.GameSystemBase
+字段:
+  private/protected Unity.Mathematics.float2 <wind>k__BackingField
+  private/protected System.Single <hail>k__BackingField
+  public Game.OverridableProperty<System.Single> thunder
+  private/protected System.Single <rainbow>k__BackingField
+  private/protected System.Single <aerosolDensity>k__BackingField
+  private/protected System.Single <seasonTemperature>k__BackingField
+  private/protected System.Single <seasonPrecipitation>k__BackingField
+  private/protected System.Single <seasonCloudiness>k__BackingField
+  private/protected Game.Triggers.TriggerSystem m_TriggerSystem
+  private/protected Game.Prefabs.PrefabSystem m_PrefabSystem
+  private/protected Game.Simulation.TimeSystem m_TimeSystem
+  private/protected Game.Rendering.ClimateRenderSystem m_ClimateRenderSystem
+  private/protected Game.Simulation.PlanetarySystem m_PlanetarySystem
+  private/protected Unity.Entities.EntityQuery m_ClimateQuery
+  private/protected Game.OverridableProperty<System.Single> m_Date
+  private/protected Game.OverridableProperty<System.Single> <precipitation>k__BackingField
+  private/protected Game.OverridableProperty<System.Single> <temperature>k__BackingField
+  private/protected Game.OverridableProperty<System.Single> <cloudiness>k__BackingField
+  private/protected Game.OverridableProperty<System.Single> <aurora>k__BackingField
+  private/protected Game.OverridableProperty<System.Single> <fog>k__BackingField
+  private/protected Unity.Entities.Entity m_CurrentClimate
+  private/protected Unity.Collections.NativeList<Unity.Entities.Entity> m_CurrentWeatherEffects
+  private/protected Unity.Collections.NativeList<Unity.Entities.Entity> m_NextWeatherEffects
+  private/protected System.Single m_TemperatureBaseHeight
+  private/protected System.Single <averageTemperature>k__BackingField
+  private/protected System.Single <freezingTemperature>k__BackingField
+  private/protected Game.Simulation.ClimateSystem+WeatherClassification <classification>k__BackingField
+  private/protected Game.Simulation.ClimateSystem+SeasonInfo m_CurrentSeason
+  private/protected static System.Int32[] kLut
+  private/protected static System.Int32[] kSampleTimes
+  private/protected Game.Simulation.ClimateSystem+TypeHandle __TypeHandle
+  private/protected Unity.Entities.EntityQuery __query_431813795_0
+公开方法:
+  System.Void PatchReferences(ref Game.Serialization.PrefabReferences references)
+  System.Void PreSerialize(Colossal.Serialization.Entities.Context context)
+  System.Void Serialize(TWriter writer)
+  System.Void SetDefaults(Colossal.Serialization.Entities.Context context)
+  System.Void Deserialize(TReader reader)
+  System.Void PostDeserialize(Colossal.Serialization.Entities.Context context)
+  Game.Simulation.ClimateSystem+ClimateSample SampleClimate(Game.Prefabs.Climate.ClimatePrefab prefab, System.Single t)
+  Game.Simulation.ClimateSystem+ClimateSample SampleClimate(System.Single t)
+公开属性:
+  Unity.Mathematics.float2 wind { get; set; }
+  System.Single hail { get; set; }
+  System.Single rainbow { get; set; }
+  System.Single aerosolDensity { get; set; }
+  System.Single seasonTemperature { get; set; }
+  System.Single seasonPrecipitation { get; set; }
+  System.Single seasonCloudiness { get; set; }
+  Game.OverridableProperty<System.Single> currentDate { get; }
+  Game.OverridableProperty<System.Single> precipitation { get; }
+  Game.OverridableProperty<System.Single> temperature { get; }
+  Game.OverridableProperty<System.Single> cloudiness { get; }
+  Game.OverridableProperty<System.Single> aurora { get; }
+  Game.OverridableProperty<System.Single> fog { get; }
+  Unity.Entities.Entity currentClimate { get; set; }
+  System.Single temperatureBaseHeight { get; }
+  System.Single snowTemperatureHeightScale { get; }
+  System.Single averageTemperature { get; set; }
+  System.Single freezingTemperature { get; set; }
+  System.Boolean isRaining { get; }
+  System.Boolean isSnowing { get; }
+  System.Boolean isPrecipitating { get; }
+  Game.Simulation.ClimateSystem+WeatherClassification classification { get; set; }
+  Unity.Entities.Entity currentSeason { get; }
+  System.String currentSeasonName { get; }
+
+## 补充探测（第一轮结果后的追问）
+### Game.dll 引用的程序集
+  Cinemachine, Version=0.0.0.0
+  cohtml.Net, Version=1.64.0.7
+  Colossal.AssetPipeline, Version=0.0.0.0
+  Colossal.AssetPipeline.Native, Version=0.0.0.0
+  Colossal.ATL, Version=0.0.0.0
+  Colossal.Collections, Version=0.0.0.0
+  Colossal.Core, Version=0.0.0.0
+  Colossal.IO, Version=0.0.0.0
+  Colossal.IO.AssetDatabase, Version=0.0.0.0
+  Colossal.Localization, Version=0.0.0.0
+  Colossal.Logging, Version=0.0.0.0
+  Colossal.Mathematics, Version=0.0.0.0
+  Colossal.OdinSerializer, Version=1.0.0.0
+  Colossal.PSI.Common, Version=0.0.0.0
+  Colossal.PSI.Discord, Version=0.0.0.0
+  Colossal.PSI.PdxSdk, Version=0.0.0.0
+  Colossal.PSI.Steamworks, Version=0.0.0.0
+  Colossal.TestFramework, Version=0.0.0.0
+  Colossal.UI, Version=0.0.0.0
+  Colossal.UI.Binding, Version=0.0.0.0
+  mscorlib, Version=4.0.0.0
+  netstandard, Version=2.1.0.0
+  PDX.ModsUI, Version=0.0.0.0
+  PDX.SDK, Version=0.0.0.0
+  System, Version=4.0.0.0
+  System.Core, Version=4.0.0.0
+  System.Net.Http, Version=4.2.0.0
+  Unity.Burst, Version=0.0.0.0
+  Unity.Collections, Version=0.0.0.0
+  Unity.Entities, Version=0.0.0.0
+  Unity.Entities.Hybrid, Version=0.0.0.0
+  Unity.InputSystem, Version=1.14.2.0
+  Unity.Mathematics, Version=0.0.0.0
+  Unity.RenderPipelines.Core.Runtime, Version=0.0.0.0
+  Unity.RenderPipelines.HighDefinition.Runtime, Version=0.0.0.0
+  Unity.TextMeshPro, Version=0.0.0.0
+  UnityEngine.AudioModule, Version=0.0.0.0
+  UnityEngine.CoreModule, Version=0.0.0.0
+  UnityEngine.ImageConversionModule, Version=0.0.0.0
+  UnityEngine.IMGUIModule, Version=0.0.0.0
+  UnityEngine.InputLegacyModule, Version=0.0.0.0
+  UnityEngine.JSONSerializeModule, Version=0.0.0.0
+  UnityEngine.NVIDIAModule, Version=0.0.0.0
+  UnityEngine.TextCoreFontEngineModule, Version=0.0.0.0
+  UnityEngine.TextRenderingModule, Version=0.0.0.0
+  UnityEngine.UI, Version=1.0.0.0
+  UnityEngine.UnityWebRequestModule, Version=0.0.0.0
+  UnityEngine.VFXModule, Version=0.0.0.0
+  UnityEngine.VirtualTexturingModule, Version=0.0.0.0
+
+
+### Game.Citizens.CitizenAge
+种类: enum; 基类: System.Enum
+枚举值:
+  Child = 0
+  Teen = 1
+  Adult = 2
+  Elderly = 3
+字段:
+  public System.Int32 value__
+  public static Game.Citizens.CitizenAge Child
+  public static Game.Citizens.CitizenAge Teen
+  public static Game.Citizens.CitizenAge Adult
+  public static Game.Citizens.CitizenAge Elderly
+
+### Game.Citizens.Purpose
+种类: enum; 基类: System.Enum
+枚举值:
+  None = 0
+  Shopping = 1
+  Leisure = 2
+  GoingHome = 3
+  GoingToWork = 4
+  Working = 5
+  Sleeping = 6
+  Exporting = 7
+  MovingAway = 8
+  Studying = 9
+  GoingToSchool = 10
+  StorageTransfer = 11
+  Hospital = 12
+  Delivery = 13
+  UpkeepDelivery = 14
+  Safety = 15
+  EmergencyShelter = 16
+  Crime = 17
+  GoingToJail = 18
+  GoingToPrison = 19
+  InJail = 20
+  InPrison = 21
+  Collect = 22
+  Escape = 23
+  InHospital = 24
+  Deathcare = 25
+  InDeathcare = 26
+  ReturnUnsortedMail = 27
+  ReturnLocalMail = 28
+  ReturnOutgoingMail = 29
+  Traveling = 30
+  Relaxing = 31
+  Sightseeing = 32
+  VisitAttractions = 33
+  ReturnGarbage = 34
+  SendMail = 35
+  Disappear = 36
+  WaitingHome = 37
+  PathFailed = 38
+  InEmergencyShelter = 39
+  CompanyShopping = 40
+  Count = 41
+字段:
+  public System.Byte value__
+  public static Game.Citizens.Purpose None
+  public static Game.Citizens.Purpose Shopping
+  public static Game.Citizens.Purpose Leisure
+  public static Game.Citizens.Purpose GoingHome
+  public static Game.Citizens.Purpose GoingToWork
+  public static Game.Citizens.Purpose Working
+  public static Game.Citizens.Purpose Sleeping
+  public static Game.Citizens.Purpose Exporting
+  public static Game.Citizens.Purpose MovingAway
+  public static Game.Citizens.Purpose Studying
+  public static Game.Citizens.Purpose GoingToSchool
+  public static Game.Citizens.Purpose StorageTransfer
+  public static Game.Citizens.Purpose Hospital
+  public static Game.Citizens.Purpose Delivery
+  public static Game.Citizens.Purpose UpkeepDelivery
+  public static Game.Citizens.Purpose Safety
+  public static Game.Citizens.Purpose EmergencyShelter
+  public static Game.Citizens.Purpose Crime
+  public static Game.Citizens.Purpose GoingToJail
+  public static Game.Citizens.Purpose GoingToPrison
+  public static Game.Citizens.Purpose InJail
+  public static Game.Citizens.Purpose InPrison
+  public static Game.Citizens.Purpose Collect
+  public static Game.Citizens.Purpose Escape
+  public static Game.Citizens.Purpose InHospital
+  public static Game.Citizens.Purpose Deathcare
+  public static Game.Citizens.Purpose InDeathcare
+  public static Game.Citizens.Purpose ReturnUnsortedMail
+  public static Game.Citizens.Purpose ReturnLocalMail
+  public static Game.Citizens.Purpose ReturnOutgoingMail
+  public static Game.Citizens.Purpose Traveling
+  public static Game.Citizens.Purpose Relaxing
+  public static Game.Citizens.Purpose Sightseeing
+  public static Game.Citizens.Purpose VisitAttractions
+  public static Game.Citizens.Purpose ReturnGarbage
+  public static Game.Citizens.Purpose SendMail
+  public static Game.Citizens.Purpose Disappear
+  public static Game.Citizens.Purpose WaitingHome
+  public static Game.Citizens.Purpose PathFailed
+  public static Game.Citizens.Purpose InEmergencyShelter
+  public static Game.Citizens.Purpose CompanyShopping
+  public static Game.Citizens.Purpose Count
+
+### Game.Citizens.CitizenFlags
+种类: enum; 基类: System.Enum
+枚举值:
+  None = 0
+  AgeBit1 = 1
+  AgeBit2 = 2
+  MovingAwayReachOC = 4
+  Male = 8
+  EducationBit1 = 16
+  EducationBit2 = 32
+  EducationBit3 = 64
+  FailedEducationBit1 = 128
+  FailedEducationBit2 = 256
+  Tourist = 512
+  Commuter = 1024
+  LookingForPartner = 2048
+  ValidCitizen = 4096
+  BicycleUser = 8192
+  Homeless = 16384
+字段:
+  public System.Int16 value__
+  public static Game.Citizens.CitizenFlags None
+  public static Game.Citizens.CitizenFlags AgeBit1
+  public static Game.Citizens.CitizenFlags AgeBit2
+  public static Game.Citizens.CitizenFlags MovingAwayReachOC
+  public static Game.Citizens.CitizenFlags Male
+  public static Game.Citizens.CitizenFlags EducationBit1
+  public static Game.Citizens.CitizenFlags EducationBit2
+  public static Game.Citizens.CitizenFlags EducationBit3
+  public static Game.Citizens.CitizenFlags FailedEducationBit1
+  public static Game.Citizens.CitizenFlags FailedEducationBit2
+  public static Game.Citizens.CitizenFlags Tourist
+  public static Game.Citizens.CitizenFlags Commuter
+  public static Game.Citizens.CitizenFlags LookingForPartner
+  public static Game.Citizens.CitizenFlags ValidCitizen
+  public static Game.Citizens.CitizenFlags BicycleUser
+  public static Game.Citizens.CitizenFlags Homeless
+
+### 名称含 Attractiveness 的类型
+
+### Game.Buildings.AttractivenessProvider
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public System.Int32 m_Attractiveness
+
+### Game.Debug.TerrainAttractivenessDebugSystem
+种类: class; 基类: Game.Debug.BaseDebugSystem
+
+### Game.Debug.TerrainAttractivenessDebugSystem+TerrainAttractivenessGizmoJob
+种类: struct; 基类: System.ValueType
+
+### Game.Prefabs.AttractivenessParameterData
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public System.Single m_ForestEffect
+  public System.Single m_ForestDistance
+  public System.Single m_ShoreEffect
+  public System.Single m_ShoreDistance
+  public Unity.Mathematics.float3 m_HeightBonus
+  public Unity.Mathematics.float2 m_AttractiveTemperature
+  public Unity.Mathematics.float2 m_ExtremeTemperature
+  public Unity.Mathematics.float2 m_TemperatureAffect
+  public Unity.Mathematics.float2 m_RainEffectRange
+  public Unity.Mathematics.float2 m_SnowEffectRange
+  public Unity.Mathematics.float3 m_SnowRainExtremeAffect
+
+### Game.Prefabs.AttractivenessParametersPrefab
+种类: class; 基类: Game.Prefabs.PrefabBase
+
+### Game.Prefabs.Modes.AttractivenessParametersMode
+种类: class; 基类: Game.Prefabs.Modes.EntityQueryModePrefab
+
+### Game.Simulation.AttractionSystem+AttractivenessFactor
+种类: enum; 基类: System.Enum
+枚举值:
+  Efficiency = 0
+  Maintenance = 1
+  Forest = 2
+  Beach = 3
+  Height = 4
+  Count = 5
+
+### Game.Simulation.AttractionSystem+AttractivenessJob
+种类: struct; 基类: System.ValueType
+
+### Game.Simulation.TerrainAttractiveness
+种类: struct; 基类: System.ValueType
+字段:
+  public System.Single m_ShoreBonus
+  public System.Single m_ForestBonus
+
+### Game.Simulation.TerrainAttractivenessSystem
+种类: class; 基类: Game.Simulation.CellMapSystem<Game.Simulation.TerrainAttractiveness>
+
+### Game.Simulation.TerrainAttractivenessSystem+TerrainAttractivenessJob
+种类: struct; 基类: System.ValueType
+
+### Game.Simulation.TerrainAttractivenessSystem+TerrainAttractivenessPrepareJob
+种类: struct; 基类: System.ValueType
+
+### Game.UI.InGame.AttractivenessSection
+种类: class; 基类: Game.UI.InGame.InfoSectionBase
+
+### Game.UI.InGame.AttractivenessSection+AttractivenessFactor
+种类: struct; 基类: System.ValueType
+
+### Game.Simulation.AttractionSystem
+种类: class; 基类: Game.GameSystemBase
+公开方法:
+  System.Int32 GetUpdateInterval(Game.SystemUpdatePhase phase)
+  System.Void SetFactor(Unity.Collections.NativeArray<System.Int32> factors, Game.Simulation.AttractionSystem+AttractivenessFactor factor, System.Single attractiveness)
+### AttractivenessSystem —— 未找到
+
+
+### Game.Simulation.RandomTrafficRequestFlags
+种类: enum; 基类: System.Enum
+枚举值:
+  NoSlowVehicles = 1
+  DeliveryTruck = 2
+  TransportVehicle = 4
+字段:
+  public System.Byte value__
+  public static Game.Simulation.RandomTrafficRequestFlags NoSlowVehicles
+  public static Game.Simulation.RandomTrafficRequestFlags DeliveryTruck
+  public static Game.Simulation.RandomTrafficRequestFlags TransportVehicle
+
+### Game.Events.AccidentSiteFlags
+种类: enum; 基类: System.Enum
+枚举值:
+  StageAccident = 1
+  Secured = 2
+  CrimeScene = 4
+  TrafficAccident = 8
+  CrimeFinished = 16
+  CrimeDetected = 32
+  CrimeMonitored = 64
+  RequirePolice = 128
+  MovingVehicles = 256
+字段:
+  public System.UInt32 value__
+  public static Game.Events.AccidentSiteFlags StageAccident
+  public static Game.Events.AccidentSiteFlags Secured
+  public static Game.Events.AccidentSiteFlags CrimeScene
+  public static Game.Events.AccidentSiteFlags TrafficAccident
+  public static Game.Events.AccidentSiteFlags CrimeFinished
+  public static Game.Events.AccidentSiteFlags CrimeDetected
+  public static Game.Events.AccidentSiteFlags CrimeMonitored
+  public static Game.Events.AccidentSiteFlags RequirePolice
+  public static Game.Events.AccidentSiteFlags MovingVehicles
+
+### Game.Events.Crime
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  (无实例/静态字段)
+
+### Game.Prefabs.Crime
+种类: class; 基类: Game.Prefabs.ComponentBase
+字段:
+  public Game.Prefabs.EventTargetType m_RandomTargetType
+  public Game.Prefabs.CrimeType m_CrimeType
+  public Colossal.Mathematics.Bounds1 m_OccurenceProbability
+  public Colossal.Mathematics.Bounds1 m_RecurrenceProbability
+  public Colossal.Mathematics.Bounds1 m_AlarmDelay
+  public Colossal.Mathematics.Bounds1 m_CrimeDuration
+  public Colossal.Mathematics.Bounds1 m_CrimeIncomeAbsolute
+  public Colossal.Mathematics.Bounds1 m_CrimeIncomeRelative
+  public Colossal.Mathematics.Bounds1 m_JailTimeRange
+  public Colossal.Mathematics.Bounds1 m_PrisonTimeRange
+  public System.Single m_PrisonProbability
+
+### Game.Citizens.Criminal
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  public Unity.Entities.Entity m_Event
+  public System.UInt16 m_JailTime
+  public Game.Citizens.CriminalFlags m_Flags
+
+## 姓名系统（2026-08-20 追问：市民真实姓名怎么读）
+
+### Game.UI.CustomName
+种类: struct; 基类: System.ValueType
+接口: IComponentData
+字段:
+  (无实例/静态字段)
+公开方法:
+
+### Game.UI.NameSystem
+种类: class; 基类: Game.GameSystemBase
+字段:
+  private/protected Unity.Entities.EntityQuery m_DeletedQuery
+  private/protected Game.Prefabs.PrefabSystem m_PrefabSystem
+  private/protected Game.UI.InGame.PrefabUISystem m_PrefabUISystem
+  private/protected Game.EndFrameBarrier m_EndFrameBarrier
+  private/protected System.Collections.Generic.Dictionary<Unity.Entities.Entity, System.String> m_Names
+公开方法:
+  System.String GetDebugName(Unity.Entities.Entity entity)
+  System.Boolean TryGetCustomName(Unity.Entities.Entity entity, ref System.String customName)
+  System.Void SetCustomName(Unity.Entities.Entity entity, System.String name)
+  System.String GetRenderedLabelName(Unity.Entities.Entity entity)
+  System.Void BindNameForVirtualKeyboard(Colossal.UI.Binding.IJsonWriter writer, Unity.Entities.Entity entity)
+  Game.UI.NameSystem+Name GetNameForVirtualKeyboard(Unity.Entities.Entity entity)
+  System.Void BindName(Colossal.UI.Binding.IJsonWriter writer, Unity.Entities.Entity entity)
+  Game.UI.NameSystem+Name GetName(Unity.Entities.Entity entity, System.Boolean omitBrand)
+  System.Void BindFamilyName(Colossal.UI.Binding.IJsonWriter writer, Unity.Entities.Entity household)
+  System.Void Serialize(TWriter writer)
+  System.Void Deserialize(TReader reader)
+  System.Void SetDefaults(Colossal.Serialization.Entities.Context context)
+
+### Game.UI.NameSystem+Name
+种类: struct; 基类: System.ValueType
+字段:
+  private/protected Game.UI.NameSystem+NameType m_NameType
+  private/protected System.String m_NameID
+  private/protected System.String[] m_NameArgs
+公开方法:
+  Game.UI.NameSystem+Name CustomName(System.String name)
+  Game.UI.NameSystem+Name LocalizedName(System.String nameID)
+  Game.UI.NameSystem+Name FormattedName(System.String nameID, System.String[] args)
+  System.Void Write(Colossal.UI.Binding.IJsonWriter writer)
+  System.Void Serialize(TWriter writer)
+  System.Void Deserialize(TReader reader)
+
+## UI binding（2026-08-19 M2-A 追问：ValueBinding/TriggerBinding/UISystemBase 在哪）
+  [Colossal.UI.Binding] Colossal.UI.Binding.TriggerBinding  (class)
+  [Colossal.UI.Binding] Colossal.UI.Binding.TriggerBinding`1  (class)
+  [Colossal.UI.Binding] Colossal.UI.Binding.TriggerBinding`2  (class)
+  [Colossal.UI.Binding] Colossal.UI.Binding.TriggerBinding`3  (class)
+  [Colossal.UI.Binding] Colossal.UI.Binding.TriggerBinding`4  (class)
+  [Colossal.UI.Binding] Colossal.UI.Binding.RawTriggerBinding  (class)
+  [Colossal.UI.Binding] Colossal.UI.Binding.RawTriggerBindingBase  (class)
+  [Colossal.UI.Binding] Colossal.UI.Binding.ValueBinding`1  (class)
+  [Colossal.UI.Binding] Colossal.UI.Binding.GetterValueBinding`1  (class)
+  [Colossal.UI.Binding] Colossal.UI.Binding.RawValueBinding  (class)
+  [Colossal.UI.Binding] Colossal.UI.Binding.RawValueBindingExtensions  (class)
+  [Game] Game.UI.UISystemBase  (class)
+  [Game] Game.UI.InGame.InfoviewUISystemBase  (class)

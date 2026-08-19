@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 目标框架与游戏程序集一致：Game.dll 引用 netstandard 2.1
+         （tools/GameDllDump 2026-08-19 实测确认，版本升级后重跑该工具复核）。 -->
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>CityLife</AssemblyName>
+    <RootNamespace>CityLife</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 引用游戏全部程序集但绝不复制到输出（Private=false）：游戏进程已加载它们，
+         打包进 mod 会引发类型冲突。
+         Exclude 掉 Mono/.NET 基础库门面（netstandard/mscorlib/System*/Mono*）：
+         它们与 SDK 自带的 netstandard2.1 引用程序集冲突（类型转发循环 CS0731），
+         BCL 类型一律由 SDK 引用程序集提供。 -->
+    <Reference Include="$(Cities2Path)\Cities2_Data\Managed\*.dll"
+               Exclude="$(Cities2Path)\Cities2_Data\Managed\netstandard.dll;$(Cities2Path)\Cities2_Data\Managed\mscorlib.dll;$(Cities2Path)\Cities2_Data\Managed\System*.dll;$(Cities2Path)\Cities2_Data\Managed\Mono*.dll">
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

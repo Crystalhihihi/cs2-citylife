@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <!-- 游戏安装路径解析顺序：MSBuild 属性 > 环境变量 CITIES2_PATH > 默认 Steam 路径。
+         换机器/换盘时：set CITIES2_PATH=你的游戏根目录（含 Cities2.exe 的那层） -->
+    <Cities2Path Condition="'$(Cities2Path)' == ''">$(CITIES2_PATH)</Cities2Path>
+    <Cities2Path Condition="'$(Cities2Path)' == ''">D:\SteamLibrary\steamapps\common\Cities Skylines II</Cities2Path>
+  </PropertyGroup>
+</Project>

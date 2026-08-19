@@ -1,0 +1,226 @@
+/* M2-C 面板样式：板块 tab / 市长发帖框 / 市长帖高亮（M2-B：评论区 / 自绘滚动条 / 拖拽移动 / 缩放手柄）。
+   尺寸纪律（2026-08-19 实机教训）：cohtml 的 flex 子项收缩与 calc/rem 组合行为不可靠——
+   面板位置/宽高、列表高度一律由 TSX 内联 px 定死（见 CityLifePanel.tsx 的 pos/size 与 kChromeH），
+   本文件只管视觉，不管几何；凡占垂直空间的行（tab 行 30 / 发帖框 40）必须在 TSX 常量里同步计入。
+   cohtml 不绘制原生滚动条（::-webkit-scrollbar 无效）：右侧自绘 track + 比例 thumb，
+   滚轮滚动、拖动 thumb、贴底自动滚动三者并存。 */
+
+.panel {
+    position: absolute;             /* left/top/width/height 由 TSX 内联（拖拽/缩放 state） */
+    background-color: rgba(20, 24, 30, 0.92);
+    border-radius: 8px;
+    padding: 10px;
+    color: #e8eaed;
+    font-size: 14px;
+    pointer-events: auto;
+}
+
+.header {
+    font-size: 16px;
+    font-weight: bold;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    margin-bottom: 6px;
+    height: 24px;                   /* 头部定高：列表高度 = 面板高 - kChromeH(130) 的前提之一 */
+    cursor: move;                   /* 拖拽手柄提示（cohtml 不支持 cursor 也不碍事） */
+    user-select: none;              /* 拖动时不选中标题文字 */
+}
+
+.listWrap {
+    position: relative;             /* 自绘滚动条与"有新帖"气泡的定位锚；高度由 TSX 内联 */
+}
+
+/* ── 板块 tab（几何：行高 24 + margin-bottom 6 = 30，已计入 TSX kTabsH） ── */
+.tabs {
+    display: flex;
+    height: 24px;
+    margin-bottom: 6px;
+}
+
+.tab {
+    padding: 0 10px;
+    line-height: 24px;
+    font-size: 12px;
+    color: rgba(232, 234, 237, 0.6);
+    border-radius: 4px;
+    margin-right: 4px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.tabActive {
+    padding: 0 10px;
+    line-height: 24px;
+    font-size: 12px;
+    font-weight: bold;
+    color: #ffffff;
+    background-color: rgba(60, 130, 246, 0.35);
+    border-radius: 4px;
+    margin-right: 4px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.list {
+    height: 100%;                   /* 父级 listWrap 高度已定死 px，100% 是确定性取值 */
+    overflow-y: auto;               /* 无可见滚动条；滚轮 + 拖 thumb + 贴底自动滚动 */
+    overflow-x: hidden;
+    padding-right: 9px;             /* 给自绘滚动条让位 */
+}
+
+/* ── 自绘滚动条 ── */
+.track {
+    position: absolute;
+    top: 0;
+    right: 1px;
+    width: 5px;
+    height: 100%;
+    background-color: rgba(255, 255, 255, 0.07);
+    border-radius: 3px;
+}
+
+.thumb {
+    width: 5px;
+    background-color: rgba(255, 255, 255, 0.28);
+    border-radius: 3px;
+    /* height 与 transform(translateY) 由 TSX 按滚动度量内联 */
+}
+
+/* "有新帖"气泡：用户上翻时新帖到达的提示，点击跳底 */
+.newBubble {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: rgba(60, 130, 246, 0.95);
+    color: #ffffff;
+    font-size: 12px;
+    padding: 3px 12px;
+    border-radius: 10px;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+/* 右下角缩放手柄（内嵌 SVG 三角，见 TSX） */
+.resizeHandle {
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    width: 14px;
+    height: 14px;
+    cursor: nwse-resize;
+    pointer-events: auto;
+}
+
+.empty {
+    color: rgba(232, 234, 237, 0.55);
+    padding: 12px 4px;
+    text-align: center;
+}
+
+.post {
+    padding: 6px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    word-break: break-all;          /* 中文长句 + 长英文词/链接都不顶破版心 */
+}
+
+/* 市长帖（a === "市长"）特殊视觉：暖色左边框 + 淡底，与市民帖拉开层级 */
+.postMayor {
+    padding: 6px 4px 6px 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-left: 3px solid rgba(255, 190, 80, 0.85);
+    background-color: rgba(255, 190, 80, 0.06);
+    word-break: break-all;
+}
+
+/* 「市长」徽标：文字徽标（禁 emoji/符号字形），与 .bestTag 同色系 */
+.mayorBadge {
+    font-size: 10px;
+    color: #1a1e26;
+    background-color: rgba(255, 190, 80, 0.9);
+    border-radius: 3px;
+    padding: 0 4px;
+    margin-right: 6px;
+}
+
+.author {
+    font-weight: bold;
+    margin-right: 6px;
+}
+
+.text {
+    /* 正文紧跟作者同行混排 */
+}
+
+.topic {
+    font-size: 11px;
+    color: rgba(140, 180, 255, 0.85);
+    margin-top: 2px;
+}
+
+/* ── 评论区：字号略小、缩进、视觉层级低于主帖 ── */
+.comments {
+    margin-top: 4px;
+    margin-left: 10px;
+    padding-left: 6px;
+    border-left: 2px solid rgba(255, 255, 255, 0.10);
+    font-size: 12px;
+    color: rgba(232, 234, 237, 0.78);
+}
+
+.comment {
+    padding: 2px 0;
+}
+
+.bestTag {
+    color: rgba(255, 190, 80, 0.9); /* "神评："前缀暖色点缀 */
+    margin-right: 2px;
+}
+
+.commentAuthor {
+    font-weight: bold;
+    margin-right: 4px;
+}
+
+.commentToggle {
+    color: rgba(140, 180, 255, 0.85);
+    cursor: pointer;
+    padding: 2px 0;
+    user-select: none;
+}
+
+/* ── 市长发帖框（几何：margin-top 6 + 高 34 = 40，已计入 TSX kComposerH；
+      右侧 padding 16px 给右下角缩放手柄让位，防止压住发送按钮） ── */
+.composer {
+    display: flex;
+    margin-top: 6px;
+    height: 34px;
+    padding-right: 16px;
+}
+
+.mayorInput {
+    flex: 1 1 auto;                 /* 宽度弹性；高度由父行定死 34px */
+    height: 100%;
+    resize: none;                   /* 禁拖大：面板几何由 TSX 算死，textarea 不能顶破 */
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    color: #e8eaed;
+    font-size: 12px;
+    font-family: inherit;
+    padding: 4px 6px;
+    outline: none;
+    word-break: break-all;          /* 中文长句输入时不顶破输入框 */
+}
+
+.sendBtn {
+    margin-left: 6px;
+    padding: 0 12px;
+    line-height: 32px;              /* 34 - border 上下各 1，视觉垂直居中 */
+    font-size: 12px;
+    color: #ffffff;
+    background-color: rgba(60, 130, 246, 0.85);
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+}

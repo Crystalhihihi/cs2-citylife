@@ -1,0 +1,208 @@
+using System.Collections.Generic;
+using Game;
+using Game.Buildings;
+using Game.Citizens;
+using Game.Companies;
+using Game.Economy;
+using Game.Prefabs;
+using Unity.Entities;
+using Unity.Mathematics;
+using Transform = Game.Objects.Transform;
+
+namespace CityLife.GameBridge
+{
+    /// <summary>锚点类型（实体话题第二刀的第一批信号，全部来自已验证组件）。</summary>
+    public enum AnchorKind { Hiring, BusinessGood, BusinessBad, Park }
+
+    /// <summary>
+    /// 实体锚点：一条"具体到对象"的话题线索。Label=中文方位+真实业态名（"城东那家便利店"），
+    /// Detail=一句可入 prompt 的线索（"空 3 个岗"）。Entity 供信息流挂"点击聚焦"用。
+    /// </summary>
+    public readonly struct Anchor
+    {
+        public readonly Entity Entity;
+        public readonly AnchorKind Kind;
+        public readonly string Label;
+        public readonly string Detail;
+
+        public Anchor(Entity entity, AnchorKind kind, string label, string detail)
+        {
+            Entity = entity;
+            Kind = kind;
+            Label = label;
+            Detail = detail;
+        }
+
+        public string PromptText => $"{Label}（{Detail}）";
+    }
+
+    /// <summary>
+    /// 实体锚点系统（读侧）：每 1024 帧从公司/公园实体采样一批话题锚点，供内容导演分配。
+    /// 信号全部来自元数据已验证组件：空缺=WorkProvider.m_MaxWorkers−Employee buffer 数；
+    /// 盈亏=Profitability.m_Profitability；业态=Resources buffer 里存货最多的非货币资源
+    /// （"那家便利店"而不是"那家店"——2026-08-20 玩家反馈"全是吃的"的根治：模型只会把泛词
+    /// 自由发挥成吃的，真实业态名喂给它就没得编了）。
+    /// 纪律：跨步抽样防总抓同一批；采样整体轮换（m_Offset）；只读不写。
+    /// </summary>
+    public partial class EntityAnchorSystem : GameSystemBase
+    {
+        private const int k_MaxCompanyAnchors = 8;
+        private const int k_MaxParkAnchors = 4;
+
+        private EntityQuery m_CitizenQuery = default!;
+        private EntityQuery m_CompanyQuery = default!;
+        private EntityQuery m_ParkQuery = default!;
+        private PrefabSystem m_PrefabSystem = default!;
+        private readonly List<Anchor> m_Anchors = new();
+        private int m_Offset;
+        private uint m_Cycle;
+
+        /// <summary>当前可用锚点（主线程只读）。</summary>
+        public IReadOnlyList<Anchor> Anchors => m_Anchors;
+
+        protected override void OnCreate()
+        {
+            base.OnCreate();
+            m_CitizenQuery = GetEntityQuery(ComponentType.ReadOnly<Citizen>());
+            m_CompanyQuery = GetEntityQuery(
+                ComponentType.ReadOnly<CommercialCompany>(),
+                ComponentType.ReadOnly<WorkProvider>(),
+                ComponentType.ReadOnly<Profitability>(),
+                ComponentType.ReadOnly<PropertyRenter>(),
+                ComponentType.ReadOnly<Employee>(),
+                ComponentType.ReadOnly<Resources>(),
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
+            m_ParkQuery = GetEntityQuery(
+                ComponentType.ReadOnly<AttractivenessProvider>(),
+                ComponentType.ReadOnly<Transform>(),
+                ComponentType.ReadOnly<PrefabRef>(),
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
+            m_PrefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
+            RequireForUpdate(m_CitizenQuery);
+        }
+
+        public override int GetUpdateInterval(SystemUpdatePhase phase) => 1024;
+
+        protected override void OnUpdate()
+        {
+            m_Anchors.Clear();
+            m_Cycle++;
+            bool calibrate = m_Cycle % 16 == 1; // 校准日志：盈利分布/业态分布，低频
+
+            // —— 公司锚点（招聘/盈亏），标签带真实业态 ——
+            var companies = m_CompanyQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
+            int stride = math.max(1, companies.Length / 24);
+            int added = 0;
+            for (int i = m_Offset % stride; i < companies.Length && added < k_MaxCompanyAnchors; i += stride)
+            {
+                var company = companies[i];
+                var renter = EntityManager.GetComponentData<PropertyRenter>(company);
+                var building = renter.m_Property;
+                if (building == Entity.Null || !EntityManager.HasComponent<Transform>(building))
+                    continue;
+
+                var wp = EntityManager.GetComponentData<WorkProvider>(company);
+                var prof = EntityManager.GetComponentData<Profitability>(company);
+                int vacancy = wp.m_MaxWorkers - EntityManager.GetBuffer<Employee>(company).Length;
+
+                AnchorKind? kind =
+                    vacancy > 0 ? AnchorKind.Hiring :
+                    prof.m_Profitability >= 200 ? AnchorKind.BusinessGood :
+                    prof.m_Profitability <= 50 ? AnchorKind.BusinessBad :
+                    (AnchorKind?)null;
+                if (kind == null)
+                    continue;
+
+                var pos = EntityManager.GetComponentData<Transform>(building).m_Position;
+                var word = BusinessWord(EntityManager.GetBuffer<Resources>(company));
+                string detail = kind == AnchorKind.Hiring ? $"空 {vacancy} 个岗"
+                    : kind == AnchorKind.BusinessGood ? "听说赚了"
+                    : "听说快撑不住了";
+                m_Anchors.Add(new Anchor(building, kind.Value, DirectionOf(pos) + "那家" + word, detail));
+                added++;
+
+                if (calibrate)
+                    Mod.Log.Info($"[Anchor·校准] 业态={word} 盈利={prof.m_Profitability} 空缺={vacancy}");
+            }
+            m_Offset++;
+            companies.Dispose();
+
+            // —— 公园/景点锚点 ——
+            var parks = m_ParkQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
+            stride = math.max(1, parks.Length / (k_MaxParkAnchors * 2));
+            added = 0;
+            for (int i = 0; i < parks.Length && added < k_MaxParkAnchors; i += stride)
+            {
+                var building = parks[i];
+                var pos = EntityManager.GetComponentData<Transform>(building).m_Position;
+                var name = PrefabNameOf(building);
+                var label = DirectionOf(pos) + (name.Contains("Park") ? "公园" : "景点");
+                m_Anchors.Add(new Anchor(building, AnchorKind.Park, label, "散心的好去处"));
+                added++;
+            }
+            parks.Dispose();
+
+            if (calibrate)
+                Mod.Log.Info($"[Anchor] 本轮锚点 {m_Anchors.Count} 个（公司池 {companies.Length}，公园池 {parks.Length}）");
+        }
+
+        // 资源→中文业态映射（Game.Economy.Resource 枚举 2026-08-20 dump 实测；未覆盖的走兜底"店"）
+        private static readonly (Resource Res, string Word)[] k_ResourceWords =
+        {
+            (Resource.Meals, "餐馆"), (Resource.ConvenienceFood, "便利店"), (Resource.Food, "食品店"),
+            (Resource.Vegetables, "菜店"), (Resource.Beverages, "饮品店"), (Resource.Fish, "水产店"),
+            (Resource.Textiles, "服装店"), (Resource.Furniture, "家具店"), (Resource.Vehicles, "车行"),
+            (Resource.Electronics, "电子产品店"), (Resource.Pharmaceuticals, "药店"),
+            (Resource.Lodging, "酒店"), (Resource.Paper, "文具店"), (Resource.Telecom, "手机店"),
+            (Resource.Entertainment, "娱乐场所"), (Resource.Recreation, "休闲场所"),
+            (Resource.Financial, "银行"), (Resource.Media, "传媒公司"), (Resource.Software, "软件公司"),
+        };
+
+        /// <summary>公司主业判定：Resources buffer 里存货最多的非货币资源 → 中文业态词。</summary>
+        private static string BusinessWord(DynamicBuffer<Resources> resources)
+        {
+            Resource top = Resource.NoResource;
+            int best = -1;
+            foreach (var r in resources)
+            {
+                if (r.m_Resource == Resource.Money || r.m_Resource == Resource.NoResource)
+                    continue;
+                if (r.m_Amount > best)
+                {
+                    best = r.m_Amount;
+                    top = r.m_Resource;
+                }
+            }
+            foreach (var (res, word) in k_ResourceWords)
+                if (top == res)
+                    return word;
+            return "店"; // 兜底：未知/无存货业态
+        }
+
+        private string PrefabNameOf(Entity entity)
+        {
+            var prefabRef = EntityManager.GetComponentData<PrefabRef>(entity);
+            return m_PrefabSystem.TryGetPrefab(prefabRef.m_Prefab, out PrefabBase prefab) ? prefab.name : "?";
+        }
+
+        /// <summary>方位命名：相对地图原点的 8 方位+距离带（"城东""市中心"），不读游戏本地化。</summary>
+        private static string DirectionOf(float3 pos)
+        {
+            var dist = math.length(pos.xz);
+            if (dist < 500f)
+                return "市中心";
+
+            var angle = math.degrees(math.atan2(pos.z, pos.x)); // x 东 z 北，-180..180
+            if (angle >= -22.5f && angle < 22.5f) return "城东";
+            if (angle >= 22.5f && angle < 67.5f) return "城东北";
+            if (angle >= 67.5f && angle < 112.5f) return "城北";
+            if (angle >= 112.5f && angle < 157.5f) return "城西北";
+            if (angle >= 157.5f || angle < -157.5f) return "城西";
+            if (angle >= -157.5f && angle < -112.5f) return "城西南";
+            if (angle >= -112.5f && angle < -67.5f) return "城南";
+            return "城东南";
+        }
+    }
+}

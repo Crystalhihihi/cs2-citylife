@@ -47,6 +47,7 @@ namespace CityLife.GameBridge
         private EntityAnchorSystem m_AnchorSystem = default!;
         private CitySystem m_CitySystem = default!;
         private SimulationSystem m_SimulationSystem = default!;
+        private TimeSystem m_TimeSystem = default!;
         private List<Content.EventPack> m_Packs = default!;
 
         private ChainState m_State = ChainState.Idle;
@@ -82,6 +83,7 @@ namespace CityLife.GameBridge
             m_AnchorSystem = World.GetOrCreateSystemManaged<EntityAnchorSystem>();
             m_CitySystem = World.GetOrCreateSystemManaged<CitySystem>();
             m_SimulationSystem = World.GetOrCreateSystemManaged<SimulationSystem>();
+            m_TimeSystem = World.GetOrCreateSystemManaged<TimeSystem>();
 
             var cfgDir = System.IO.Path.GetFullPath(System.IO.Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -97,6 +99,23 @@ namespace CityLife.GameBridge
 
         private uint Now => (uint)m_SimulationSystem.frameIndex;
         private static uint TicksPerHour => (uint)Math.Max(1, TimeSystem.kTicksPerDay / 24);
+
+        /// <summary>当前时刻（0-23 游戏小时，从 TimeSystem 官方接口换算）。</summary>
+        private int CurrentHour()
+        {
+            var settings = SystemAPI.GetSingleton<Game.Prefabs.TimeSettingsData>();
+            var data = SystemAPI.GetSingleton<Game.Common.TimeData>();
+            var tod = m_TimeSystem.GetTimeOfDay(settings, data, m_SimulationSystem.frameIndex); // 0..1
+            return Math.Clamp((int)(tod * 24f), 0, 23);
+        }
+
+        /// <summary>距下一个整点目标时刻（如 19:00）的 tick 数；已过点则排到明天。</summary>
+        private uint TicksUntilHour(int targetHour)
+        {
+            var hour = CurrentHour();
+            var deltaHours = targetHour > hour ? targetHour - hour : targetHour + 24 - hour;
+            return (uint)deltaHours * TicksPerHour;
+        }
 
         /// <summary>导演路由入口：意图解析结果（requestId 前缀 "intent:"）。</summary>
         public void OnIntentJson(string json)
@@ -161,10 +180,13 @@ namespace CityLife.GameBridge
             m_VenueLabel = venueLabel;
             m_CardId++;
 
+            // 开始时刻按游戏时钟排：下一个 19:00（傍晚场，19:00-23:00 收摊，不通宵）
+            var whenText = 19 > CurrentHour() ? "今晚 19:00" : "明晚 19:00";
+
             PendingConfirmJson = "{\"id\":" + m_CardId + ",\"title\":\"活动确认\",\"lines\":["
                 + $"\"活动：{pack.Name}\",\"地点：{venueLabel}\","
                 + $"\"预算：{BudgetTierName(m_BudgetTier)}（{pack.Budgets[m_BudgetTier] / 10000}万，从财政真扣）\","
-                + $"\"开始：约 2 游戏小时后\",\"预计规模：约 {m_Scale} 人\""
+                + $"\"开始：{whenText}（时长 4 小时）\",\"预计规模：约 {m_Scale} 人\""
                 + "],\"danger\":" + (Content.ModSettings.WriteBackTier == "crazy" ? "true" : "false") + "}";
             PendingConfirmVersion++;
             m_State = ChainState.AwaitingConfirm;
@@ -214,10 +236,11 @@ namespace CityLife.GameBridge
             else
                 m_Spent = 0;
 
-            m_StartFrame = Now + TicksPerHour * 4; // 4 游戏小时后开场（v1 不解析"明晚"这类自然语言时间）
+            m_StartFrame = Now + TicksUntilHour(19); // 下一个 19:00 开场（按游戏时钟，不通宵）
             m_VenueCooldownUntil[m_Venue] = Now + TicksPerHour * (uint)m_Pack!.CooldownH;
             m_State = ChainState.Scheduled;
-            OfficialPost($"公告：{m_Pack.Name}将在{m_VenueLabel}举办，预计 4 小时后开始，欢迎市民前往。", m_Venue);
+            var whenText = 19 > CurrentHour() ? "今晚 19:00" : "明晚 19:00";
+            OfficialPost($"公告：{m_Pack.Name}将于{whenText}在{m_VenueLabel}举办，欢迎市民前往。", m_Venue);
             Mod.Log.Info($"[Event] 已排期：{m_Pack.Name} @ {m_VenueLabel}，{m_StartFrame} 开场");
         }
 

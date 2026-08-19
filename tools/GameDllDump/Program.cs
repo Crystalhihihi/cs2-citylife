@@ -214,6 +214,8 @@ Section("财政与弹窗（2026-08-20 M4 spike：预算真扣+原生确认弹窗
     // M4 spike 追问 2：游戏时间读取（活动时长/冷却都按游戏时间）
     Find("TimeSystem", fields: true, methods: true);
     Find("TimeSettings", fields: true);
+    // M4 spike 追问 3：当前时刻（活动按游戏时钟排期：下一个 19:00 开场）
+    Dump("Game.Common.TimeData", fields: true);
 });
 
 return 0;

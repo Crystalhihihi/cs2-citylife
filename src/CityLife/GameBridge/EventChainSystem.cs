@@ -44,6 +44,8 @@ namespace CityLife.GameBridge
         private EntityQuery m_CitizenQuery = default!;
         private EntityQuery m_InjectQuery = default!;
         private EntityQuery m_AttendanceQuery = default!;
+        private EntityQuery m_TimeDataQuery = default!;
+        private EntityQuery m_TimeSettingsQuery = default!;
         private EntityAnchorSystem m_AnchorSystem = default!;
         private CitySystem m_CitySystem = default!;
         private SimulationSystem m_SimulationSystem = default!;
@@ -83,6 +85,10 @@ namespace CityLife.GameBridge
                 ComponentType.ReadOnly<Citizen>(),
                 ComponentType.Exclude<Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
+            // 时间查询走 EntityQuery.GetSingleton——SystemAPI 依赖 Unity 源码生成器，我们的构建不跑生成器，
+            // 用了会在运行时抛 "No suitable code replacement generated"（2026-08-20 CRITICAL 实锤）
+            m_TimeDataQuery = GetEntityQuery(ComponentType.ReadOnly<Game.Common.TimeData>());
+            m_TimeSettingsQuery = GetEntityQuery(ComponentType.ReadOnly<Game.Prefabs.TimeSettingsData>());
             m_AnchorSystem = World.GetOrCreateSystemManaged<EntityAnchorSystem>();
             m_CitySystem = World.GetOrCreateSystemManaged<CitySystem>();
             m_SimulationSystem = World.GetOrCreateSystemManaged<SimulationSystem>();
@@ -103,11 +109,11 @@ namespace CityLife.GameBridge
         private uint Now => (uint)m_SimulationSystem.frameIndex;
         private static uint TicksPerHour => (uint)Math.Max(1, TimeSystem.kTicksPerDay / 24);
 
-        /// <summary>当前时刻（0-23 游戏小时，TimeSystem 官方接口换算）。</summary>
+        /// <summary>当前时刻（0-23 游戏小时，TimeSystem 官方接口换算；单例走 EntityQuery 不走 SystemAPI）。</summary>
         private int CurrentHour()
         {
-            var settings = SystemAPI.GetSingleton<Game.Prefabs.TimeSettingsData>();
-            var data = SystemAPI.GetSingleton<Game.Common.TimeData>();
+            var settings = m_TimeSettingsQuery.GetSingleton<Game.Prefabs.TimeSettingsData>();
+            var data = m_TimeDataQuery.GetSingleton<Game.Common.TimeData>();
             var tod = m_TimeSystem.GetTimeOfDay(settings, data, m_SimulationSystem.frameIndex); // 0..1
             return Math.Clamp((int)(tod * 24f), 0, 23);
         }

@@ -19,6 +19,9 @@ namespace CityLife.Content
         /// <summary>最近一次活动的结算结果（"爆棚/冷场"），喂下一炉让市民议论（读一次即清）。</summary>
         public static string? LastEventOutcome;
 
+        /// <summary>正在进行的活动（"活动名 @ 场馆"），活动链开场时写入、结算时清空——让信息流实时跟着活动走。</summary>
+        public static string? OngoingEvent;
+
         /// <summary>信息流面板当前是否展开（feedMode=openOnly/throttled 时导演据此调节拍）。</summary>
         public static bool PanelOpen;
 

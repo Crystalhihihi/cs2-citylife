@@ -194,7 +194,7 @@ namespace CityLife.GameBridge
                 var prompt = Content.PromptBuilder.BuildBatch(
                     m_Head, snapshot, m_BatchTopic, m_CurrentAssigned,
                     new List<string>(m_Recent), m_BatchCount, anchorTexts, prevPosts,
-                    breaking, mayorCtx, outcomeCtx);
+                    breaking, mayorCtx, outcomeCtx, Content.LiveContext.OngoingEvent);
                 Mod.Gateway.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Normal, 600));
                 m_BatchPending = true;
                 m_BatchCount++;

@@ -214,10 +214,10 @@ namespace CityLife.GameBridge
             else
                 m_Spent = 0;
 
-            m_StartFrame = Now + TicksPerHour * 2; // 固定 2 游戏小时后开始（v1 不解析"明晚"这类自然语言时间）
+            m_StartFrame = Now + TicksPerHour * 4; // 4 游戏小时后开场（v1 不解析"明晚"这类自然语言时间）
             m_VenueCooldownUntil[m_Venue] = Now + TicksPerHour * (uint)m_Pack!.CooldownH;
             m_State = ChainState.Scheduled;
-            OfficialPost($"公告：{m_Pack.Name}将在{ m_VenueLabel}举办，预计 2 小时后开始，欢迎市民前往。");
+            OfficialPost($"公告：{m_Pack.Name}将在{m_VenueLabel}举办，预计 4 小时后开始，欢迎市民前往。", m_Venue);
             Mod.Log.Info($"[Event] 已排期：{m_Pack.Name} @ {m_VenueLabel}，{m_StartFrame} 开场");
         }
 
@@ -234,6 +234,8 @@ namespace CityLife.GameBridge
             m_AttractionBoosted = AttractionRamp.TryBoost(EntityManager, m_Venue, m_OriginalAttr + 100, out m_OriginalAttr);
             m_EndFrame = Now + TicksPerHour * (uint)m_Pack!.DurationH;
             m_State = ChainState.Running;
+            Content.LiveContext.OngoingEvent = $"{m_Pack.Name}（{m_VenueLabel}）"; // 信息流实时跟着活动走
+            OfficialPost($"现场：{m_Pack.Name}在{m_VenueLabel}开场了，市民正在前往。", m_Venue);
             Mod.Log.Info($"[Event] 开场：{m_Pack.Name} @ {m_VenueLabel}（吸引力 boost={(m_AttractionBoosted ? "OK" : "跳过")}）");
         }
 
@@ -310,8 +312,9 @@ namespace CityLife.GameBridge
                 outcome = $"冷场——到场峰值 {m_AttendancePeak} 人（目标 {m_Scale}），预算打了水漂";
             }
 
-            OfficialPost($"活动落幕：{m_Pack?.Name}（{m_VenueLabel}）{outcome}。");
+            OfficialPost($"活动落幕：{m_Pack?.Name}（{m_VenueLabel}）{outcome}。", m_Venue);
             Content.LiveContext.LastEventOutcome = $"{m_Pack?.Name}（{m_VenueLabel}）{outcome}";
+            Content.LiveContext.OngoingEvent = null;
             Mod.Log.Info($"[Event] 结算：{outcome}");
 
             m_State = ChainState.Cooldown;
@@ -322,8 +325,14 @@ namespace CityLife.GameBridge
             m_Spent = 0;
         }
 
-        /// <summary>官方号发帖（市政厅口吻，活动链全程的公共播报通道）。</summary>
-        private static void OfficialPost(string text)
-            => Mod.Feed.Record(new Content.Post("市政厅", text, Content.Topic.Breaking, "official"));
+        /// <summary>官方号发帖（市政厅口吻，活动链全程的公共播报通道）。带场馆实体坐标——面板可点击"前往现场"。</summary>
+        private static void OfficialPost(string text, Entity venue = default)
+        {
+            if (venue != Entity.Null)
+                Mod.Feed.Record(new Content.Post("市政厅", text, Content.Topic.Breaking, "official"),
+                                venue.Index, venue.Version);
+            else
+                Mod.Feed.Record(new Content.Post("市政厅", text, Content.Topic.Breaking, "official"));
+        }
     }
 }

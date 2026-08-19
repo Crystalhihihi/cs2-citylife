@@ -87,7 +87,7 @@ namespace CityLife.Content
                                         IReadOnlyList<string?>? anchors = null,
                                         IReadOnlyList<string?>? prevPosts = null,
                                         string? breaking = null, string? mayorContext = null,
-                                        string? eventOutcome = null)
+                                        string? eventOutcome = null, string? ongoingEvent = null)
         {
             var sb = new StringBuilder(head.Length + 896);
             sb.Append(head);
@@ -133,6 +133,9 @@ namespace CityLife.Content
             if (!string.IsNullOrEmpty(eventOutcome))
                 sb.Append("【活动结果】上次活动结算：").Append(eventOutcome)
                   .Append("。市民还在议论这事（有人晒现场、有人算财政账、有人吐槽）。\n");
+            if (!string.IsNullOrEmpty(ongoingEvent))
+                sb.Append("【活动进行中】").Append(ongoingEvent)
+                  .Append(" 正在举办，市民正在陆续前往——本炉帖子/评论多聊现场（晒人潮、吐槽排队、安利摊位）。\n");
             if (recent.Count > 0)
             {
                 // 去重反馈：one-shot 无记忆，已发内容必须喂回来模型才知道避开

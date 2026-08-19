@@ -31,7 +31,7 @@ namespace CityLife.Content
         /// <summary>内置事件包（首发：泛活动）。文案字段是给意图解析 LLM 看的，不是给玩家看的。</summary>
         private static readonly string[] k_Builtin =
         {
-            "{\"id\":\"festival\",\"name\":\"市民活动\",\"match\":\"玩家要举办活动/市集/游园会/音乐节/嘉年华/庆典/集市——任何'在某地办活动'的发言\",\"venue\":\"park\",\"budgets\":[50000,200000,500000],\"scale\":300,\"cooldownH\":24,\"durationH\":3}",
+            "{\"id\":\"festival\",\"name\":\"市民活动\",\"match\":\"玩家要举办活动/市集/游园会/音乐节/嘉年华/庆典/集市——任何'在某地办活动'的发言\",\"venue\":\"park\",\"budgets\":[50000,200000,500000],\"scale\":300,\"cooldownH\":24,\"durationH\":12}",
         };
 
         public static List<EventPack> Load(string? overridePath, System.Action<string> log)

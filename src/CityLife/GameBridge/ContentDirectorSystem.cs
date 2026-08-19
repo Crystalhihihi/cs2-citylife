@@ -62,6 +62,7 @@ namespace CityLife.GameBridge
             m_Head = Content.PromptBuilder.BuildHead(m_Personas); // 拼一次缓存复用（缓存纪律）
             ReplyHead = Content.PromptBuilder.BuildReplyHead(m_Personas); // 市长回应炉固定头（同纪律）
             Content.ModSettings.Load(cfgDir, msg => Mod.Log.Info(msg)); // 玩家开关（t0Fallback 等）
+            Mod.Feed.MaxItems = Content.ModSettings.FeedMaxItems;   // 信息流上限（玩家可调）
 
             RequireForUpdate(m_CitizenQuery);
         }

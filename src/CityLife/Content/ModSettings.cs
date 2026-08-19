@@ -24,6 +24,8 @@ namespace CityLife.Content
         public static bool T0Fallback { get; private set; } = false;
         public static string FeedMode { get; private set; } = "always";
         public static string WriteBackTier { get; private set; } = "normal";
+        /// <summary>信息流仓库上限（默认 100；超 500 的全量推送开始亏性能，钳 20-500）。</summary>
+        public static int FeedMaxItems { get; private set; } = 100;
 
         public static void Load(string cfgDir, Action<string> log)
         {
@@ -45,7 +47,10 @@ namespace CityLife.Content
                 var wt = JsonMini.GetStr(json, "writeBackTier");
                 if (wt == "mild" || wt == "normal" || wt == "crazy")
                     WriteBackTier = wt;
-                log($"[Settings] t0Fallback={T0Fallback} feedMode={FeedMode} writeBackTier={WriteBackTier}");
+                var fm2 = JsonMini.GetInt(json, "feedMaxItems");
+                if (fm2 != null)
+                    FeedMaxItems = System.Math.Clamp(fm2.Value, 20, 500);
+                log($"[Settings] t0Fallback={T0Fallback} feedMode={FeedMode} writeBackTier={WriteBackTier} feedMaxItems={FeedMaxItems}");
             }
             catch (Exception e)
             {

@@ -37,11 +37,12 @@ namespace CityLife.Content
             }
         }
 
-        private const int k_Max = 100;
-
         private readonly Queue<FeedItem> m_Items = new();
         private readonly object m_Lock = new();
         private uint m_Seq;
+
+        /// <summary>环形缓冲上限（默认 100，settings.json 的 feedMaxItems 可调；超限时淘汰最旧）。</summary>
+        public int MaxItems { get; set; } = 100;
 
         /// <summary>每次新增自增。UI 侧比对 Version 没变就跳过渲染（性能纪律）。</summary>
         public int Version { get; private set; }
@@ -59,7 +60,7 @@ namespace CityLife.Content
                 var seq = m_Seq++;
                 m_Items.Enqueue(new FeedItem(post.Author, post.Text, post.Topic.ToString(),
                                              post.PersonaId, seq, entityIndex, entityVersion, comments));
-                while (m_Items.Count > k_Max)
+                while (m_Items.Count > MaxItems)
                     m_Items.Dequeue();
                 Version++;
                 return seq;

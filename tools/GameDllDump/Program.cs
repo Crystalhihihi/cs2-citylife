@@ -178,6 +178,12 @@ Section("经济资源3", () =>
         Console.WriteLine($"  {t.FullName} ({KindOf(t)})");  // 只列名，先看有什么
 });
 
+Section("Chirp 生成链（2026-08-19 M2-C 收尾：关停生成侧用）", () =>
+{
+    foreach (var t in allTypes.Where(t => t.Name.Contains("Chirp")).OrderBy(t => t.FullName))
+        Console.WriteLine($"  {t.FullName} ({KindOf(t)})");
+});
+
 return 0;
 
 // ================== helpers ==================

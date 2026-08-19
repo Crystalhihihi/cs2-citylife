@@ -14,9 +14,10 @@ namespace CityLife.GameBridge
     /// - mayorPost（TriggerBinding&lt;string&gt;）：市长发帖（M2-C）——写入信息流 + LiveContext，
     ///   随后 3 炉的 prompt 带【市长说】上下文让市民回应；意图→游戏效果是 M4 写回层的事。
     ///
-    /// 为什么脏检查：ToJson 每次全量序列化环形缓冲（最多 100 条），
-    /// 逐帧无脑重推既浪费主线程又刷 binding 流量；Feed.Version 每次新增自增，
-    /// 比对 Version 没变就直接跳过（FeedStore 设计即为此服务）。
+    /// 原版 Chirper 双闸关停（M2-C 收尾，2026-08-19）：
+    /// 显示闸 ChirperUISystem + 生成闸 Game.Triggers.CreateChirpSystem（dump 实测）。
+    /// 生成闸一关 chirp 实体根本不产生——比 CustomChirps 的发布侧过滤更上游，CustomChirps 从此完全可选。
+    /// 注意必须**持续执法**：载入存档时游戏会按 gameMode 重排系统复活它们（实机踩坑）。
     /// </summary>
     public partial class CityLifeUISystem : UISystemBase
     {
@@ -25,7 +26,8 @@ namespace CityLife.GameBridge
 
         private ValueBinding<string> m_PostsBinding = default!;
         private int m_LastVersion = -1;
-        private Game.UI.InGame.ChirperUISystem? m_VanillaChirper;
+        private Game.UI.InGame.ChirperUISystem? m_VanillaChirper;   // 显示闸
+        private Game.Triggers.CreateChirpSystem? m_ChirpFactory;    // 生成闸
         private uint m_EnforceCounter;
 
         protected override void OnCreate()
@@ -36,17 +38,11 @@ namespace CityLife.GameBridge
             AddBinding(new TriggerBinding<string>("CityLife", "uiLog", msg => Mod.Log.Info("[UI] " + msg)));
             AddBinding(new TriggerBinding<string>("CityLife", "mayorPost", OnMayorPost));
 
-            // 关停原版 Chirper。2026-08-19 实机教训：OnCreate 里关一次没用——载入存档时游戏会按
-            // gameMode 重排系统把它重新 enable，必须在 OnUpdate 里持续执法（见下）。
-            // 备选根治：自研 PublishAddedChirps 过滤补丁（M2-C 清单项，做完即可不依赖 CustomChirps 的开关）。
-            try
-            {
-                m_VanillaChirper = World.GetOrCreateSystemManaged<Game.UI.InGame.ChirperUISystem>();
-            }
-            catch (System.Exception e)
-            {
-                Mod.Log.Warn($"[UI] 找不到 ChirperUISystem（版本变动？不影响其他功能）：{e.Message}");
-            }
+            // 双闸引用（找不到=版本变动，仅警告不影响其他功能）
+            try { m_VanillaChirper = World.GetOrCreateSystemManaged<Game.UI.InGame.ChirperUISystem>(); }
+            catch (System.Exception e) { Mod.Log.Warn($"[UI] 找不到 ChirperUISystem：{e.Message}"); }
+            try { m_ChirpFactory = World.GetOrCreateSystemManaged<Game.Triggers.CreateChirpSystem>(); }
+            catch (System.Exception e) { Mod.Log.Warn($"[UI] 找不到 CreateChirpSystem：{e.Message}"); }
         }
 
         /// <summary>市长发帖：清洗 → 入信息流 → 存 LiveContext（下几炉市民会回应）。</summary>
@@ -65,13 +61,18 @@ namespace CityLife.GameBridge
 
         protected override void OnUpdate()
         {
-            // 持续执法：原版 Chirper 复活就按死（每 128 帧查一次，2 的幂）
-            if (m_VanillaChirper != null && m_EnforceCounter++ % 128 == 0)
+            // 双闸持续执法：原版 Chirper 复活就按死（每 128 帧查一次，2 的幂）
+            if (m_EnforceCounter++ % 128 == 0)
             {
-                if (m_VanillaChirper.Enabled)
+                if (m_VanillaChirper != null && m_VanillaChirper.Enabled)
                 {
                     m_VanillaChirper.Enabled = false;
-                    Mod.Log.Info("[UI] 原版 Chirper 已关停（CityLife 面板接管信息流）");
+                    Mod.Log.Info("[UI] 原版 Chirper 显示闸已关停");
+                }
+                if (m_ChirpFactory != null && m_ChirpFactory.Enabled)
+                {
+                    m_ChirpFactory.Enabled = false;
+                    Mod.Log.Info("[UI] 原版 Chirper 生成闸已关停（chirp 实体不再产生）");
                 }
             }
 

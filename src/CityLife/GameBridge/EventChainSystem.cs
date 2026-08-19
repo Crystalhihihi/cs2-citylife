@@ -33,12 +33,14 @@ namespace CityLife.GameBridge
 
         private static int s_ConfirmId = -1;      // 待确认的卡片 id
         private static int s_ConfirmResult = -1;  // UI 回执：1 确认 0 取消
+        private static int s_ConfirmVenueIdx;     // UI 回执：玩家选中的场馆候选下标
 
-        /// <summary>UI 回执入口（CityLifeUISystem 的 trigger 调它）。</summary>
-        public static void SetConfirmResult(int id, bool ok)
+        /// <summary>UI 回执入口（CityLifeUISystem 的 trigger 调它）。venueIdx=玩家最终选中的场馆候选。</summary>
+        public static void SetConfirmResult(int id, bool ok, int venueIdx = 0)
         {
             s_ConfirmId = id;
             s_ConfirmResult = ok ? 1 : 0;
+            s_ConfirmVenueIdx = venueIdx;
         }
 
         private EntityQuery m_CitizenQuery = default!;
@@ -56,6 +58,8 @@ namespace CityLife.GameBridge
         private Content.EventPack? m_Pack;
         private Entity m_Venue;
         private string m_VenueLabel = "";
+        private readonly List<Anchor> m_Candidates = new(); // 场馆候选（确认卡选择器的数据源）
+        private int m_VenueIdx;                              // 当前选中的候选下标
         private int m_BudgetTier = 1;      // 0 低 1 中 2 高
         private int m_Spent;
         private int m_Scale;               // 目标到场人数（LLM 自定义人数 × 写回档位系数）
@@ -163,34 +167,24 @@ namespace CityLife.GameBridge
                 return;
             }
 
-            // 场馆解析：LLM 给的地点原文先和公园锚点标签对，对不上用第一个公园锚点
+            // 场馆候选：全部公园锚点（冷却中的剔除）；LLM 地点原文能对上标签的当默认推荐，对不上用第一个。
+            // 确认卡带选择器，玩家可改（2026-08-20 实机：对不上就随机扔，玩家看不到人）
             var venueText = Util.JsonMini.GetStr(json, "venue") ?? "";
-            var venue = Entity.Null;
-            var venueLabel = "";
+            m_Candidates.Clear();
+            var defaultIdx = 0;
             foreach (var a in m_AnchorSystem.Anchors)
             {
                 if (a.Kind != AnchorKind.Park)
                     continue;
+                if (m_VenueCooldownUntil.TryGetValue(a.Entity, out var cd) && Now < cd)
+                    continue; // 冷却中的场馆不进候选
                 if (venueText.Length > 0 && (a.Label.Contains(venueText) || venueText.Contains(a.Label)))
-                {
-                    venue = a.Entity;
-                    venueLabel = a.Label;
-                    break;
-                }
-                if (venue == Entity.Null)
-                {
-                    venue = a.Entity;
-                    venueLabel = a.Label;
-                }
+                    defaultIdx = m_Candidates.Count;
+                m_Candidates.Add(a);
             }
-            if (venue == Entity.Null)
+            if (m_Candidates.Count == 0)
             {
-                Mod.Log.Info("[Event] 没有可用场馆（城里没公园/景点），降级纯舆情");
-                return;
-            }
-            if (m_VenueCooldownUntil.TryGetValue(venue, out var until) && Now < until)
-            {
-                Mod.Log.Info($"[Event] {venueLabel} 冷却中，降级纯舆情");
+                Mod.Log.Info("[Event] 没有可用场馆（没公园或全在冷却），降级纯舆情");
                 return;
             }
 
@@ -206,8 +200,9 @@ namespace CityLife.GameBridge
             m_Expected = Math.Max(1, (int)(m_Scale * TimeFactor(m_StartHour)));
 
             m_Pack = pack;
-            m_Venue = venue;
-            m_VenueLabel = venueLabel;
+            m_VenueIdx = defaultIdx;
+            m_Venue = m_Candidates[defaultIdx].Entity;
+            m_VenueLabel = m_Candidates[defaultIdx].Label;
             m_CardId++;
 
             // 费用 = 预算档 × 时长费用系数（非线性）
@@ -216,15 +211,24 @@ namespace CityLife.GameBridge
             var whenText = m_StartHour > hour ? $"今晚 {m_StartHour}:00" : $"明晚 {m_StartHour}:00";
             var timeWarn = TimeFactor(m_StartHour) <= 0.3f;
 
+            // 候选场馆标签数组（确认卡选择器）
+            var venueArr = new System.Text.StringBuilder();
+            for (int i = 0; i < m_Candidates.Count; i++)
+            {
+                if (i > 0) venueArr.Append(',');
+                venueArr.Append('\"').Append(m_Candidates[i].Label).Append('\"');
+            }
+
             PendingConfirmJson = "{\"id\":" + m_CardId + ",\"title\":\"活动确认\",\"lines\":["
-                + $"\"活动：{pack.Name}\",\"地点：{venueLabel}\","
+                + $"\"活动：{pack.Name}\",\"地点：{m_VenueLabel}\","
                 + $"\"预算：{BudgetTierName(m_BudgetTier)}（约 {cost / 10000} 万，含时长系数，从财政真扣）\","
                 + $"\"开始：{whenText}（时长 {m_DurationH} 小时）\",\"预计到场：约 {m_Expected} 人（规模 {m_Scale} × 时段系数）\""
                 + (timeWarn ? ",\"⚠ 时段阴间，预计人气惨淡，市民可能开骂\"" : "")
-                + "],\"danger\":" + (Content.ModSettings.WriteBackTier == "crazy" || timeWarn ? "true" : "false") + "}";
+                + "],\"danger\":" + (Content.ModSettings.WriteBackTier == "crazy" || timeWarn ? "true" : "false")
+                + ",\"venues\":[" + venueArr + "],\"venueIdx\":" + defaultIdx + "}";
             PendingConfirmVersion++;
             m_State = ChainState.AwaitingConfirm;
-            Mod.Log.Info($"[Event] 待确认：{pack.Name} @ {venueLabel} {whenText}，等玩家确认");
+            Mod.Log.Info($"[Event] 待确认：{pack.Name} @ {m_VenueLabel} {whenText}，等玩家确认");
         }
 
         private static string BudgetTierName(int tier) => tier == 0 ? "低档" : tier == 2 ? "高档" : "中档";
@@ -241,8 +245,19 @@ namespace CityLife.GameBridge
                         s_ConfirmResult = -1;
                         PendingConfirmJson = "";
                         PendingConfirmVersion++;
-                        if (ok) ConfirmAndSchedule();
-                        else Cancel("玩家取消");
+                        if (ok)
+                        {
+                            // 玩家可能在确认卡里换了场馆——以回执下标为准
+                            var pick = Math.Clamp(s_ConfirmVenueIdx, 0, m_Candidates.Count - 1);
+                            m_VenueIdx = pick;
+                            m_Venue = m_Candidates[pick].Entity;
+                            m_VenueLabel = m_Candidates[pick].Label;
+                            ConfirmAndSchedule();
+                        }
+                        else
+                        {
+                            Cancel("玩家取消");
+                        }
                     }
                     break;
 

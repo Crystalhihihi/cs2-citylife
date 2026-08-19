@@ -28,15 +28,18 @@ export const replyPost = (n: number, text: string) =>
 export const panelState = (open: boolean) => trigger("CityLife", "panelState", open ? 1 : 0);
 
 // 活动确认弹窗（M4）：空串 "" = 不显示；非空 = JSON：
-//   {"id":7,"title":"活动确认","lines":["活动：周末市集",...],"danger":false}
+//   {"id":7,"title":"活动确认","lines":["活动：周末市集",...],"danger":false,
+//    "venues":["城东南公园","市中心公园","城西北景点"],  // 可选：候选场馆标签，缺省=只有 1 个候选，不显示选择器
+//    "venueIdx":0}                                      // 可选：当前默认推荐的下标
 // lines 逐行渲染；danger=true 时标题警示色 + 首行警告样式（危险操作用，如透支财政）。
 // 同一时刻最多一张，新 id 替换旧的；C# 在收到应答后清空回 ""。
 export const eventConfirmBinding = bindValue<string>("CityLife", "eventConfirm", "");
 
-// 弹窗应答通道：线格式 "{id}:{1|0}"，1=确认执行，0=取消（Esc/点压暗背景都算取消）。
+// 弹窗应答通道：线格式 "{id}:{1|0}:{venueIdx}"，1=确认执行，0=取消（Esc/点压暗背景都算取消）。
+// venueIdx = 玩家最终选中的候选下标（无选择器时为 0；取消时给当前显示值，C# 第三段缺省兼容）。
 // UI 侧应答后立即本地隐藏，不等 C# 清空 binding。
-export const eventConfirmResult = (id: number, accept: boolean) =>
-    trigger("CityLife", "eventConfirmResult", `${id}:${accept ? 1 : 0}`);
+export const eventConfirmResult = (id: number, accept: boolean, venueIdx: number) =>
+    trigger("CityLife", "eventConfirmResult", `${id}:${accept ? 1 : 0}:${venueIdx}`);
 
 // 帖子结构（短键名与 FeedStore.ToJson 对应；e/c 为 v2 新增可选键，向后兼容 M2-A 数据）
 export interface FeedPost {

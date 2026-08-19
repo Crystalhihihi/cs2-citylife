@@ -49,6 +49,30 @@
     word-break: break-all;          /* 中文长行不顶破卡片 */
 }
 
+/* 场馆选择器行（M4 迭代）：替换"地点："行——前缀 + 左右箭头 + 当前场馆名 */
+.venueRow {
+    display: flex;
+    align-items: center;
+    padding: 2px 0;
+}
+
+.venueArrow {
+    width: 14px;                    /* 内嵌 SVG 三角（见 tsx PrevIcon/NextIcon） */
+    height: 14px;
+    margin: 0 6px;
+    cursor: pointer;
+    user-select: none;
+    flex: none;                     /* 箭头不被挤压 */
+}
+
+.venueName {
+    min-width: 120px;               /* 切换不同长度场馆名时箭头不来回跳 */
+    text-align: center;
+    color: rgba(140, 180, 255, 0.95);
+    font-weight: bold;
+    word-break: break-all;
+}
+
 /* danger=true：首行警告样式 */
 .lineWarn {
     padding: 2px 0;

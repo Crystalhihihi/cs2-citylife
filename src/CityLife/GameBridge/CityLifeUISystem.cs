@@ -104,14 +104,15 @@ namespace CityLife.GameBridge
                 Mod.Log.Info($"[UI] 市长回复帖 #{seq}：{t.Substring(0, System.Math.Min(24, t.Length))}…");
         }
 
-        /// <summary>活动确认回执："{id}:{1|0}" → 路由给活动链（id 不匹配的迟到回执丢弃）。</summary>
+        /// <summary>活动确认回执："{id}:{1|0}[:{场馆下标}]" → 路由给活动链（id 不匹配的迟到回执丢弃）。</summary>
         private void OnEventConfirmResult(string payload)
         {
-            var sep = (payload ?? "").IndexOf(':');
-            if (sep <= 0 || !int.TryParse(payload.Substring(0, sep), out var id))
+            var parts = (payload ?? "").Split(':');
+            if (parts.Length < 2 || !int.TryParse(parts[0], out var id))
                 return;
-            var ok = payload.Substring(sep + 1) == "1";
-            EventChainSystem.SetConfirmResult(id, ok);
+            var ok = parts[1] == "1";
+            var venueIdx = parts.Length > 2 && int.TryParse(parts[2], out var vi) ? vi : 0;
+            EventChainSystem.SetConfirmResult(id, ok, venueIdx);
         }
 
         protected override void OnUpdate()

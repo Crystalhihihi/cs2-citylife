@@ -13,14 +13,14 @@ namespace CityLife.GameBridge
     public enum ChainState { Idle, AwaitingConfirm, Scheduled, Running, Cooldown }
 
     /// <summary>
-    /// 活动链系统（写回层 M4 首发闭环）：市长发言 → 意图解析 → 原生确认 →
-    /// 真扣预算 → 公告 → 吸引力 ramp + 分批注入人群 → 实数到场人数 → 结算回补/挨骂 → 恢复。
+    /// 活动链系统（写回层 M4 首发闭环）：市长发言 → 意图解析（结构化参数：时间/时长/人数/预算档）
+    /// → 原生确认 → 真扣预算 → 公告 → 吸引力 ramp + 分批注入人群 → 实数到场人数 → 结算回补/挨骂 → 恢复。
     ///
-    /// 拷问定案（2026-08-20）纪律：
+    /// 拷问定案（2026-08-20）+ 玩家增补（时段/时长/人数自定义）：
+    /// - 时段影响人气：傍晚黄金档全额，凌晨"阴间时段"到场惨淡且必然挨骂（时段系数表，执行层确定计算）；
+    /// - 时长负担非线性：费用随（时长-4h）² 超线性加价，拖太长后半场人困马乏进舆情；
     /// - 全城同时仅一个活动；每场馆 24 游戏小时冷却；回补永不超过花费（防套利）；
-    /// - 参数写回自限：吸引力 boost 在结算/异常退出时强制恢复（§12 #29）；
-    /// - 数到场人数是实数（TravelPurpose=Leisure 且 Target=场馆 + CurrentBuilding=场馆）；
-    /// - 取消确认 → 轻舆情反噬（官方帖说明，无数值惩罚）。
+    /// - 参数写回自限：吸引力 boost 在结算/异常退出时强制恢复（§12 #29）。
     /// </summary>
     public partial class EventChainSystem : GameSystemBase
     {
@@ -56,7 +56,10 @@ namespace CityLife.GameBridge
         private string m_VenueLabel = "";
         private int m_BudgetTier = 1;      // 0 低 1 中 2 高
         private int m_Spent;
-        private int m_Scale;               // 目标到场人数（已乘写回档位系数）
+        private int m_Scale;               // 目标到场人数（LLM 自定义人数 × 写回档位系数）
+        private int m_Expected;            // 预期到场 = 规模 × 时段系数（评价的基准线）
+        private int m_StartHour = 19;      // 开场整点（默认 19，LLM 可改）
+        private int m_DurationH = 4;       // 时长（默认 4，LLM 可改，钳 1-12）
         private uint m_StartFrame;
         private uint m_EndFrame;
         private int m_InjectedTotal;
@@ -100,7 +103,7 @@ namespace CityLife.GameBridge
         private uint Now => (uint)m_SimulationSystem.frameIndex;
         private static uint TicksPerHour => (uint)Math.Max(1, TimeSystem.kTicksPerDay / 24);
 
-        /// <summary>当前时刻（0-23 游戏小时，从 TimeSystem 官方接口换算）。</summary>
+        /// <summary>当前时刻（0-23 游戏小时，TimeSystem 官方接口换算）。</summary>
         private int CurrentHour()
         {
             var settings = SystemAPI.GetSingleton<Game.Prefabs.TimeSettingsData>();
@@ -109,12 +112,29 @@ namespace CityLife.GameBridge
             return Math.Clamp((int)(tod * 24f), 0, 23);
         }
 
-        /// <summary>距下一个整点目标时刻（如 19:00）的 tick 数；已过点则排到明天。</summary>
+        /// <summary>距下一个整点目标时刻的 tick 数；已过点则排到明天。</summary>
         private uint TicksUntilHour(int targetHour)
         {
             var hour = CurrentHour();
             var deltaHours = targetHour > hour ? targetHour - hour : targetHour + 24 - hour;
             return (uint)deltaHours * TicksPerHour;
+        }
+
+        /// <summary>时段人气系数：傍晚黄金档全额，凌晨"阴间时段"惨淡（玩家增补：阴间排期没人来还挨骂）。</summary>
+        private static float TimeFactor(int hour) => hour switch
+        {
+            >= 18 and <= 21 => 1.0f,   // 黄金档
+            >= 14 and <= 17 => 0.7f,   // 下午
+            >= 22 and <= 23 => 0.7f,   // 前半夜
+            >= 7 and <= 13 => 0.5f,    // 白天（上班时段）
+            _ => 0.15f,                // 0-6 点阴间时段
+        };
+
+        /// <summary>时长费用系数：4h 内不收附加，超出部分平方级加价（负担非线性，玩家增补）。</summary>
+        private static float DurationCostFactor(int durationH)
+        {
+            var over = Math.Max(0, durationH - 4);
+            return 1f + over * over * 0.05f; // 8h→1.8x，12h→4.2x
         }
 
         /// <summary>导演路由入口：意图解析结果（requestId 前缀 "intent:"）。</summary>
@@ -168,29 +188,37 @@ namespace CityLife.GameBridge
                 return;
             }
 
-            // 预算档（LLM 原文→档位，默认中档）+ 规模（写回档位系数）
+            // —— 结构化参数（LLM 归一化，缺省给默认）——
             var budgetText = Util.JsonMini.GetStr(json, "budget") ?? "";
             m_BudgetTier = budgetText.Contains("低") ? 0 : budgetText.Contains("高") ? 2 : 1;
+            m_StartHour = Math.Clamp(Util.JsonMini.GetInt(json, "startHour") ?? 19, 0, 23);
+            m_DurationH = Math.Clamp(Util.JsonMini.GetInt(json, "durationH") ?? 4, 1, 12);
             var tierScale = Content.ModSettings.WriteBackTier == "mild" ? 0.5f
                 : Content.ModSettings.WriteBackTier == "crazy" ? 2f : 1f;
-            m_Scale = (int)(pack.Scale * tierScale);
+            var wantScale = Util.JsonMini.GetInt(json, "scale") ?? pack.Scale;
+            m_Scale = (int)(Math.Clamp(wantScale, 50, 2000) * tierScale);
+            m_Expected = Math.Max(1, (int)(m_Scale * TimeFactor(m_StartHour)));
 
             m_Pack = pack;
             m_Venue = venue;
             m_VenueLabel = venueLabel;
             m_CardId++;
 
-            // 开始时刻按游戏时钟排：下一个 19:00（傍晚场，19:00-23:00 收摊，不通宵）
-            var whenText = 19 > CurrentHour() ? "今晚 19:00" : "明晚 19:00";
+            // 费用 = 预算档 × 时长费用系数（非线性）
+            var cost = (int)(pack.Budgets[m_BudgetTier] * DurationCostFactor(m_DurationH));
+            var hour = CurrentHour();
+            var whenText = m_StartHour > hour ? $"今晚 {m_StartHour}:00" : $"明晚 {m_StartHour}:00";
+            var timeWarn = TimeFactor(m_StartHour) <= 0.3f;
 
             PendingConfirmJson = "{\"id\":" + m_CardId + ",\"title\":\"活动确认\",\"lines\":["
                 + $"\"活动：{pack.Name}\",\"地点：{venueLabel}\","
-                + $"\"预算：{BudgetTierName(m_BudgetTier)}（{pack.Budgets[m_BudgetTier] / 10000}万，从财政真扣）\","
-                + $"\"开始：{whenText}（时长 4 小时）\",\"预计规模：约 {m_Scale} 人\""
-                + "],\"danger\":" + (Content.ModSettings.WriteBackTier == "crazy" ? "true" : "false") + "}";
+                + $"\"预算：{BudgetTierName(m_BudgetTier)}（约 {cost / 10000} 万，含时长系数，从财政真扣）\","
+                + $"\"开始：{whenText}（时长 {m_DurationH} 小时）\",\"预计到场：约 {m_Expected} 人（规模 {m_Scale} × 时段系数）\""
+                + (timeWarn ? ",\"⚠ 时段阴间，预计人气惨淡，市民可能开骂\"" : "")
+                + "],\"danger\":" + (Content.ModSettings.WriteBackTier == "crazy" || timeWarn ? "true" : "false") + "}";
             PendingConfirmVersion++;
             m_State = ChainState.AwaitingConfirm;
-            Mod.Log.Info($"[Event] 待确认：{pack.Name} @ {venueLabel}，等玩家确认");
+            Mod.Log.Info($"[Event] 待确认：{pack.Name} @ {venueLabel} {whenText}，等玩家确认");
         }
 
         private static string BudgetTierName(int tier) => tier == 0 ? "低档" : tier == 2 ? "高档" : "中档";
@@ -230,18 +258,19 @@ namespace CityLife.GameBridge
 
         private void ConfirmAndSchedule()
         {
-            // 真扣预算（拷问定案）；不可写（无限钱模式）则零成本继续
-            if (MoneyOps.TryAdjust(EntityManager, m_CitySystem.City, -m_Pack!.Budgets[m_BudgetTier], out _, msg => Mod.Log.Info(msg)))
-                m_Spent = m_Pack.Budgets[m_BudgetTier];
+            // 真扣预算（含时长系数的总价；拷问定案：回补永不超过花费）
+            var cost = (int)(m_Pack!.Budgets[m_BudgetTier] * DurationCostFactor(m_DurationH));
+            if (MoneyOps.TryAdjust(EntityManager, m_CitySystem.City, -cost, out _, msg => Mod.Log.Info(msg)))
+                m_Spent = cost;
             else
                 m_Spent = 0;
 
-            m_StartFrame = Now + TicksUntilHour(19); // 下一个 19:00 开场（按游戏时钟，不通宵）
+            m_StartFrame = Now + TicksUntilHour(m_StartHour); // 下一个目标整点开场（游戏时钟，不通宵）
             m_VenueCooldownUntil[m_Venue] = Now + TicksPerHour * (uint)m_Pack!.CooldownH;
             m_State = ChainState.Scheduled;
-            var whenText = 19 > CurrentHour() ? "今晚 19:00" : "明晚 19:00";
-            OfficialPost($"公告：{m_Pack.Name}将于{whenText}在{m_VenueLabel}举办，欢迎市民前往。", m_Venue);
-            Mod.Log.Info($"[Event] 已排期：{m_Pack.Name} @ {m_VenueLabel}，{m_StartFrame} 开场");
+            var whenText = m_StartHour > CurrentHour() ? $"今晚 {m_StartHour}:00" : $"明晚 {m_StartHour}:00";
+            OfficialPost($"公告：{m_Pack.Name}将于{whenText}在{m_VenueLabel}举办，时长 {m_DurationH} 小时，欢迎市民前往。", m_Venue);
+            Mod.Log.Info($"[Event] 已排期：{m_Pack.Name} @ {m_VenueLabel} {whenText} 开场");
         }
 
         private void Cancel(string reason)
@@ -255,9 +284,9 @@ namespace CityLife.GameBridge
         {
             // 吸引力 ramp（初估值：原值 + 100；校准日志留证，分布摸清后调）
             m_AttractionBoosted = AttractionRamp.TryBoost(EntityManager, m_Venue, m_OriginalAttr + 100, out m_OriginalAttr);
-            m_EndFrame = Now + TicksPerHour * (uint)m_Pack!.DurationH;
+            m_EndFrame = Now + TicksPerHour * (uint)m_DurationH;
             m_State = ChainState.Running;
-            Content.LiveContext.OngoingEvent = $"{m_Pack.Name}（{m_VenueLabel}）"; // 信息流实时跟着活动走
+            Content.LiveContext.OngoingEvent = $"{m_Pack!.Name}（{m_VenueLabel}）"; // 信息流实时跟着活动走
             OfficialPost($"现场：{m_Pack.Name}在{m_VenueLabel}开场了，市民正在前往。", m_Venue);
             Mod.Log.Info($"[Event] 开场：{m_Pack.Name} @ {m_VenueLabel}（吸引力 boost={(m_AttractionBoosted ? "OK" : "跳过")}）");
         }
@@ -272,10 +301,11 @@ namespace CityLife.GameBridge
                 return;
             }
 
-            // 分批错峰注入：每次补 scale 的 1/6，直到足额
-            if (m_InjectedTotal < m_Scale)
+            // 分批错峰注入：每次补 scale 的 1/6，直到足额（时段差即少注——预期低就不硬灌）
+            var targetTotal = m_Expected;
+            if (m_InjectedTotal < targetTotal)
             {
-                var batch = Math.Max(1, m_Scale / 6);
+                var batch = Math.Max(1, targetTotal / 6);
                 m_InjectedTotal += CrowdInjector.InjectBatch(EntityManager, m_InjectQuery, m_Venue, batch, 128);
             }
 
@@ -314,26 +344,33 @@ namespace CityLife.GameBridge
                 m_AttractionBoosted = false;
             }
 
-            var ratio = m_Scale > 0 ? (float)m_AttendancePeak / m_Scale : 0f;
+            var ratio = m_AttendancePeak / (float)Math.Max(1, m_Expected);
             string outcome;
             if (ratio >= 0.8f)
             {
                 var rebate = m_Spent / 2; // 爆棚返 50%（净收益恒负，防套利）
                 if (rebate > 0)
                     MoneyOps.TryAdjust(EntityManager, m_CitySystem.City, rebate, out _, msg => Mod.Log.Info(msg));
-                outcome = $"爆棚——到场峰值 {m_AttendancePeak} 人（目标 {m_Scale}），口碑爆了，财政返还 {rebate / 10000} 万";
+                outcome = $"爆棚——到场峰值 {m_AttendancePeak} 人（预期 {m_Expected}），口碑爆了，财政返还 {rebate / 10000} 万";
             }
             else if (ratio >= 0.4f)
             {
                 var rebate = m_Spent / 5; // 及格返 20%
                 if (rebate > 0)
                     MoneyOps.TryAdjust(EntityManager, m_CitySystem.City, rebate, out _, msg => Mod.Log.Info(msg));
-                outcome = $"及格——到场峰值 {m_AttendancePeak} 人（目标 {m_Scale}），返还 {rebate / 10000} 万";
+                outcome = $"及格——到场峰值 {m_AttendancePeak} 人（预期 {m_Expected}），返还 {rebate / 10000} 万";
             }
             else
             {
-                outcome = $"冷场——到场峰值 {m_AttendancePeak} 人（目标 {m_Scale}），预算打了水漂";
+                outcome = $"冷场——到场峰值 {m_AttendancePeak} 人（预期 {m_Expected}），预算打了水漂";
             }
+
+            // 舆情调味（玩家增补）：阴间排期必挨骂；拖太长人困马乏
+            var tf = TimeFactor(m_StartHour);
+            if (tf <= 0.3f)
+                outcome += "；排期实在阴间（凌晨开活动），市民怨声载道";
+            else if (m_DurationH >= 8)
+                outcome += "；拖得太长，后半场人困马乏，吐槽不少";
 
             OfficialPost($"活动落幕：{m_Pack?.Name}（{m_VenueLabel}）{outcome}。", m_Venue);
             Content.LiveContext.LastEventOutcome = $"{m_Pack?.Name}（{m_VenueLabel}）{outcome}";

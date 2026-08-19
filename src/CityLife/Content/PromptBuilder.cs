@@ -44,7 +44,7 @@ namespace CityLife.Content
             sb.Append("【事件包】\n");
             foreach (var p in packs)
                 sb.Append("- ").Append(p.Id).Append('：').Append(p.Match).Append('\n');
-            sb.Append("【输出】匹配：{\"pack\":\"包id\",\"venue\":\"地点原文或空\",\"budget\":\"低|中|高\",\"time\":\"时间原文或空\"}；不匹配：{\"pack\":null}。只输出 JSON，禁止任何其他字符。\n");
+            sb.Append("【输出】匹配：{\"pack\":\"包id\",\"venue\":\"地点原文或空\",\"budget\":\"低|中|高\",\"startHour\":19,\"durationH\":4,\"scale\":300}；不匹配：{\"pack\":null}。规则：startHour 是 0-23 整数，从时间原文换算（\"明晚8点\"→20，\"下午\"→15，没提→19）；durationH 默认 4；scale 从人数原文换算（\"千人大派对\"→1000），没提→300。只输出 JSON，禁止任何其他字符。\n");
             return sb.ToString();
         }
 

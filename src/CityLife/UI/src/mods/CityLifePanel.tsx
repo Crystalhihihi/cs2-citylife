@@ -8,7 +8,7 @@ import {
 } from "react";
 import { Button } from "cs2/ui";
 import { useValue } from "cs2/api";
-import { postsBinding, uiLog, mayorPost, panelState, FeedPost } from "mods/bindings";
+import { postsBinding, uiLog, mayorPost, replyPost, panelState, FeedPost } from "mods/bindings";
 import styles from "./CityLifePanel.module.css";
 
 // 内联 SVG 聊天气泡图标（硬编码 fill；禁用 emoji/符号字形——游戏字体缺字形会变豆腐块）
@@ -44,8 +44,11 @@ const kTabsH = 30; // tab 行：按钮高 24 + margin-bottom 6（见 css .tabs �
 const kComposerH = 40; // 发帖框：margin-top 6 + 高 34（见 css .composer 注释）
 const kChromeH = 60 + kTabsH + kComposerH; // 60 = M2-B 原 chrome（头部 39 + 上下 padding 20，取整）
 
-// 贴底判定：距底 <30px 视为贴底——贴底时新帖自动滚底，否则亮"有新帖"气泡
+// 贴底判定（纯几何，不依赖 scroll 事件——cohtml 的 scroll 事件不可靠，2026-08-20 踩坑）：
+// json 变化时在 effect 里量 gap = scrollHeight - scrollTop - clientHeight（此刻新内容已进 DOM），
+// gap < kStickPx + kStickSlack 才吸底，否则亮"有新帖"气泡。
 const kStickPx = 30;
+const kStickSlack = 100; // 约两条新帖的高度冗余：贴底时新帖到达仍吸底，上翻阅读时不被拽走
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -134,10 +137,44 @@ const CityLifePanel = () => {
         }
     };
 
-    // 滚动：贴底状态用 ref（effect 回调里要读最新值，不进渲染）；
-    // 滚动度量用 state（驱动自绘滚动条 thumb 的尺寸与位置）
+    // 市长回复：replyTo = 正在回复的帖序号 n（null 即无展开），replyDraft 为受控单行草稿
+    const [replyTo, setReplyTo] = useState<number | null>(null);
+    const [replyDraft, setReplyDraft] = useState("");
+
+    const startReply = (n: number) => {
+        setReplyTo(n);
+        setReplyDraft("");
+    };
+    const cancelReply = () => {
+        setReplyTo(null);
+        setReplyDraft("");
+    };
+
+    // 提交：trim + 非空守卫后走 replyPost（线格式 "{n}|{text}"），成功后清空收起
+    const submitReply = () => {
+        if (replyTo === null) return;
+        const text = replyDraft.trim();
+        if (!text) return;
+        replyPost(replyTo, text);
+        cancelReply();
+    };
+
+    // Enter 提交 / Esc 取消；IME 组词守卫与发帖框同款
+    const onReplyKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+        if (e.nativeEvent.isComposing) return;
+        if (e.key === "Enter") {
+            e.preventDefault();
+            submitReply();
+        } else if (e.key === "Escape") {
+            e.preventDefault();
+            cancelReply();
+        }
+    };
+
+    // 滚动：切 tab 强制吸底用一次性标记 ref；滚动度量用 state（驱动自绘滚动条 thumb）。
+    // 注意：不再有 stickRef——贴底判定是纯几何（见 kStickSlack 注释与下方 effect）。
     const listRef = useRef<HTMLDivElement>(null);
-    const stickRef = useRef(true);
+    const forceStickRef = useRef(false);
     const [hasNew, setHasNew] = useState(false);
     const [metrics, setMetrics] = useState({ top: 0, height: 0, client: 1 });
 
@@ -151,22 +188,25 @@ const CityLifePanel = () => {
             });
     };
 
-    // 新帖到达（json 变化）：贴底则自动滚底，否则亮"有新帖"气泡；
-    // tab 切换也走这里——切 tab 前置贴底，效果即滚到过滤后列表底部
+    // 新帖到达（json 变化）/切 tab：纯几何判定——此刻新增内容已在 DOM，
+    // 量 gap（距底距离），gap 小则吸底，否则亮"有新帖"气泡；不依赖 scroll 事件维护状态
     useEffect(() => {
         const el = listRef.current;
         if (!el) return;
-        if (stickRef.current) {
+        const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+        if (forceStickRef.current || gap < kStickPx + kStickSlack) {
             el.scrollTop = el.scrollHeight;
             setHasNew(false);
         } else {
             setHasNew(true);
         }
+        forceStickRef.current = false; // 一次性标记，消费即清
         readMetrics();
     }, [json, tab]);
 
+    // 切 tab 强制吸底（回到过滤后列表底部）
     const switchTab = (key: TabKey) => {
-        stickRef.current = true;
+        forceStickRef.current = true;
         setHasNew(false);
         setTab(key);
     };
@@ -174,13 +214,12 @@ const CityLifePanel = () => {
     // 缩放后面板几何变化，重算 thumb
     useEffect(readMetrics, [size]);
 
+    // 只做两件事：回底消气泡 + 同步自绘滚动条 thumb；不再维护贴底状态
     const onScroll = () => {
         const el = listRef.current;
         if (!el) return;
-        const atBottom =
-            el.scrollHeight - el.scrollTop - el.clientHeight < kStickPx;
-        stickRef.current = atBottom;
-        if (atBottom) setHasNew(false); // 回到底部即消气泡
+        if (el.scrollHeight - el.scrollTop - el.clientHeight < kStickPx)
+            setHasNew(false);
         readMetrics();
     };
 
@@ -189,7 +228,6 @@ const CityLifePanel = () => {
         const el = listRef.current;
         if (!el) return;
         el.scrollTop = el.scrollHeight;
-        stickRef.current = true;
         setHasNew(false);
         readMetrics();
     };
@@ -271,6 +309,7 @@ const CityLifePanel = () => {
     const shown = posts.filter(kTabFilter[tab]).slice(-kMaxShown);
 
     // 评论区：有 c 才渲染。收起态显示首条作"神评"；展开态列全部评论。
+    // 评论回流特性：c 可能在帖已显示后才出现或变长——这里每次渲染现读 p.c，无静态假设。
     const renderComments = (p: FeedPost) => {
         const cs = p.c;
         if (!cs || cs.length === 0) return null;
@@ -291,14 +330,23 @@ const CityLifePanel = () => {
                         <span>{cs[0][1]}</span>
                     </div>
                 )}
-                {cs.length > 1 && (
-                    <div
-                        className={styles.commentToggle}
-                        onClick={() => toggleComments(p.n)}
+                {/* 操作行：评论展开开关 + 低调的"回复"入口（右置），与开关同一行不加高 */}
+                <div className={styles.commentFoot}>
+                    {cs.length > 1 && (
+                        <span
+                            className={styles.commentToggle}
+                            onClick={() => toggleComments(p.n)}
+                        >
+                            {open ? "收起评论" : `共 ${cs.length} 条评论`}
+                        </span>
+                    )}
+                    <span
+                        className={styles.replyBtn}
+                        onClick={() => startReply(p.n)}
                     >
-                        {open ? "收起评论" : `共 ${cs.length} 条评论`}
-                    </div>
-                )}
+                        回复
+                    </span>
+                </div>
             </div>
         );
     };
@@ -352,6 +400,39 @@ const CityLifePanel = () => {
                             <span className={styles.text}>{p.t}</span>
                             <div className={styles.topic}>#{p.k}</div>
                             {renderComments(p)}
+                            {/* 无评论的帖没有评论区操作行，回复入口单独给一行（右置低调）；
+                                市长帖（a==="市长"）同样允许回复（自问自答/补充说明） */}
+                            {(!p.c || p.c.length === 0) && (
+                                <div className={styles.postActions}>
+                                    <span
+                                        className={styles.replyBtn}
+                                        onClick={() => startReply(p.n)}
+                                    >
+                                        回复
+                                    </span>
+                                </div>
+                            )}
+                            {/* 回复输入行：单行 input + 发送，Enter 提交 / Esc 取消 */}
+                            {replyTo === p.n && (
+                                <div className={styles.replyBox}>
+                                    <input
+                                        className={styles.replyInput}
+                                        type="text"
+                                        value={replyDraft}
+                                        placeholder="回复此帖…"
+                                        onChange={(e) =>
+                                            setReplyDraft(e.target.value)
+                                        }
+                                        onKeyDown={onReplyKeyDown}
+                                    />
+                                    <div
+                                        className={styles.replySend}
+                                        onClick={submitReply}
+                                    >
+                                        发送
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     ))}
                 </div>
@@ -399,9 +480,9 @@ const CityLifePanel = () => {
 // ── dev 自测区块（勿带进发布）────────────────────────────────────────────
 // 用法：注释掉上面真实的 `const shown = posts.filter(...).slice(-kMaxShown);`，
 // 并取消下面这段的注释，npm run build 后进游戏验证：
-// 评论展开/收起、自绘滚动条拖动、贴底自动滚动与"有新帖"气泡、
+// 评论展开/收起、自绘滚动条拖动、贴底自动滚动与"有新帖"气泡（纯几何判定，上翻不被拽底）、
 // 市长帖徽标与左边框高亮（首条 mock 市长帖；tab 过滤逻辑走真实数据，mock 模式下 shown 为静态不过滤）、
-// 发帖框发送/Ctrl+Enter/空文本拒发。验毕恢复。
+// 发帖框发送/Ctrl+Enter/空文本拒发、回复入口（有/无评论帖都有，Enter 提交 / Esc 取消）。验毕恢复。
 // const kMockMayor: FeedPost = {
 //     a: "市长",
 //     t: "更新：地铁三号线延误已定位为信号故障，抢修预计两小时内完成，早高峰请优先换乘二号线。",

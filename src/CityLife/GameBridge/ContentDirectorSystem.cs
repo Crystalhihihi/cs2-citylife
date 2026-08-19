@@ -40,6 +40,9 @@ namespace CityLife.GameBridge
         private uint m_Tick;                     // 导演自身节拍计数（feedMode=throttled 降频用）
         private bool m_BatchPending;
 
+        /// <summary>市长回应炉的固定 prompt 头（OnCreate 时拼好；CityLifeUISystem 发炉时取用）。</summary>
+        public static string? ReplyHead;
+
         protected override void OnCreate()
         {
             base.OnCreate();
@@ -57,6 +60,7 @@ namespace CityLife.GameBridge
             m_Usernames = Content.PersonaBook.LoadUsernames(
                 System.IO.Path.Combine(cfgDir, "usernames.jsonl"), msg => Mod.Log.Info(msg));
             m_Head = Content.PromptBuilder.BuildHead(m_Personas); // 拼一次缓存复用（缓存纪律）
+            ReplyHead = Content.PromptBuilder.BuildReplyHead(m_Personas); // 市长回应炉固定头（同纪律）
             Content.ModSettings.Load(cfgDir, msg => Mod.Log.Info(msg)); // 玩家开关（t0Fallback 等）
 
             RequireForUpdate(m_CitizenQuery);
@@ -69,6 +73,13 @@ namespace CityLife.GameBridge
             // ① 收炉：LLM 结果 → 解析打捞 → 查重兜底 → 入池（锚点实体+评论串随帖入池，绝不阻塞模拟线程）
             while (Mod.Gateway != null && Mod.Gateway.TryDequeueResult(out var r))
             {
+                // 市长回应炉走专线路由：评论挂到市长帖下，不占常规批次位
+                if (r.RequestId != null && r.RequestId.StartsWith("mayor-reply:"))
+                {
+                    HandleMayorReply(r);
+                    continue;
+                }
+
                 m_BatchPending = false;
                 if (r.Result.Success)
                 {
@@ -178,6 +189,25 @@ namespace CityLife.GameBridge
             }
 
             m_Tick++;
+        }
+
+        /// <summary>市长回应炉结果处理：解析评论 → 逐条挂到市长帖（按 seq）。</summary>
+        private void HandleMayorReply(Llm.CliCompletedResult r)
+        {
+            if (!r.Result.Success)
+            {
+                Mod.Log.Info($"[LLM] 市长回应炉失败：{r.Result.Error}");
+                return;
+            }
+            if (!uint.TryParse(r.RequestId.Substring("mayor-reply:".Length), out var seq))
+                return;
+
+            var comments = Content.BatchParser.ParseCommentArray(r.Result.Text, msg => Mod.Log.Info(msg));
+            var added = 0;
+            foreach (var (pid, text) in comments)
+                if (Mod.Feed.AppendComment(seq, AuthorFor(pid), text))
+                    added++;
+            Mod.Log.Info($"[LLM] 市长帖 #{seq} 回应 +{added} 条评论");
         }
 
         /// <summary>已发正文登记：去重反馈池 + 人格卡前情（连载机制数据源）。</summary>

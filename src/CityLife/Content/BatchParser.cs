@@ -70,6 +70,46 @@ namespace CityLife.Content
             return result;
         }
 
+        /// <summary>解析纯评论数组响应（市长回应炉专用）：{"comments":[{persona,text}…]}。</summary>
+        public static List<(string PersonaId, string Text)> ParseCommentArray(string raw, Action<string>? log = null)
+        {
+            var result = new List<(string, string)>();
+            if (string.IsNullOrWhiteSpace(raw))
+                return result;
+
+            int start = raw.IndexOf('{');
+            int end = raw.LastIndexOf('}');
+            if (start < 0 || end <= start)
+            {
+                log?.Invoke("[Batch] 回应炉响应无 JSON 主体，丢弃");
+                return result;
+            }
+            var json = raw.Substring(start, end - start + 1);
+
+            var range = FindArrayRange(json, "comments");
+            if (range == null)
+            {
+                log?.Invoke("[Batch] 回应炉无 comments 数组，丢弃");
+                return result;
+            }
+
+            foreach (var c in SplitTopLevelObjects(json, range.Value.start, range.Value.end))
+            {
+                var who = JsonMini.GetStr(c, "persona") ?? "";
+                var text = JsonMini.GetStr(c, "text");
+                if (string.IsNullOrWhiteSpace(text))
+                    continue;
+                text = text!.Trim();
+                if (text.Length > 60)
+                {
+                    log?.Invoke("[Batch] 回应评论超 60 字丢弃一条");
+                    continue;
+                }
+                result.Add((who, text));
+            }
+            return result;
+        }
+
         /// <summary>解析单帖的评论数组：坏评论丢弃、好评论 salvage（评论 ≤40 字，比主帖短是铁律）。</summary>
         private static List<(string, string)> ParseComments(string postObj, Action<string>? log)
         {

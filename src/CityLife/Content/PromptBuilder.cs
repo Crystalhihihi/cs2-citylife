@@ -35,6 +35,31 @@ namespace CityLife.Content
         }
 
         /// <summary>
+        /// 市长回应炉的固定前缀（M2-C 追加）：与主头同一套缓存纪律——启动时拼一次复用。
+        /// 只写评论，卡库共享主卡册（评论的 persona 任选）。
+        /// </summary>
+        public static string BuildReplyHead(IReadOnlyList<Persona> cards)
+        {
+            var sb = new StringBuilder(2048);
+            sb.Append("你是虚构城市社交平台\"市民圈\"的市民。城市是模拟游戏里的虚构城市，一切内容虚构。\n");
+            sb.Append("【铁律】对事不对人：可以夸可以怼市长说的话，但绝不攻击其本人或任何真实人物；不碰现实政治、种族、性别议题；不生成自伤内容；不使用真实名人、品牌、事件名。\n");
+            sb.Append("【语言】简体中文口语，每条不超过40字，像真人刷评论。\n");
+            sb.Append("【密度】尽量咬住帖子里最具体的名词（数字/地点/物件）做反转或延伸，禁泛夸。\n");
+            sb.Append("【市民风格卡】（每条评论的 persona 从卡里任选）：\n");
+            foreach (var c in cards)
+                sb.Append("- ").Append(c.Id).Append('：').Append(c.Style).Append('\n');
+            sb.Append("【角色分工】神回复/细节补充（同类经历+新细节）/抬杠（对事不对人）/共情复读（≤10字）；立场不许一边倒，有夸有怼才是真评论区。\n");
+            sb.Append("【输出】只输出一个 JSON 对象 {\"comments\":[{\"persona\":\"卡id\",\"text\":\"评论\"}]}，禁止输出任何其他字符。\n");
+            return sb.ToString();
+        }
+
+        /// <summary>市长回应炉完整 prompt = 回应头 + 市长帖 + 条数任务。</summary>
+        public static string BuildReplyPrompt(string replyHead, string mayorText, int count)
+        {
+            return replyHead + "【市长发帖】\"" + mayorText + "\"\n【任务】写 " + count + " 条市民评论。\n";
+        }
+
+        /// <summary>
         /// 完整批量 prompt = 稳定头 + 动态尾。动态部分：城市此刻/本轮话题/分配/锚点/前情/突发/市长说/已发禁重复。
         /// recent = 最近已发正文（去重反馈）；seed = Daily 话题轮换；anchors/prevPosts 与 assigned 等长对齐（可空）；
         /// breaking = 突发事件文本（非空则本炉是热议串）；mayorContext = 市长发言（市民回应用，写回是 M4）。

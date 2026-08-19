@@ -18,6 +18,12 @@ export const uiLog = (msg: string) => trigger("CityLife", "uiLog", msg);
 // 入参约定：UI 侧已 trim 且保证非空；C# 侧仍应做一次防御性校验。
 export const mayorPost = (text: string) => trigger("CityLife", "mayorPost", text);
 
+// 市长回复通道（M2-C）：回复挂到帖 n 的评论串（c）上，随 posts JSON 回流。
+// 线格式 "{n}|{text}"：C# 侧按第一个 | 切分（正文里允许再出现 |），并做防御性校验。
+// 入参约定：text 已在 UI 侧 trim 且非空。
+export const replyPost = (n: number, text: string) =>
+    trigger("CityLife", "replyPost", `${n}|${text}`);
+
 // 面板开合状态上报（feedMode 联动：openOnly/throttled 模式下 C# 据此调整生成节拍）
 export const panelState = (open: boolean) => trigger("CityLife", "panelState", open ? 1 : 0);
 

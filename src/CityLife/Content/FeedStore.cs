@@ -51,16 +51,48 @@ namespace CityLife.Content
             get { lock (m_Lock) return m_Items.Count; }
         }
 
-        /// <summary>登记一帖。entityIndex/Version = 锚点实体坐标（无则 0），comments = 评论串（无则 null）。</summary>
-        public void Record(in Post post, int entityIndex = 0, int entityVersion = 0, string[][]? comments = null)
+        /// <summary>登记一帖，返回分配的序号（UI key/评论挂载都靠它）。entityIndex/Version = 锚点实体坐标（无则 0），comments = 评论串（无则 null）。</summary>
+        public uint Record(in Post post, int entityIndex = 0, int entityVersion = 0, string[][]? comments = null)
         {
             lock (m_Lock)
             {
+                var seq = m_Seq++;
                 m_Items.Enqueue(new FeedItem(post.Author, post.Text, post.Topic.ToString(),
-                                             post.PersonaId, m_Seq++, entityIndex, entityVersion, comments));
+                                             post.PersonaId, seq, entityIndex, entityVersion, comments));
                 while (m_Items.Count > k_Max)
                     m_Items.Dequeue();
                 Version++;
+                return seq;
+            }
+        }
+
+        /// <summary>
+        /// 给已发布的帖追加一条评论（市民回应市长帖 / 市长下场回复，M2-C 追加）。
+        /// Queue 无随机访问：转数组找到 seq 重建（上限 100 条，成本忽略）。找到并追加返回 true。
+        /// </summary>
+        public bool AppendComment(uint seq, string author, string text)
+        {
+            lock (m_Lock)
+            {
+                var arr = m_Items.ToArray();
+                for (int i = arr.Length - 1; i >= 0; i--)
+                {
+                    if (arr[i].Seq != seq)
+                        continue;
+
+                    var old = arr[i];
+                    var next = new string[old.Comments.Length + 1][];
+                    old.Comments.CopyTo(next, 0);
+                    next[old.Comments.Length] = new[] { author, text };
+                    arr[i] = new FeedItem(old.Author, old.Text, old.Topic, old.PersonaId, old.Seq,
+                                          old.EntityIndex, old.EntityVersion, next);
+                    m_Items.Clear();
+                    foreach (var it in arr)
+                        m_Items.Enqueue(it);
+                    Version++;
+                    return true;
+                }
+                return false;
             }
         }
 

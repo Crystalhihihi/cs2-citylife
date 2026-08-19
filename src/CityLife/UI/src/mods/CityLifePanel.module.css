@@ -189,6 +189,62 @@
     user-select: none;
 }
 
+/* 帖操作行（M2-C）：评论展开开关与"回复"入口同一行，回复右置、低调灰 */
+.commentFoot {
+    display: flex;
+    align-items: baseline;
+}
+
+/* 无评论帖的独立操作行：回复按钮右置，与评论区的 .commentFoot 视觉对齐 */
+.postActions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 2px;
+}
+
+.replyBtn {
+    margin-left: auto;              /* 在 flex 行内右置 */
+    font-size: 12px;
+    color: rgba(232, 234, 237, 0.45);
+    cursor: pointer;
+    padding: 2px 0;
+    user-select: none;
+}
+
+/* 市长回复输入行（M2-C）：单行 input + 发送，缩进与评论区对齐；
+   只影响帖行内容高度（列表可滚），不占面板 chrome，kChromeH 不变 */
+.replyBox {
+    display: flex;
+    margin-top: 4px;
+    margin-left: 10px;
+    height: 24px;
+}
+
+.replyInput {
+    flex: 1 1 auto;
+    height: 100%;
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    color: #e8eaed;
+    font-size: 12px;
+    font-family: inherit;
+    padding: 0 6px;
+    outline: none;
+}
+
+.replySend {
+    margin-left: 6px;
+    padding: 0 10px;
+    line-height: 22px;              /* 24 - border 上下各 1，视觉垂直居中 */
+    font-size: 12px;
+    color: #ffffff;
+    background-color: rgba(60, 130, 246, 0.85);
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+}
+
 /* ── 市长发帖框（几何：margin-top 6 + 高 34 = 40，已计入 TSX kComposerH；
       右侧 padding 16px 给右下角缩放手柄让位，防止压住发送按钮） ── */
 .composer {

@@ -36,6 +36,7 @@ namespace CityLife.GameBridge
             AddBinding(m_PostsBinding = new ValueBinding<string>("CityLife", "posts", "[]"));
             AddBinding(new TriggerBinding<string>("CityLife", "uiLog", msg => Mod.Log.Info("[UI] " + msg)));
             AddBinding(new TriggerBinding<string>("CityLife", "mayorPost", OnMayorPost));
+            AddBinding(new TriggerBinding<string>("CityLife", "replyPost", OnReplyPost));
             AddBinding(new TriggerBinding<int>("CityLife", "panelState", v => Content.LiveContext.PanelOpen = v == 1));
 
             // 关停原版 Chirper 显示闸。两条实机教训：
@@ -47,7 +48,7 @@ namespace CityLife.GameBridge
             catch (System.Exception e) { Mod.Log.Warn($"[UI] 找不到 ChirperUISystem：{e.Message}"); }
         }
 
-        /// <summary>市长发帖：清洗 → 入信息流 → 存 LiveContext（下几炉市民会回应）。</summary>
+        /// <summary>市长发帖：清洗 → 入信息流 → 存 LiveContext（下几炉市民会回应）→ 发"市民回应"专项炉（评论挂到该帖）。</summary>
         private void OnMayorPost(string text)
         {
             var t = (text ?? "").Trim().Replace("\n", " ").Replace("\r", " ");
@@ -56,9 +57,35 @@ namespace CityLife.GameBridge
             if (t.Length > 200)
                 t = t.Substring(0, 200);
 
-            Mod.Feed.Record(new Content.Post("市长", t, Content.Topic.Daily, "mayor"));
+            var seq = Mod.Feed.Record(new Content.Post("市长", t, Content.Topic.Daily, "mayor"));
             Content.LiveContext.PublishMayor(t);
             Mod.Log.Info($"[UI] 市长发帖：{t.Substring(0, System.Math.Min(24, t.Length))}…");
+
+            // 市民回应炉（高优先级）：结果由 ContentDirectorSystem 按 requestId 路由挂载
+            if (Mod.Gateway != null && !Llm.CliGateway.Mute && ContentDirectorSystem.ReplyHead != null)
+            {
+                var count = 4 + (int)(seq % 4); // 4-7 条，别千篇整数
+                Mod.Gateway.Enqueue(new Llm.CliRequest(
+                    Content.PromptBuilder.BuildReplyPrompt(ContentDirectorSystem.ReplyHead, t, count),
+                    Llm.CliPriority.High, 300, "mayor-reply:" + seq));
+            }
+        }
+
+        /// <summary>市长下场回复市民的帖：直接挂到该帖评论串末尾（"市长"身份）。</summary>
+        private void OnReplyPost(string payload)
+        {
+            // 契约："seq|text"（UI 已 trim/非空守卫；这里防御性再查）
+            var sep = (payload ?? "").IndexOf('|');
+            if (sep <= 0 || !uint.TryParse(payload.Substring(0, sep), out var seq))
+                return;
+            var t = payload.Substring(sep + 1).Trim();
+            if (t.Length == 0)
+                return;
+            if (t.Length > 200)
+                t = t.Substring(0, 200);
+
+            if (Mod.Feed.AppendComment(seq, "市长", t))
+                Mod.Log.Info($"[UI] 市长回复帖 #{seq}：{t.Substring(0, System.Math.Min(24, t.Length))}…");
         }
 
         protected override void OnUpdate()

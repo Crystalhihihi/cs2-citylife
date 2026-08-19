@@ -8,6 +8,7 @@ import {
 } from "react";
 import { Button } from "cs2/ui";
 import { useValue } from "cs2/api";
+import { focusEntity } from "cs2/bindings";
 import { postsBinding, uiLog, mayorPost, replyPost, panelState, FeedPost } from "mods/bindings";
 import styles from "./CityLifePanel.module.css";
 
@@ -398,7 +399,20 @@ const CityLifePanel = () => {
                                 <span className={styles.mayorBadge}>市长</span>
                             )}
                             <span className={styles.text}>{p.t}</span>
-                            <div className={styles.topic}>#{p.k}</div>
+                            <div className={styles.topic}>
+                                #{p.k}
+                                {p.e && (
+                                    <span
+                                        className={styles.goLink}
+                                        title="镜头飞到现场"
+                                        onClick={() =>
+                                            focusEntity({ index: p.e![0], version: p.e![1] })
+                                        }
+                                    >
+                                        前往现场
+                                    </span>
+                                )}
+                            </div>
                             {renderComments(p)}
                             {/* 无评论的帖没有评论区操作行，回复入口单独给一行（右置低调）；
                                 市长帖（a==="市长"）同样允许回复（自问自答/补充说明） */}

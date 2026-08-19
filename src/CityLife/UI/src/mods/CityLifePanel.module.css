@@ -158,6 +158,15 @@
     margin-top: 2px;
 }
 
+/* "前往现场"链接（带锚点实体的帖）：点击 focusEntity 镜头飞过去（游戏内置 camera 组 binding） */
+.goLink {
+    margin-left: 8px;
+    color: rgba(120, 200, 255, 0.95);
+    cursor: pointer;
+    text-decoration: underline;
+    user-select: none;
+}
+
 /* ── 评论区：字号略小、缩进、视觉层级低于主帖 ── */
 .comments {
     margin-top: 4px;

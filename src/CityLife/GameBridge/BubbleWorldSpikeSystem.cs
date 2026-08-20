@@ -62,9 +62,26 @@ namespace CityLife.GameBridge
                 Toggle();
             }
             if (m_Active)
+            {
+                // hideOverlay 闸（2026-08-21 实机：hideOverlay=True 时 overlay 系统连收都不收，
+                // 计数全 0）。RenderingSystem.hideOverlay 是公开可写属性——气泡开着就压 false。
+                // 渲染层开关，不涉及模拟数值（单向阀门纪律不涉）
+                var rendering = World.GetExistingSystemManaged<RenderingSystem>();
+                if (rendering != null && rendering.hideOverlay)
+                {
+                    rendering.hideOverlay = false;
+                    if (!m_LoggedGateFlip)
+                    {
+                        m_LoggedGateFlip = true;
+                        Mod.Log.Info("[BubbleW] hideOverlay 已压 false（气泡开着期间强制）");
+                    }
+                }
                 Draw();
+            }
             m_Frame++;
         }
+
+        private bool m_LoggedGateFlip;
 
         private void Toggle()
         {

@@ -433,6 +433,11 @@ Section("OverlayRenderSystem 文字/图元 API（2026-08-21 M3-W 调查后：世
     // Buffer 嵌套类型（DrawText/DrawCircle/DrawCustomMesh 等写入 API）
     foreach (var t in allTypes.Where(t => t.Name.Contains("Buffer") && (t.Namespace ?? "").Contains("Rendering")).OrderBy(t => t.FullName))
         DumpType(t, fields: true, methods: true);
+    // hideOverlay 闸调查（2026-08-21 实机：hideOverlay=True 时计数全 0）
+    Find("RenderingSystem", fields: true, methods: true);
+    Console.WriteLine("### 名称含 hideOverlay/SetShaderEnabled 的类型");
+    foreach (var t in allTypes.Where(t => t.Name.Contains("RenderingSystem") || t.Name.Contains("Overlay")).OrderBy(t => t.FullName))
+        Console.WriteLine($"  {t.FullName} ({KindOf(t)})");
 });
 
 return 0;

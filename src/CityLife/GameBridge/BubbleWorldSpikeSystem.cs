@@ -1,11 +1,10 @@
 using System.Collections.Generic;
 using System.Text;
 using Game;
-using Game.Buildings;
 using Unity.Entities;
 using Unity.Mathematics;
 using UnityEngine;
-using Transform = Game.Objects.Transform;
+using UnityEngine.Rendering;
 
 namespace CityLife.GameBridge
 {
@@ -13,27 +12,48 @@ namespace CityLife.GameBridge
     /// M3-W S1：世界空间渲染气泡探索（2026-08-20 玩家定案：放弃 cohtml 屏幕贴纸路线，
     /// 直接在 HDRP 3D 管线做；cohtml spike 保留作对照不再演进）。
     ///
-    /// S1 判定三件事：
-    /// 1. 着色器从哪来——运行时无法编译着色器（无 Unity 编辑器/AssetBundle），只能复用游戏
-    ///    已加载的：`Resources.FindObjectsOfTypeAll<Shader>()` 全量枚举找世界文本/SDF 候选
-    ///    （游戏自己的道路名/建筑名就是 3D 文本，着色器必已加载），备选 HDRP/Unlit；
-    /// 2. 文本网格从哪来——UnityEngine.TextMesh 只借网格不渲染本体（绕开手写字形布局），
-    ///    字体走系统字库（new Font("msyh")，微软雅黑全 CJK，mod 不打包字体文件）；
-    /// 3. 出不出字——Ctrl+9 在某建筑顶上渲染一个静态气泡（出字清晰/不紫不黑=管线通）。
-    /// 已知未知项：Font 图集（Alpha8）在 HDRP/Unlit 下的采样行为——实测见分晓
-    /// （RGB=0 则黑字白底气泡正好；RGB=1 则 BaseColor 给黑）。S2/S3 视 S1 结果推进。
+    /// 渲染接入 v3（前两条已实锤排除）：
+    /// - TextMesh 借网格：三连 NRE，TextMesh 在本环境就是坏的；
+    /// - 场景 GameObject+MeshRenderer：创建成功但永不渲染（CS2 的 HDRP 相机不吃场景 GameObject，
+    ///   对照组纯红方块同样不可见）——本版换 **SRP 原生注入点**：
+    ///   `RenderPipelineManager.beginCameraRendering` + `Graphics.DrawMesh`，
+    ///   渲染请求直接进当帧相机队列，不依赖场景 GameObject 是否被渲染。
+    ///
+    /// 本版判定：Ctrl+9 在视线落点+10m 画红色"吃了吗"+对照红方块。
+    /// 出字/出方块=注入点通；仍不出=看 `cam.cullingMask` 日志（外部内容被相机掩码排除的铁证）。
+    /// 网格手写（Font.GetCharacterInfo 逐字四边形，纯托管数学）；CJK 字体走系统字库（msyh）。
     /// </summary>
     public partial class BubbleWorldSpikeSystem : GameSystemBase
     {
         private bool m_ShadersDumped;
         private Font? m_Font;
-        private GameObject? m_Bubble;
-        private MeshFilter? m_BubbleFilter;
-        private bool m_Active;
+        private bool m_DrawActive;
+        private bool m_Subscribed;
+        private Mesh? m_TextMesh;
+        private Mesh? m_QuadMesh;
+        private Material? m_TextMat;
+        private Material? m_QuadMat;
+        private Vector3 m_Pos;
+        private Camera? m_Cam;
         private uint m_Frame;
         private uint m_LastKeyFrame;
 
         public override int GetUpdateInterval(SystemUpdatePhase phase) => 1;
+
+        protected override void OnCreate()
+        {
+            base.OnCreate();
+            RenderPipelineManager.beginCameraRendering += OnBeginCameraRendering;
+            m_Subscribed = true;
+        }
+
+        protected override void OnDestroy()
+        {
+            if (m_Subscribed)
+                RenderPipelineManager.beginCameraRendering -= OnBeginCameraRendering;
+            DestroyDrawAssets();
+            base.OnDestroy();
+        }
 
         protected override void OnUpdate()
         {
@@ -49,24 +69,21 @@ namespace CityLife.GameBridge
                 m_LastKeyFrame = m_Frame;
                 Toggle();
             }
-
-            // 面向镜头（顺手验证：S2 的朝向方案就是它；相机查找与 cohtml spike 同纪律——
-            // Camera.main 在某些阶段为 null，退 allCameras[0]）
-            if (m_Active && m_Bubble != null)
-            {
-                var cam = Camera.main != null ? Camera.main
-                    : Camera.allCameras.Length > 0 ? Camera.allCameras[0] : null;
-                if (cam != null)
-                {
-                    m_Bubble.transform.rotation = cam.transform.rotation;
-                    if (m_Quad != null)
-                        m_Quad.transform.rotation = cam.transform.rotation;
-                }
-            }
             m_Frame++;
         }
 
-        /// <summary>全量枚举已加载着色器：找游戏自己的世界文本着色器（道路名/建筑名同款），零成本复用。</summary>
+        /// <summary>注入点：每个相机开始渲染时，把我们的渲染请求塞给它（只塞主相机）。</summary>
+        private void OnBeginCameraRendering(ScriptableRenderContext ctx, Camera cam)
+        {
+            if (!m_DrawActive || cam == null || cam != m_Cam)
+                return;
+            var rot = cam.transform.rotation;
+            if (m_TextMesh != null && m_TextMat != null)
+                Graphics.DrawMesh(m_TextMesh, m_Pos, rot, m_TextMat, 0, cam);
+            if (m_QuadMesh != null && m_QuadMat != null)
+                Graphics.DrawMesh(m_QuadMesh, m_Pos + new Vector3(4f, 0f, 0f), rot, m_QuadMat, 0, cam);
+        }
+
         private void DumpShaders()
         {
             var shaders = Resources.FindObjectsOfTypeAll<Shader>();
@@ -78,126 +95,74 @@ namespace CityLife.GameBridge
                     interesting.Append(n).Append(" | ");
             }
             Mod.Log.Info($"[BubbleW] 已加载着色器 {shaders.Length} 个；文本/SDF/Unlit 候选：{interesting}");
-            var all = new StringBuilder(shaders.Length * 24);
-            foreach (var s in shaders)
-                all.Append(s.name).Append(" | ");
-            Mod.Log.Info($"[BubbleW] 全量：{all}");
         }
 
         private void Toggle()
         {
-            if (m_Active)
+            if (m_DrawActive)
             {
-                if (m_Bubble != null)
-                    Object.Destroy(m_Bubble);
-                if (m_Quad != null)
-                    Object.Destroy(m_Quad);
-                m_Bubble = null;
-                m_Quad = null;
-                m_Active = false;
-                Mod.Log.Info("[BubbleW] 单气泡已销毁");
+                m_DrawActive = false;
+                DestroyDrawAssets();
+                Mod.Log.Info("[BubbleW] 绘制关闭");
                 return;
             }
 
-            // 锚点 = 镜头视线落点 + 10m（2026-08-20 实机踩坑：锚"任意一栋建筑"=天涯海角，
-            // 创建成功但玩家根本看不到它在哪——S1 要的是"你看哪它放哪"）
-            var cam = Camera.main != null ? Camera.main
+            // 锚点 = 镜头视线落点 + 10m（S1：你看哪它画哪）
+            m_Cam = Camera.main != null ? Camera.main
                 : Camera.allCameras.Length > 0 ? Camera.allCameras[0] : null;
-            if (cam == null)
+            if (m_Cam == null)
             {
                 Mod.Log.Warn("[BubbleW] 找不到相机");
                 return;
             }
-            var camPos = cam.transform.position;
-            var fwd = cam.transform.forward;
+            Mod.Log.Info($"[BubbleW] 相机={m_Cam.name} cullingMask=0x{m_Cam.cullingMask:X} clearFlags={m_Cam.clearFlags}");
+            var camPos = m_Cam.transform.position;
+            var fwd = m_Cam.transform.forward;
             var t = fwd.y < -0.001f ? camPos.y / -fwd.y : 100f;
             var focus = camPos + fwd * t;
-            CreateBubble(new float3((float)focus.x, (float)(focus.y + 10.0), (float)focus.z));
-        }
+            m_Pos = new Vector3((float)focus.x, (float)(focus.y + 10.0), (float)focus.z);
 
-        private void CreateBubble(float3 pos)
-        {
             m_Font ??= CreateCjkFont();
-            if (m_Font == null)
+            if (m_Font == null || m_Font.material == null)
             {
-                Mod.Log.Warn("[BubbleW] CJK 字体创建失败（msyh 与 OS 字体都拿不到）");
+                Mod.Log.Warn("[BubbleW] CJK 字体/材质不可用");
                 return;
             }
+            m_TextMesh = BuildTextMesh("吃了吗", m_Font, 64, 0.02f);
+            if (m_TextMesh == null)
+                return;
+            m_QuadMesh = BuildQuadMesh(3f);
 
-            // TextMesh 路线已弃（2026-08-20 三连 NRE 实锤：text/font setter 的网格重建路径
-            // 在本环境全灭——TextMesh 在这个运行时里就是坏的）。改手写网格：
-            // Font.GetCharacterInfo 取每个字的 UV/尺寸/步进，四边形逐字拼（纯托管数学，无黑盒）
             var shader = PickShader();
             if (shader == null)
             {
-                Mod.Log.Warn("[BubbleW] 无可用着色器（HDRP/Unlit 与文本候选都没找到）");
+                Mod.Log.Warn("[BubbleW] 无可用着色器");
                 return;
             }
-            if (m_Font.material == null)
-            {
-                Mod.Log.Warn("[BubbleW] 字体材质为空（字体无效）");
-                return;
-            }
-            var mesh = BuildTextMesh("吃了吗", m_Font, 64, 0.02f); // 64px × 0.02 ≈ 1.3m 字高（S1 求看见，非终值）
-            if (mesh == null)
-                return; // 日志已在 BuildTextMesh 里打
-            var mat = new Material(shader)
-            {
-                mainTexture = m_Font.material.mainTexture
-            };
-            // 先不透明（排障序：证明"能渲染"在前，透明正确性在后——透明设错会整批丢弃像素）
-            if (mat.HasProperty("_BaseColor"))
-                mat.SetColor("_BaseColor", Color.red); // S1 醒目验证色（终版按类型配色）
-            Mod.Log.Info($"[BubbleW] 文本网格 bounds={mesh.bounds}");
+            m_TextMat = new Material(shader) { mainTexture = m_Font.material.mainTexture };
+            m_QuadMat = new Material(shader);
+            if (m_TextMat.HasProperty("_BaseColor"))
+                m_TextMat.SetColor("_BaseColor", Color.red);
+            if (m_QuadMat.HasProperty("_BaseColor"))
+                m_QuadMat.SetColor("_BaseColor", Color.red);
 
-            m_Bubble = new GameObject("CityLifeBubbleW");
-            m_Bubble.hideFlags = HideFlags.HideAndDontSave;
-            m_BubbleFilter = m_Bubble.AddComponent<MeshFilter>();
-            m_BubbleFilter.sharedMesh = mesh;
-            m_Bubble.AddComponent<MeshRenderer>().sharedMaterial = mat;
-            m_Bubble.transform.position = new Vector3(pos.x, pos.y, pos.z);
-
-            // 对照组：无光板红方块（无纹理、不透明、同着色器）——它出来说明管线通，
-            // 它也不出说明 GameObject/渲染接入有问题（分诊用，S1 后拆）
-            var quadGo = new GameObject("CityLifeBubbleQuad");
-            quadGo.hideFlags = HideFlags.HideAndDontSave;
-            quadGo.AddComponent<MeshFilter>().sharedMesh = BuildQuadMesh(3f);
-            var quadMat = new Material(shader);
-            if (quadMat.HasProperty("_BaseColor"))
-                quadMat.SetColor("_BaseColor", Color.red);
-            quadGo.AddComponent<MeshRenderer>().sharedMaterial = quadMat;
-            quadGo.transform.position = new Vector3(pos.x + 4f, pos.y, pos.z);
-            quadGo.transform.rotation = m_Bubble.transform.rotation;
-            m_Quad = quadGo;
-
-            m_Active = true;
-            Mod.Log.Info($"[BubbleW] 单气泡已创建 @({pos.x:F0},{pos.y:F0},{pos.z:F0}) shader={shader.name} verts={mesh.vertexCount}");
+            m_DrawActive = true;
+            Mod.Log.Info($"[BubbleW] 绘制开启 @({m_Pos.x:F0},{m_Pos.y:F0},{m_Pos.z:F0}) shader={shader.name} verts={m_TextMesh.vertexCount}");
         }
 
-        private GameObject? m_Quad;
-
-        /// <summary>对照组网格：边长 size 的正方形四边形（含法线，双面索引）。</summary>
-        private static Mesh BuildQuadMesh(float size)
+        private void DestroyDrawAssets()
         {
-            var h = size / 2f;
-            var mesh = new Mesh { name = "CityLifeQuad" };
-            mesh.vertices = new[]
-            {
-                new Vector3(-h, 0, 0), new Vector3(h, 0, 0),
-                new Vector3(h, size, 0), new Vector3(-h, size, 0),
-            };
-            mesh.uv = new[] { Vector2.zero, Vector2.right, Vector2.one, Vector2.up };
-            mesh.triangles = new[] { 0, 1, 2, 0, 2, 3, 0, 2, 1, 0, 3, 2 }; // 双面
-            mesh.RecalculateBounds();
-            mesh.RecalculateNormals();
-            return mesh;
+            if (m_TextMesh != null) Object.Destroy(m_TextMesh);
+            if (m_QuadMesh != null) Object.Destroy(m_QuadMesh);
+            if (m_TextMat != null) Object.Destroy(m_TextMat);
+            if (m_QuadMat != null) Object.Destroy(m_QuadMat);
+            m_TextMesh = null;
+            m_QuadMesh = null;
+            m_TextMat = null;
+            m_QuadMat = null;
         }
 
-        /// <summary>
-        /// 手写文本网格：RequestCharactersInTexture 光栅化进图集，GetCharacterInfo 取
-        /// UV（图集坐标）与 min/max/advance（局部排版），逐字四边形，整体水平居中（LowerCenter）。
-        /// 索引双面写（正反向各一份——省一次"朝向写反不可见"的往返）。
-        /// </summary>
+        /// <summary>手写文本网格（TextMesh 已弃：三连 NRE 实锤在本环境坏死）。逐字四边形+法线+双面索引。</summary>
         private Mesh? BuildTextMesh(string text, Font font, int fontSize, float charScale)
         {
             font.RequestCharactersInTexture(text, fontSize);
@@ -216,41 +181,53 @@ namespace CityLife.GameBridge
                 int b = verts.Count;
                 float x0 = penX + ci.minX * charScale, x1 = penX + ci.maxX * charScale;
                 float y0 = ci.minY * charScale, y1 = ci.maxY * charScale;
-                verts.Add(new Vector3(x0, y0, 0)); // BL
-                verts.Add(new Vector3(x1, y0, 0)); // BR
-                verts.Add(new Vector3(x1, y1, 0)); // TR
-                verts.Add(new Vector3(x0, y1, 0)); // TL
+                verts.Add(new Vector3(x0, y0, 0));
+                verts.Add(new Vector3(x1, y0, 0));
+                verts.Add(new Vector3(x1, y1, 0));
+                verts.Add(new Vector3(x0, y1, 0));
                 uvs.Add(ci.uvBottomLeft);
                 uvs.Add(ci.uvBottomRight);
                 uvs.Add(ci.uvTopRight);
                 uvs.Add(ci.uvTopLeft);
-                tris.AddRange(new[] { b, b + 1, b + 2, b, b + 2, b + 3 });         // 正向
-                tris.AddRange(new[] { b, b + 2, b + 1, b, b + 3, b + 2 });         // 反向（双面保底）
+                tris.AddRange(new[] { b, b + 1, b + 2, b, b + 2, b + 3 });
+                tris.AddRange(new[] { b, b + 2, b + 1, b, b + 3, b + 2 });
                 penX += ci.advance * charScale;
                 glyphs++;
             }
             if (glyphs == 0)
             {
-                Mod.Log.Warn("[BubbleW] 一个字形都没排到（字体没有这些字？）");
+                Mod.Log.Warn("[BubbleW] 一个字形都没排到");
                 return null;
             }
             for (int i = 0; i < verts.Count; i++)
-                verts[i] = new Vector3(verts[i].x - penX / 2f, verts[i].y, 0f); // 水平居中
+                verts[i] = new Vector3(verts[i].x - penX / 2f, verts[i].y, 0f);
             var mesh = new Mesh { name = "CityLifeBubbleText" };
             mesh.SetVertices(verts);
             mesh.SetUVs(0, uvs);
             mesh.SetTriangles(tris, 0);
             mesh.RecalculateBounds();
-            mesh.RecalculateNormals(); // HDRP/Unlit 顶点输入要法线，没有直接不画（2026-08-20 隐形实锤）
+            mesh.RecalculateNormals();
             return mesh;
         }
 
-        /// <summary>
-        /// 着色器选择（2026-08-20 枚举实锤后的优先级）：
-        /// HDRP/Unlit 首选（语义已知的 HDRP 原生，必渲染）；
-        /// 游戏世界名着色器（Shader Graphs/NetName、AreaName——道路名/区名同款）语义未知，留作研究线；
-        /// GUI/Text Shader、TextMeshPro/* 是内置管线，HDRP 下不渲染，不选。
-        /// </summary>
+        /// <summary>对照组网格：边长 size 的正方形四边形（含法线，双面索引）。</summary>
+        private static Mesh BuildQuadMesh(float size)
+        {
+            var h = size / 2f;
+            var mesh = new Mesh { name = "CityLifeQuad" };
+            mesh.vertices = new[]
+            {
+                new Vector3(-h, 0, 0), new Vector3(h, 0, 0),
+                new Vector3(h, size, 0), new Vector3(-h, size, 0),
+            };
+            mesh.uv = new[] { Vector2.zero, Vector2.right, Vector2.one, Vector2.up };
+            mesh.triangles = new[] { 0, 1, 2, 0, 2, 3, 0, 2, 1, 0, 3, 2 };
+            mesh.RecalculateBounds();
+            mesh.RecalculateNormals();
+            return mesh;
+        }
+
+        /// <summary>着色器：HDRP/Unlit 首选（语义已知的 HDRP 原生，必渲染）。</summary>
         private static Shader? PickShader()
         {
             var hdrp = Shader.Find("HDRP/Unlit");
@@ -262,18 +239,7 @@ namespace CityLife.GameBridge
             return null;
         }
 
-        /// <summary>HDRP 透明设置（尽力而为版；透明正确性本就是 S1 判定项之一）。</summary>
-        private static void TryMakeTransparent(Material mat)
-        {
-            // HDRP 材质属性面（运行时已知）：_SurfaceType 1=Transparent；透明队列前置
-            if (mat.HasProperty("_SurfaceType"))
-                mat.SetFloat("_SurfaceType", 1f);
-            if (mat.HasProperty("_ZWriteEnable"))
-                mat.SetFloat("_ZWriteEnable", 0f);
-            mat.renderQueue = 3000;
-        }
-
-        /// <summary>CJK 字体：候选名轮试（雅黑中英文/黑体/宋体/Noto），全灭则枚举 OS 字体打日志留证。</summary>
+        /// <summary>CJK 字体：候选名轮试，全灭则枚举 OS 字体打日志留证。</summary>
         private static Font? CreateCjkFont()
         {
             foreach (var name in new[] { "msyh", "Microsoft YaHei", "SimHei", "SimSun", "Noto Sans SC" })

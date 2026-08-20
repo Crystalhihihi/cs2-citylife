@@ -1,51 +1,96 @@
+using System;
+using System.Collections.Generic;
 using Game;
 using Game.Rendering;
-using System.Reflection;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
+using Transform = Game.Objects.Transform;
 
 namespace CityLife.GameBridge
 {
     /// <summary>
-    /// M3-W v4：世界渲染改走游戏原生 <see cref="OverlayRenderSystem"/>（2026-08-21 调查定案，
-    /// 社区 20+ mod 验证的正路：Move It/Traffic/Platter 同款）。
+    /// M3 气泡层 v1（世界空间渲染，游戏原生 OverlayRenderSystem 通道）：
+    /// 市民/车辆/建筑三类锚点的头顶气泡——正式版前身（2026-08-21 路线贯通后直接从 spike 升级）。
     ///
-    /// 此前三条路的共同死因（调查实锤）：**HDRP/Unlit 不在发布 build 的着色器清单里**——
-    /// Shader.Find 拿到无效 fallback，GameObject/DrawMesh/CustomPass 渲染的全是死材质，与接入无关。
+    /// 路线（全部实锤，勿再探）：
+    /// - 写入：GetBuffer(out deps) → DrawCircle/DrawCustomMesh(Plane)/DrawText → AddBufferWriter；
+    ///   **注册相位必须 GameSimulation**（Rendering 相位写入被 OverlayRenderSystem 的清/拷时序永久跳过）；
+    /// - 世界文字 = 空实体 + NameSystem.SetCustomName（DrawText 画实体渲染名，写什么画什么，
+    ///   CJK 零风险——游戏自己的字体图集）；
+    /// - hideOverlay 闸：开着期间每帧压 false（渲染层开关，不涉模拟数值）；
+    /// - 锚点 y 用实体真实 Transform（地形高度不可信——落点 y=0 平面曾把气泡埋在地下）。
     ///
-    /// 本路做法：
-    /// - 世界文字 = 空实体 + NameSystem.SetCustomName（DrawText 画的是实体渲染名——写什么画什么，
-    ///   CJK 零风险：游戏自己的字体图集）；底板 = Buffer.DrawCustomMesh(Plane)。
-    /// - 写入纪律（Move It 源码同款）：Rendering 相位注册；每帧 GetBuffer → Draw → AddBufferWriter。
-    /// - Ctrl+9 在视线落点+10m 画"吃了吗"（红圈底板+文字）。判定：出字清晰/被楼挡就消失/跟随镜头甩不飞。
+    /// 尺寸机制：DrawText 无尺寸参——文本网格由系统的 TMP 生成器懒烘焙（新字符串首画时生成）。
+    /// 在 Draw 内"设小字号→画→恢复"的窗口期，让我们的字符串以小字号烘焙（游戏既有字符串
+    /// 已缓存于默认字号，不受影响）。
+    /// 键位：Ctrl+9 开关；Ctrl+8 循环数量档（30/60/120）。
     /// </summary>
     public partial class BubbleWorldSpikeSystem : GameSystemBase
     {
+        private const int k_MaxBubbles = 120;
+        private const float k_MaxDist = 400f;      // 可读距离上限（spike 取值；LOD 闸 §12 #41 对齐人形渲染）
+        private const float k_LodMaxHeight = 350f; // 镜头高于此不再画（人形 LOD 直觉：看不清人就不该有气泡）
+
         private OverlayRenderSystem m_Overlay = default!;
         private Game.UI.NameSystem m_NameSystem = default!;
         private CameraUpdateSystem m_CameraUpdate = default!;
         private EntityQuery m_HumanQuery = default!;
-        private Entity m_LabelEntity;
+        private EntityQuery m_CarQuery = default!;
+        private EntityQuery m_BuildingQuery = default!;
+
         private bool m_Active;
-        private bool m_LoggedDraw;
-        private bool m_LoggedNoCam;
-        private uint m_DrawnSinceToggle;
+        private int m_Level = 2;                    // 0=30 1=60 2=120
+        private readonly List<TrackedBubble> m_Bubbles = new();
         private uint m_Frame;
         private uint m_LastKeyFrame;
+        private bool m_TmpLogged;
+        private float m_FpsAccum;
+        private int m_FpsFrames;
+        private float m_FpsTimer;
+
+        /// <summary>一个被追踪的气泡：锚点实体 + 文本载体实体 + 生命周期。</summary>
+        private struct TrackedBubble
+        {
+            public Entity Anchor;
+            public byte Kind;       // 0 人 1 车 2 楼
+            public Entity Label;    // 文本载体（SetCustomName 写什么画什么）
+            public int TextIdx;
+            public float NextAt;    // 下次换文案时刻（Time.time）
+        }
+
+        // 占位文案池（正式版换内容管道；按类型分池：公园/住宅已分，载具类型全分待正式版）
+        private static readonly string[] k_Texts =
+            { "……", "吃了吗", "今天这公交又晚点了，离谱", "风好大", "快走要迟到了", "这店排队也太长了", "听说东区新开了家店" };
+        private static readonly string[] k_CarTexts =
+            { "嘀嘀——", "又堵了", "轰——", "前面路口慢点" };
+        private static readonly string[] k_BuildingTexts =
+            { "……", "晚饭吃啥", "电视小点声！", "装修第三天了", "快递放门口", "楼上又拖椅子" };
+        private static readonly string[] k_ParkTexts =
+            { "风一吹真舒服", "鸽子真多", "遛弯第三圈了", "这花开得不错" };
 
         protected override void OnCreate()
         {
             base.OnCreate();
             m_Overlay = World.GetOrCreateSystemManaged<OverlayRenderSystem>();
             m_NameSystem = World.GetOrCreateSystemManaged<Game.UI.NameSystem>();
-            // 相机走游戏自己的 CameraUpdateSystem.activeCamera（BetterTransitView 源码同款）——
-            // Camera.main 在部分相位为 null 且可能是代理；游戏系统的 activeCamera 才是权威
+            // 相机走游戏自己的 CameraUpdateSystem.activeCamera（BetterTransitView 源码同款——权威源）
             m_CameraUpdate = World.GetOrCreateSystemManaged<CameraUpdateSystem>();
             m_HumanQuery = GetEntityQuery(
                 ComponentType.ReadOnly<Game.Creatures.Human>(),
-                ComponentType.ReadOnly<Game.Objects.Transform>(),
+                ComponentType.ReadOnly<Transform>(),
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
+            m_CarQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Vehicles.Car>(),
+                ComponentType.ReadOnly<Transform>(),
+                ComponentType.Exclude<Game.Vehicles.ParkedCar>(), // 空车不说话（说话的是车里的人）
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
+            m_BuildingQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Buildings.Building>(),
+                ComponentType.ReadOnly<Transform>(),
                 ComponentType.Exclude<Game.Common.Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
         }
@@ -54,158 +99,237 @@ namespace CityLife.GameBridge
 
         protected override void OnDestroy()
         {
-            if (m_LabelEntity != Entity.Null && EntityManager.Exists(m_LabelEntity))
-                EntityManager.DestroyEntity(m_LabelEntity);
+            DestroyAllBubbles();
             base.OnDestroy();
         }
 
         protected override void OnUpdate()
         {
             var ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
-            if (ctrl && Input.GetKeyDown(KeyCode.Alpha9) && m_Frame - m_LastKeyFrame > 30)
-            {
-                m_LastKeyFrame = m_Frame;
-                Toggle();
-            }
-            if (m_Active)
-            {
-                // hideOverlay 闸（2026-08-21 实机：hideOverlay=True 时 overlay 系统连收都不收，
-                // 计数全 0）。RenderingSystem.hideOverlay 是公开可写属性——气泡开着就压 false。
-                // 渲染层开关，不涉及模拟数值（单向阀门纪律不涉）
-                var rendering = World.GetExistingSystemManaged<RenderingSystem>();
-                if (rendering != null && rendering.hideOverlay)
-                {
-                    rendering.hideOverlay = false;
-                    if (!m_LoggedGateFlip)
-                    {
-                        m_LoggedGateFlip = true;
-                        Mod.Log.Info("[BubbleW] hideOverlay 已压 false（气泡开着期间强制）");
-                    }
-                }
-                Draw();
-            }
-            m_Frame++;
-        }
+            var debounced = m_Frame - m_LastKeyFrame > 30;
+            if (debounced && ctrl && Input.GetKeyDown(KeyCode.Alpha9)) { m_LastKeyFrame = m_Frame; Toggle(); }
+            if (debounced && ctrl && Input.GetKeyDown(KeyCode.Alpha8)) { m_LastKeyFrame = m_Frame; CycleLevel(); }
 
-        private bool m_LoggedGateFlip;
-
-        private void Toggle()
-        {
-            if (m_Active)
+            // FPS 计：每 4 秒一行（开着才有意义）
+            m_FpsAccum += UnityEngine.Time.deltaTime;
+            m_FpsFrames++;
+            m_FpsTimer += UnityEngine.Time.deltaTime;
+            if (m_FpsTimer >= 4f)
             {
-                m_Active = false;
-                if (m_LabelEntity != Entity.Null && EntityManager.Exists(m_LabelEntity))
-                    EntityManager.DestroyEntity(m_LabelEntity);
-                m_LabelEntity = Entity.Null;
-                Mod.Log.Info("[BubbleW] overlay 关闭");
+                if (m_Active)
+                    Mod.Log.Info($"[BubbleW] FPS avg={(m_FpsFrames / m_FpsAccum):F1}（N={LevelCount()}，在场 {m_Bubbles.Count}）");
+                m_FpsAccum = 0;
+                m_FpsFrames = 0;
+                m_FpsTimer = 0f;
+            }
+
+            if (!m_Active)
+            {
+                m_Frame++;
                 return;
             }
 
-            // 文本载体：空实体 + 自定义名（DrawText 画实体渲染名——SetCustomName 写什么画什么）
-            m_LabelEntity = EntityManager.CreateEntity();
-            m_NameSystem.SetCustomName(m_LabelEntity, "吃了吗");
-            Mod.Log.Info($"[BubbleW] overlay 开启，载体渲染名={m_NameSystem.GetRenderedLabelName(m_LabelEntity)}");
-            m_Active = true;
-        }
+            // hideOverlay 闸：开着期间压 false（渲染层开关，不涉模拟数值）
+            var rendering = World.GetExistingSystemManaged<RenderingSystem>();
+            if (rendering != null && rendering.hideOverlay)
+                rendering.hideOverlay = false;
 
-        private void Draw()
-        {
             var cam = m_CameraUpdate.activeCamera != null ? m_CameraUpdate.activeCamera
                 : Camera.main != null ? Camera.main
                 : Camera.allCameras.Length > 0 ? Camera.allCameras[0] : null;
             if (cam == null)
             {
-                // 永不静默失败（2026-08-21 教训：拿不到相机时静默 return，表现="什么都没画"，排查半天）
-                if (!m_LoggedNoCam || m_Frame % 256 == 0)
-                {
-                    m_LoggedNoCam = true;
-                    Mod.Log.Warn("[BubbleW] Draw 拿不到相机（activeCamera/Camera.main/allCameras 全空）");
-                }
+                m_Frame++;
                 return;
             }
 
-            // 锚点 = 视线落点附近**真实市民**的头顶（2026-08-21 实锤：落点打在 y=0 平面+10m，
-            // 地形在 y≈80 的城市里=埋在地下——借用 creature 的真实 y，它们站地面上）
-            var focus = FocusGround(cam);
-            var pos = NearestHumanPos(focus);
+            if (m_Frame % 512 == 0)
+                Resample(cam);
+            TickLifecycle();
+            Draw(cam);
+            m_Frame++;
+        }
 
-            var buffer = m_Overlay.GetBuffer(out var deps);
-            // 探针三件套：红圈（Move It 验证过的原语）+ 白平面底板 + 文字——分别落不同渲染列表，
-            // 哪个计数起来就知道哪条道通（2026-08-21 计数全 0 调查）
-            buffer.DrawCircle(Color.red, pos, 4f);
-            buffer.DrawCustomMesh(Color.white, pos, 1.2f, 3.6f, OverlayRenderSystem.CustomMeshType.Plane, cam.transform.rotation);
-            buffer.DrawText(m_LabelEntity, pos, true); // cameraFace=true 自动面向镜头
-            m_Overlay.AddBufferWriter(deps);
+        private int LevelCount() => m_Level == 0 ? 30 : m_Level == 1 ? 60 : 120;
 
-            if (!m_LoggedDraw)
+        private void Toggle()
+        {
+            m_Active = !m_Active;
+            if (!m_Active)
+                DestroyAllBubbles();
+            else
+                m_Bubbles.Clear(); // 强制重采样建组
+            Mod.Log.Info($"[BubbleW] 气泡层 {(m_Active ? "开启" : "关闭")}（N={LevelCount()}）");
+        }
+
+        private void CycleLevel()
+        {
+            m_Level = (m_Level + 1) % 3;
+            m_Bubbles.Clear();
+            Mod.Log.Info($"[BubbleW] 数量档 → {LevelCount()}");
+        }
+
+        private void DestroyAllBubbles()
+        {
+            foreach (var b in m_Bubbles)
+                if (m_NameSystem != null && EntityManager.Exists(b.Label))
+                    EntityManager.DestroyEntity(b.Label);
+            m_Bubbles.Clear();
+        }
+
+        // —— 采样：三类锚点，屏内+距离上限，人:车:楼 配比 ——
+        private void Resample(Camera cam)
+        {
+            // 留旧：锚点还在屏内的气泡保留（生命周期/文案不中断）；出屏/死亡的清掉
+            for (int i = m_Bubbles.Count - 1; i >= 0; i--)
             {
-                m_LoggedDraw = true;
-                Mod.Log.Info($"[BubbleW] 首帧已画 @({pos.x:F0},{pos.y:F0},{pos.z:F0}) cam={cam.name}");
+                var b = m_Bubbles[i];
+                if (!EntityManager.Exists(b.Anchor) || !EntityManager.HasComponent<Transform>(b.Anchor)
+                    || !OnScreen(cam, b.Anchor))
+                {
+                    if (EntityManager.Exists(b.Label))
+                        EntityManager.DestroyEntity(b.Label);
+                    m_Bubbles.RemoveAt(i);
+                }
             }
 
-            // 反射诊断：我们的内容到底进没进渲染列表（实例计数）+ 渲染闸状态，128 帧一行
-            if (m_Frame % 128 == 0)
-                DiagnoseRenderLists();
+            var want = LevelCount();
+            Collect(cam, m_CarQuery, Math.Max(4, want / 6), 1);
+            Collect(cam, m_BuildingQuery, Math.Max(3, want / 10), 2);
+            Collect(cam, m_HumanQuery, want, 0);
         }
 
-        /// <summary>视线落点（仅取 x/z 作搜索圆心；y 不可信——y=0 平面与真实地形高差可能上百米）。</summary>
-        private static float3 FocusGround(Camera cam)
+        private bool OnScreen(Camera cam, Entity e)
         {
-            var camPos = cam.transform.position;
-            var fwd = cam.transform.forward;
-            var t = fwd.y < -0.001f ? camPos.y / -fwd.y : 100f;
-            return (float3)(camPos + fwd * t);
+            var p = EntityManager.GetComponentData<Transform>(e).m_Position;
+            var s = cam.WorldToScreenPoint(p);
+            return s.z > 5f && s.z <= k_MaxDist
+                && s.x >= 0 && s.x <= Screen.width && s.y >= 0 && s.y <= Screen.height;
         }
 
-        /// <summary>离落点最近的 Human/Resident creature 的位置 +2.2m（借真实地面高度）。找不到回落点+10m。</summary>
-        private float3 NearestHumanPos(float3 focus)
+        private void Collect(Camera cam, EntityQuery query, int cap, byte kind)
         {
-            var arr = m_HumanQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
-            var best = float.MaxValue;
-            var bestPos = focus + new float3(0, 10f, 0);
+            var current = m_Bubbles.Count;
+            if (current >= LevelCount())
+                return;
+            var arr = query.ToEntityArray(Unity.Collections.Allocator.Temp);
+            var scored = new List<(float d, Entity e)>(arr.Length);
             foreach (var e in arr)
             {
-                var p = EntityManager.GetComponentData<Game.Objects.Transform>(e).m_Position;
-                var d = math.distancesq(new float2(p.x, p.z), new float2(focus.x, focus.z));
-                if (d < best)
-                {
-                    best = d;
-                    bestPos = p;
-                }
+                if (HasAnchor(e))
+                    continue;
+                var p = EntityManager.GetComponentData<Transform>(e).m_Position;
+                var s = cam.WorldToScreenPoint(p);
+                if (s.z < 5f || s.z > k_MaxDist)
+                    continue;
+                if (s.x < 0 || s.x > Screen.width || s.y < 0 || s.y > Screen.height)
+                    continue;
+                scored.Add((s.z, e));
             }
             arr.Dispose();
-            return bestPos + new float3(0, 2.2f, 0);
+            scored.Sort((a, b) => a.d.CompareTo(b.d));
+            var now = UnityEngine.Time.time;
+            for (int i = 0; i < scored.Count && i < cap && m_Bubbles.Count < k_MaxBubbles; i++)
+            {
+                var e = scored[i].e;
+                var label = EntityManager.CreateEntity();
+                var b = new TrackedBubble
+                {
+                    Anchor = e,
+                    Kind = kind,
+                    Label = label,
+                    TextIdx = 0,
+                    NextAt = now + HoldFor(e.Index, 0),
+                };
+                SetBubbleText(ref b, 0);
+                m_Bubbles.Add(b);
+            }
         }
 
-        /// <summary>反射诊断（写没写进渲染列表一判定）：OverlayRenderSystem 私有实例计数 + RenderingSystem.hideOverlay。</summary>
-        private void DiagnoseRenderLists()
+        private bool HasAnchor(Entity e)
         {
-            try
-            {
-                var t = typeof(OverlayRenderSystem);
-                const BindingFlags priv = BindingFlags.NonPublic | BindingFlags.Instance;
-                var textCount = (int)(t.GetField("m_TextInstanceCount", priv)?.GetValue(m_Overlay) ?? -1);
-                var absCount = (int)(t.GetField("m_AbsoluteInstanceCount", priv)?.GetValue(m_Overlay) ?? -1);
-                var projCount = (int)(t.GetField("m_ProjectedInstanceCount", priv)?.GetValue(m_Overlay) ?? -1);
-                var customCounts = t.GetField("m_CustomMeshInstanceCount", priv)?.GetValue(m_Overlay) as int[];
-                var planeCount = customCounts != null && customCounts.Length > 2 ? customCounts[2] : -1;
+            foreach (var b in m_Bubbles)
+                if (b.Anchor == e)
+                    return true;
+            return false;
+        }
 
-                var hideOverlay = "?";
-                var rendering = World.GetExistingSystemManaged<RenderingSystem>();
-                if (rendering != null)
-                {
-                    var rt = rendering.GetType();
-                    var pi = rt.GetProperty("hideOverlay") ?? rt.GetProperty("HideOverlay");
-                    var fi = pi == null ? rt.GetField("hideOverlay", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public) : null;
-                    var v = pi != null ? pi.GetValue(rendering) : fi?.GetValue(rendering);
-                    hideOverlay = v?.ToString() ?? "?";
-                }
-                Mod.Log.Info($"[BubbleW·诊断] 渲染列表：text={textCount} absolute={absCount} projected={projCount} plane={planeCount}；hideOverlay={hideOverlay}");
-            }
-            catch (System.Exception e)
+        // —— 生命周期：各气泡独立时钟（6-15s 错相，绝不同时切换）——
+        private void TickLifecycle()
+        {
+            var now = UnityEngine.Time.time;
+            for (int i = 0; i < m_Bubbles.Count; i++)
             {
-                Mod.Log.Warn($"[BubbleW·诊断] 反射失败：{e.Message}");
+                var b = m_Bubbles[i];
+                if (!EntityManager.Exists(b.Anchor))
+                    continue; // 出组清理由 Resample 负责
+                if (now >= b.NextAt)
+                {
+                    b.TextIdx++;
+                    b.NextAt = now + HoldFor(b.Anchor.Index, b.TextIdx);
+                    SetBubbleText(ref b, b.TextIdx);
+                    m_Bubbles[i] = b;
+                }
             }
+        }
+
+        private void SetBubbleText(ref TrackedBubble b, int textIdx)
+        {
+            var pool = b.Kind == 0 ? k_Texts
+                : b.Kind == 1 ? k_CarTexts
+                : EntityManager.HasComponent<Game.Buildings.AttractivenessProvider>(b.Anchor) ? k_ParkTexts
+                : k_BuildingTexts;
+            var text = pool[(b.Anchor.Index + textIdx) % pool.Length];
+            if (EntityManager.Exists(b.Label))
+                m_NameSystem.SetCustomName(b.Label, text);
+        }
+
+        /// <summary>气泡驻留时长（6-15s，确定性错相：实体×集数散列——全屏绝不同时切换）。</summary>
+        private static float HoldFor(int entityIndex, int textIdx)
+            => 6f + ((entityIndex * 7919 + textIdx * 104729) % 900) / 100f;
+
+        // —— 绘制：每帧（世界空间 overlay，零屏幕贴纸）——
+        private void Draw(Camera cam)
+        {
+            // LOD 闸（§12 #41：镜头高于 k_LodMaxHeight 不画——看不清人的高度就不该有气泡）
+            if (cam.transform.position.y > k_LodMaxHeight)
+                return;
+
+            var tmp = m_Overlay.GetTextMesh();
+            float? origSize = null;
+            if (tmp != null)
+            {
+                origSize = tmp.fontSize;
+                if (!m_TmpLogged)
+                {
+                    m_TmpLogged = true;
+                    Mod.Log.Info($"[BubbleW] TMP 默认字号={origSize}（我们的文本以小字号烘焙）");
+                }
+                tmp.fontSize = origSize.Value * 0.22f; // 小字号窗口期开始（游戏既有字符串已缓存，不受影响）
+            }
+
+            var deps = default(JobHandle);
+            var buffer = m_Overlay.GetBuffer(out deps);
+            foreach (var b in m_Bubbles)
+            {
+                if (!EntityManager.Exists(b.Anchor) || !EntityManager.HasComponent<Transform>(b.Anchor))
+                    continue;
+                var p = EntityManager.GetComponentData<Transform>(b.Anchor).m_Position;
+                p.y += b.Kind == 0 ? 2.2f : b.Kind == 1 ? 2.5f : 12f; // 人头/车顶/楼顶（估值，正式版按包围盒）
+
+                // 底板（平面，按类型配色；文字向镜头前移一点防共面闪）
+                var plateColor = b.Kind == 0 ? Color.white
+                    : b.Kind == 1 ? new Color(0.8f, 0.9f, 1f)
+                    : new Color(1f, 0.95f, 0.75f);
+                var text = m_NameSystem.GetRenderedLabelName(b.Label);
+                var width = math.clamp(0.55f * text.Length + 1.2f, 2f, 8f);
+                buffer.DrawCustomMesh(plateColor, p, 1.2f, width, OverlayRenderSystem.CustomMeshType.Plane, cam.transform.rotation);
+                buffer.DrawText(b.Label, p - (float3)cam.transform.forward * 0.15f, true);
+            }
+            m_Overlay.AddBufferWriter(deps);
+
+            if (tmp != null && origSize.HasValue)
+                tmp.fontSize = origSize.Value; // 窗口期结束：恢复游戏默认字号
         }
     }
 }

@@ -32,7 +32,7 @@ namespace CityLife.GameBridge
         /// <summary>只在游戏内挂 UI（主菜单/编辑器不推数据）。</summary>
         public override GameMode gameMode => GameMode.Game;
 
-        private const float k_MaxDist = 250f;
+        private const float k_MaxDist = 400f; // 可读距离上限（spike 取值；正式版对齐游戏人形渲染 LOD，§12 #41）
 
         private ValueBinding<string> m_BubblesBinding = default!;
         private EntityQuery m_HumanQuery = default!;    // Human 实体 + Transform（行人）
@@ -143,18 +143,8 @@ namespace CityLife.GameBridge
                 Mod.Log.Warn("[Bubble] Human/Resident 实体都不带 Transform——位置链路仍未知，需下一轮 dump");
         }
 
-        /// <summary>
-        /// 采样锚点 = 视线中心射线与地平面（y≈0）的交点。
-        /// 实机踩坑（2026-08-20）：锚点用镜头位置（在天上）时，"市民到镜头 <250m" 永远为零——
-        /// 一个气泡都出不来；必须按"看向哪"采样而不是"镜头在哪"。
-        /// </summary>
-        private static float3 FocusPoint(Camera cam)
-        {
-            var camPos = cam.transform.position;
-            var fwd = cam.transform.forward;
-            var t = fwd.y < -0.001f ? camPos.y / -fwd.y : 0f;
-            return camPos + fwd * t;
-        }
+        // （FocusPoint 落点法已退役：镜头 620m 高时落点 535m 内无人——高空本来就不该有气泡；
+        //   教训保留：采样必须跟着"屏上可见"走，不跟几何落点走）
 
         private int LevelCount() => m_Level == 1 ? 100 : m_Level == 2 ? 300 : 600;
 
@@ -170,32 +160,34 @@ namespace CityLife.GameBridge
 
         private bool m_Diagnose;
 
-        /// <summary>重采样：离视线落点最近的 creature 取前 N（250m 外丢弃）。</summary>
+        /// <summary>
+        /// 重采样（v2：屏幕投影法，替代落点圈法——诊断实锤：镜头 620m 高时落点 535m 内无人，
+        /// 高空本来就不该有气泡）：候选 = 投影在屏内（±5% 边距）且距离 ≤ k_MaxDist 的 creature，
+        /// 按距离取前 N。与"人清晰可见才挂气泡"（§12 #41）同构。
+        /// </summary>
         private void Resample(Camera cam)
         {
-            var focus = FocusPoint(cam);
             var want = LevelCount();
             m_Sampled.Clear();
             var arr = m_ActiveQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
             var scored = new List<(float d, Entity e)>(arr.Length);
-            float nearest = float.MaxValue;
             foreach (var e in arr)
             {
-                var d = math.distancesq(EntityManager.GetComponentData<Transform>(e).m_Position, focus);
-                if (d < nearest)
-                    nearest = d;
-                if (d < k_MaxDist * k_MaxDist)
-                    scored.Add((d, e));
+                var p = EntityManager.GetComponentData<Transform>(e).m_Position;
+                p.y += 2f;
+                var s = cam.WorldToScreenPoint(p);
+                if (s.z < 5f || s.z > k_MaxDist)
+                    continue; // 背后/贴脸/超可读距离
+                if (s.x < -0.05f * Screen.width || s.x > 1.05f * Screen.width
+                    || s.y < -0.05f * Screen.height || s.y > 1.05f * Screen.height)
+                    continue; // 屏外
+                scored.Add((s.z, e));
             }
             arr.Dispose();
             if (m_Diagnose)
             {
                 m_Diagnose = false;
-                var camPos = cam.transform.position;
-                var fwd = cam.transform.forward;
-                Mod.Log.Info($"[Bubble·诊断] cam={cam.name} pos=({camPos.x:F0},{camPos.y:F0},{camPos.z:F0}) "
-                             + $"fwd=({fwd.x:F2},{fwd.y:F2},{fwd.z:F2}) focus=({focus.x:F0},{focus.y:F0},{focus.z:F0}) "
-                             + $"池={arr.Length} 最近={math.sqrt(nearest):F0}m 入圈={scored.Count}");
+                Mod.Log.Info($"[Bubble·诊断] cam={cam.name} 高={cam.transform.position.y:F0}m 屏内候选={scored.Count}/{arr.Length}");
             }
             scored.Sort((a, b) => a.d.CompareTo(b.d));
             for (int i = 0; i < scored.Count && i < want; i++)

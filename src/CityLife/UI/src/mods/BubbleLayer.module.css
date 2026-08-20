@@ -13,14 +13,16 @@
     overflow: hidden;               /* 屏外余量裁掉，防气泡把层撑出滚动条 */
 }
 
+/* 白色聊天气泡（2026-08-20 玩家反馈优化：黑盒→白底深字+小尾巴+轻阴影）；
+   transition 补间：C# 推送已节流 10Hz，中间帧由它插值——治"一卡一卡" */
 .bubble {
     position: absolute;
     transform: translate(-50%, -100%);  /* 以锚点（头顶）为底边中点 */
-    background-color: rgba(20, 24, 30, 0.85);
-    color: rgba(240, 242, 245, 0.95);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 8px;
-    padding: 2px 8px;
+    background-color: rgba(255, 255, 255, 0.94);
+    color: rgba(26, 30, 38, 0.95);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 10px;
+    padding: 3px 9px;
     font-size: 12px;
     line-height: 18px;
     white-space: nowrap;
@@ -28,4 +30,18 @@
     overflow: hidden;
     text-overflow: ellipsis;
     pointer-events: none;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+    transition: left 0.1s linear, top 0.1s linear;
+}
+
+/* 气泡小尾巴（朝下，指向说话的人） */
+.bubble::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -5px;
+    margin-left: -4px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid rgba(255, 255, 255, 0.94);
 }

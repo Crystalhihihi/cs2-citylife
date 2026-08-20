@@ -72,10 +72,12 @@ namespace CityLife.GameBridge
                 ComponentType.ReadOnly<Transform>(),
                 ComponentType.Exclude<Game.Common.Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
-            // 车顶/楼顶锚点（M3 设计：市民头/车顶/楼顶三类锚定）
+            // 车顶/楼顶锚点（M3 设计：市民头/车顶/楼顶三类锚定）。
+            // 排除停放车（ParkedCar）——空车不说话：说话的是车里的人（2026-08-20 玩家实机反馈）
             m_CarQuery = GetEntityQuery(
                 ComponentType.ReadOnly<Game.Vehicles.Car>(),
                 ComponentType.ReadOnly<Transform>(),
+                ComponentType.Exclude<Game.Vehicles.ParkedCar>(),
                 ComponentType.Exclude<Game.Common.Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
             m_BuildingQuery = GetEntityQuery(
@@ -128,7 +130,10 @@ namespace CityLife.GameBridge
             }
             if (m_Frame % 512 == 0 || m_Sampled.Count == 0)
                 Resample(cam);
-            PushBubbles(cam);
+            // 推送节流（2026-08-20 玩家实机"一卡一卡"）：每帧全量重推 JSON+React 重绘几百 div 是
+            // 卡顿根因——改 10Hz 推送，中间帧由 BubbleLayer 的 CSS transition 补间（顺滑且更省）
+            if (m_Frame % 6 == 0)
+                PushBubbles(cam);
             m_Frame++;
         }
 

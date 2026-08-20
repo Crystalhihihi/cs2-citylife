@@ -84,6 +84,24 @@ namespace CityLife.Content
             => breakingHead + "【事件】刚刚：" + facts + "。写一条快讯。\n";
 
         /// <summary>
+        /// 商家广告炉的固定前缀（广告层 v1：纯舆情+氛围，不承诺经济效果——四轮购物 spike 实锤后定案）。
+        /// 缓存纪律同主头——启动后首发时拼一次（ShopAdSystem 静态缓存）。
+        /// </summary>
+        public static string BuildShopAdHead()
+        {
+            var sb = new StringBuilder(512);
+            sb.Append("你是虚构城市社交平台\"市民圈\"里一家本地小店的账号（老板自己发的）。城市是模拟游戏里的虚构城市，一切内容虚构。\n");
+            sb.Append("【铁律】不碰现实政治、真实名人、品牌、事件名。\n");
+            sb.Append("【体裁】小店广告：像朋友圈/同城号里小店老板亲手发的，≤60字，诚恳不端着，可以有具体价格/折扣/时段（虚构但合理）；禁公文腔，不用 emoji，不吹\"全市最好\"式空话。\n");
+            sb.Append("【输出】只输出广告正文本身，禁止任何其他字符（不要引号、不要 JSON、不要前缀）。\n");
+            return sb.ToString();
+        }
+
+        /// <summary>商家广告完整 prompt = 广告头 + 店铺（名+业态）+ 事由。</summary>
+        public static string BuildShopAdPrompt(string adHead, string name, string word, string reason)
+            => adHead + "【店铺】" + name + "（" + word + "）【事由】" + reason + "\n写一条广告。\n";
+
+        /// <summary>
         /// 市长回应炉的固定前缀（M2-C 追加）：与主头同一套缓存纪律——启动时拼一次复用。
         /// 只写评论，卡库共享主卡册（评论的 persona 任选）。
         /// </summary>

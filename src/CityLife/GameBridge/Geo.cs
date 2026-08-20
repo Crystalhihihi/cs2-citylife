@@ -1,4 +1,7 @@
+using Game.Citizens;
+using Unity.Entities;
 using Unity.Mathematics;
+using Transform = Game.Objects.Transform;
 
 namespace CityLife.GameBridge
 {
@@ -25,6 +28,27 @@ namespace CityLife.GameBridge
             if (angle >= -157.5f && angle < -112.5f) return "城西南";
             if (angle >= -112.5f && angle < -67.5f) return "城南";
             return "城东南";
+        }
+
+        /// <summary>市民位置回退链：本人 Transform → 所在建筑的 Transform（市民在建筑里/车上时位置不挂本人实体）。</summary>
+        public static bool TryGetPos(EntityManager em, Entity citizen, out float3 pos)
+        {
+            if (em.HasComponent<Transform>(citizen))
+            {
+                pos = em.GetComponentData<Transform>(citizen).m_Position;
+                return true;
+            }
+            if (em.HasComponent<CurrentBuilding>(citizen))
+            {
+                var b = em.GetComponentData<CurrentBuilding>(citizen).m_CurrentBuilding;
+                if (b != Entity.Null && em.HasComponent<Transform>(b))
+                {
+                    pos = em.GetComponentData<Transform>(b).m_Position;
+                    return true;
+                }
+            }
+            pos = default;
+            return false;
         }
     }
 }

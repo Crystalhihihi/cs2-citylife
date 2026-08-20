@@ -49,6 +49,10 @@ namespace CityLife.Content
         public static int PetitionScale { get; private set; } = 150;
         /// <summary>测试开关（默认关）：绕过情绪阈值触发请愿。</summary>
         public static bool PetitionDebug { get; private set; } = false;
+        /// <summary>商家广告层总开关（默认开）：店铺广告帖+评论互动+打折氛围排队（纯舆情无经济效果）。</summary>
+        public static bool ShopAds { get; private set; } = true;
+        /// <summary>两次商家广告的最小间隔（游戏小时，默认 12，钳 2-72）。</summary>
+        public static int ShopAdCooldownH { get; private set; } = 12;
 
         public static void Load(string cfgDir, Action<string> log)
         {
@@ -94,7 +98,13 @@ namespace CityLife.Content
                 var pd = JsonMini.GetRaw(json, "petitionDebug");
                 if (pd != null)
                     PetitionDebug = pd == "true";
-                log($"[Settings] t0Fallback={T0Fallback} feedMode={FeedMode} writeBackTier={WriteBackTier} feedMaxItems={FeedMaxItems} breakingNews={BreakingNews} breakingHotHours={BreakingHotHours} petition={PetitionEnabled}/{PetitionCooldownH}h/{PetitionWindowH}h/{PetitionScale}人/debug={PetitionDebug}");
+                var sa = JsonMini.GetRaw(json, "shopAds");
+                if (sa != null)
+                    ShopAds = sa != "false";
+                var sc = JsonMini.GetInt(json, "shopAdCooldownH");
+                if (sc != null)
+                    ShopAdCooldownH = System.Math.Clamp(sc.Value, 2, 72);
+                log($"[Settings] t0Fallback={T0Fallback} feedMode={FeedMode} writeBackTier={WriteBackTier} feedMaxItems={FeedMaxItems} breakingNews={BreakingNews} breakingHotHours={BreakingHotHours} petition={PetitionEnabled}/{PetitionCooldownH}h/{PetitionWindowH}h/{PetitionScale}人/debug={PetitionDebug} shopAds={ShopAds}/{ShopAdCooldownH}h");
             }
             catch (Exception e)
             {

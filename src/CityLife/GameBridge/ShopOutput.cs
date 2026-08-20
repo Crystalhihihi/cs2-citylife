@@ -13,6 +13,27 @@ namespace CityLife.GameBridge
     /// </summary>
     public static class ShopOutput
     {
+        // 资源→中文业态映射（Game.Economy.Resource 枚举 2026-08-20 dump 实测；未覆盖的走兜底"店"）
+        private static readonly (Resource Res, string Word)[] k_ResourceWords =
+        {
+            (Resource.Meals, "餐馆"), (Resource.ConvenienceFood, "便利店"), (Resource.Food, "食品店"),
+            (Resource.Vegetables, "菜店"), (Resource.Beverages, "饮品店"), (Resource.Fish, "水产店"),
+            (Resource.Textiles, "服装店"), (Resource.Furniture, "家具店"), (Resource.Vehicles, "车行"),
+            (Resource.Electronics, "电子产品店"), (Resource.Pharmaceuticals, "药店"),
+            (Resource.Lodging, "酒店"), (Resource.Paper, "文具店"), (Resource.Telecom, "手机店"),
+            (Resource.Entertainment, "娱乐场所"), (Resource.Recreation, "休闲场所"),
+            (Resource.Financial, "银行"), (Resource.Media, "传媒公司"), (Resource.Software, "软件公司"),
+        };
+
+        /// <summary>资源 → 中文业态词（锚点标签/广告 prompt 共用；未覆盖回退"店"）。</summary>
+        public static string WordOf(Resource res)
+        {
+            foreach (var (r, word) in k_ResourceWords)
+                if (res == r)
+                    return word;
+            return "店";
+        }
+
         /// <summary>店的商品（产出资源）。拿不到返回 NoResource——调用方自行决定兜底。</summary>
         public static Resource OutputOf(EntityManager em, Entity company)
         {

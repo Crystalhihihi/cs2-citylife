@@ -15,8 +15,9 @@ namespace CityLife.GameBridge
     public enum AnchorKind { Hiring, BusinessGood, BusinessBad, Park, NewShop, NewService, NewPark, NewSignature, Demolished }
 
     /// <summary>
-    /// 实体锚点：一条"具体到对象"的话题线索。Label=中文方位+真实业态名（"城东那家便利店"），
+    /// 实体锚点：一条"具体到对象"的话题线索。Label=真实店名/地名（NameSystem+路名），
     /// Detail=一句可入 prompt 的线索（"空 3 个岗"）。Entity 供信息流挂"点击聚焦"用。
+    /// Company=公司锚点时的公司实体（广告层取产出业态用；非公司锚点 Null）。
     /// </summary>
     public readonly struct Anchor
     {
@@ -24,13 +25,15 @@ namespace CityLife.GameBridge
         public readonly AnchorKind Kind;
         public readonly string Label;
         public readonly string Detail;
+        public readonly Entity Company;
 
-        public Anchor(Entity entity, AnchorKind kind, string label, string detail)
+        public Anchor(Entity entity, AnchorKind kind, string label, string detail, Entity company = default)
         {
             Entity = entity;
             Kind = kind;
             Label = label;
             Detail = detail;
+            Company = company;
         }
 
         public string PromptText => $"{Label}（{Detail}）";
@@ -120,7 +123,7 @@ namespace CityLife.GameBridge
                 string detail = kind == AnchorKind.Hiring ? $"空 {vacancy} 个岗"
                     : kind == AnchorKind.BusinessGood ? "听说赚了"
                     : "听说快撑不住了";
-                m_Anchors.Add(new Anchor(building, kind.Value, CompanyLabel(company, building, word, pos), detail));
+                m_Anchors.Add(new Anchor(building, kind.Value, CompanyLabel(company, building, word, pos), detail, company));
                 added++;
 
                 if (calibrate)
@@ -146,29 +149,13 @@ namespace CityLife.GameBridge
                 Mod.Log.Info($"[Anchor] 本轮锚点 {m_Anchors.Count} 个（公司池 {companies.Length}，公园池 {parks.Length}）");
         }
 
-        // 资源→中文业态映射（Game.Economy.Resource 枚举 2026-08-20 dump 实测；未覆盖的走兜底"店"）
-        private static readonly (Resource Res, string Word)[] k_ResourceWords =
-        {
-            (Resource.Meals, "餐馆"), (Resource.ConvenienceFood, "便利店"), (Resource.Food, "食品店"),
-            (Resource.Vegetables, "菜店"), (Resource.Beverages, "饮品店"), (Resource.Fish, "水产店"),
-            (Resource.Textiles, "服装店"), (Resource.Furniture, "家具店"), (Resource.Vehicles, "车行"),
-            (Resource.Electronics, "电子产品店"), (Resource.Pharmaceuticals, "药店"),
-            (Resource.Lodging, "酒店"), (Resource.Paper, "文具店"), (Resource.Telecom, "手机店"),
-            (Resource.Entertainment, "娱乐场所"), (Resource.Recreation, "休闲场所"),
-            (Resource.Financial, "银行"), (Resource.Media, "传媒公司"), (Resource.Software, "软件公司"),
-        };
-
         /// <summary>公司主业判定（2026-08-20 R3.1 修正）：产出声明优先（ShopOutput——存货最多≠卖什么，
         /// 投入品混入实锤：餐厅 Food 是原料 Meals 才是商品）；拿不到回退 Resources 存货猜测。</summary>
         private static string BusinessWord(EntityManager em, Entity company, DynamicBuffer<Resources> resources)
         {
             var output = ShopOutput.OutputOf(em, company);
             if (output != Resource.NoResource)
-            {
-                foreach (var (res, word) in k_ResourceWords)
-                    if (output == res)
-                        return word;
-            }
+                return ShopOutput.WordOf(output);
             Resource top = Resource.NoResource;
             int best = -1;
             foreach (var r in resources)
@@ -181,11 +168,10 @@ namespace CityLife.GameBridge
                     top = r.m_Resource;
                 }
             }
-            foreach (var (res, word) in k_ResourceWords)
-                if (top == res)
-                    return word;
-            return "店"; // 兜底：未知/无存货业态
+            return ShopOutput.WordOf(top);
         }
+
+        // （k_ResourceWords 已移交 ShopOutput——业态词一处定义，锚点/广告共用）
 
         /// <summary>
         /// 公司锚点标签（2026-08-20 玩家定案：人说"解放路那家面馆"，不说"城西北"）：

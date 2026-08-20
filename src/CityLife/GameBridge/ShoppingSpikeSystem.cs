@@ -342,24 +342,7 @@ namespace CityLife.GameBridge
                 : "无对照店（只有一家商业公司）";
 
         private bool TryGetPos(Entity citizen, out float3 pos)
-        {
-            if (EntityManager.HasComponent<Transform>(citizen))
-            {
-                pos = EntityManager.GetComponentData<Transform>(citizen).m_Position;
-                return true;
-            }
-            if (EntityManager.HasComponent<CurrentBuilding>(citizen))
-            {
-                var b = EntityManager.GetComponentData<CurrentBuilding>(citizen).m_CurrentBuilding;
-                if (b != Entity.Null && EntityManager.HasComponent<Transform>(b))
-                {
-                    pos = EntityManager.GetComponentData<Transform>(b).m_Position;
-                    return true;
-                }
-            }
-            pos = default;
-            return false;
-        }
+            => Geo.TryGetPos(EntityManager, citizen, out pos);
 
         private int GetStockOf(Entity company, Resource res)
         {

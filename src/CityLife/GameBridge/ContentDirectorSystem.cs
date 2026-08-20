@@ -92,7 +92,19 @@ namespace CityLife.GameBridge
                 // 评论续热炉走专线路由：新评论追加到热帖评论串（不占常规批次位）
                 if (r.RequestId != null && r.RequestId.StartsWith("thread:"))
                 {
-                    HandleThreadContinue(r);
+                    AppendCommentsFromResult(r, "thread:", "续热");
+                    continue;
+                }
+                // 广告评论炉走专线路由（必须在 "ad:" 前匹配——前缀互相包含）
+                if (r.RequestId != null && r.RequestId.StartsWith("ad-reply:"))
+                {
+                    AppendCommentsFromResult(r, "ad-reply:", "广告互动");
+                    continue;
+                }
+                // 商家广告炉走专线路由：ShopAdSystem 发帖+排氛围队
+                if (r.RequestId != null && r.RequestId.StartsWith("ad:"))
+                {
+                    World.GetOrCreateSystemManaged<ShopAdSystem>().OnAdResult(r);
                     continue;
                 }
                 // 市长回应炉走专线路由：评论挂到市长帖下，不占常规批次位
@@ -280,15 +292,15 @@ namespace CityLife.GameBridge
             m_Tick++;
         }
 
-        /// <summary>评论续热炉结果处理：解析评论 → 逐条追加到热帖评论串（模型看着真名@人，无需替换）。</summary>
-        private void HandleThreadContinue(Llm.CliCompletedResult r)
+        /// <summary>评论类炉结果共用处理（续热/广告互动）：解析评论 → 逐条追加到目标帖评论串。</summary>
+        private void AppendCommentsFromResult(Llm.CliCompletedResult r, string prefix, string tag)
         {
             if (!r.Result.Success)
             {
-                Mod.Log.Info($"[LLM] 续热炉失败：{r.Result.Error}");
+                Mod.Log.Info($"[LLM] {tag}炉失败：{r.Result.Error}");
                 return;
             }
-            if (!uint.TryParse(r.RequestId.Substring("thread:".Length), out var seq))
+            if (!uint.TryParse(r.RequestId.Substring(prefix.Length), out var seq))
                 return;
             var comments = Content.BatchParser.ParseCommentArray(r.Result.Text, msg => Mod.Log.Info(msg));
             var added = 0;
@@ -296,7 +308,7 @@ namespace CityLife.GameBridge
                 if (Mod.Feed.AppendComment(seq, AuthorFor(pid), text))
                     added++;
             if (added > 0)
-                Mod.Log.Info($"[LLM] 帖 #{seq} 续热 +{added} 条评论");
+                Mod.Log.Info($"[LLM] 帖 #{seq} {tag} +{added} 条评论");
         }
 
         /// <summary>突发快讯炉结果处理：清洗正文 → "城市快讯"账号单帖入信息流（锚点从 requestId 解析）。</summary>

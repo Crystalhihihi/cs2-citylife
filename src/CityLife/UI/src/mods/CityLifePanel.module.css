@@ -143,6 +143,25 @@
     margin-right: 6px;
 }
 
+/* 官方帖（市政厅公告/城市快讯）：蓝色系高亮，与市长帖的黄色系区分 */
+.postOfficial {
+    padding: 6px 4px 6px 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-left: 3px solid rgba(140, 180, 255, 0.85);
+    background-color: rgba(140, 180, 255, 0.06);
+    word-break: break-all;
+}
+
+/* 「官方」徽标：文字徽标（同禁符号字形纪律） */
+.officialBadge {
+    font-size: 10px;
+    color: #1a1e26;
+    background-color: rgba(140, 180, 255, 0.9);
+    border-radius: 3px;
+    padding: 0 4px;
+    margin-right: 6px;
+}
+
 .author {
     font-weight: bold;
     margin-right: 6px;

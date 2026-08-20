@@ -71,6 +71,9 @@ const kTabFilter: Record<TabKey, (p: FeedPost) => boolean> = {
 // 市长帖判定（契约：a === "市长"，p === "mayor" 为人格 id 佐证；UI 只认 a）
 const isMayorPost = (p: FeedPost) => p.a === "市长";
 
+// 官方帖判定（活动公告/媒体快讯）：视觉高亮防被信息流冲掉（2026-08-20 实机：活动爆棚玩家却没看到公告）
+const isOfficialPost = (p: FeedPost) => p.a === "市政厅" || p.a === "城市快讯";
+
 /** 市民信息流入口：GameTopLeft 浮动按钮 + 自绘面板（M2-B：评论区/自绘滚动条/拖拽/缩放）。 */
 export const CityLifeButton = () => {
     const [open, setOpen] = useState(false);
@@ -390,13 +393,20 @@ const CityLifePanel = () => {
                     {shown.map((p) => (
                         <div
                             className={
-                                isMayorPost(p) ? styles.postMayor : styles.post
+                                isMayorPost(p)
+                                    ? styles.postMayor
+                                    : isOfficialPost(p)
+                                      ? styles.postOfficial
+                                      : styles.post
                             }
                             key={p.n}
                         >
                             <span className={styles.author}>{p.a}</span>
                             {isMayorPost(p) && (
                                 <span className={styles.mayorBadge}>市长</span>
+                            )}
+                            {isOfficialPost(p) && (
+                                <span className={styles.officialBadge}>官方</span>
                             )}
                             <span className={styles.text}>{p.t}</span>
                             <div className={styles.topic}>

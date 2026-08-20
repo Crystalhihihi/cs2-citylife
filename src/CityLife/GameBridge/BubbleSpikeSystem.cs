@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
@@ -37,10 +38,12 @@ namespace CityLife.GameBridge
         private ValueBinding<string> m_BubblesBinding = default!;
         private EntityQuery m_HumanQuery = default!;    // Human 实体 + Transform（行人）
         private EntityQuery m_ResidentQuery = default!; // Resident 实体 + Transform（备选标记）
+        private EntityQuery m_CarQuery = default!;      // Car 实体 + Transform（车顶锚点）
+        private EntityQuery m_BuildingQuery = default!; // Building 实体 + Transform（楼顶锚点）
         private EntityQuery m_ActiveQuery;              // 普查后选定的采样查询（m_QueryReady=false 时不可用）
         private bool m_QueryReady;
         private bool m_Censused;
-        private readonly List<Entity> m_Sampled = new();
+        private readonly List<(Entity e, byte kind)> m_Sampled = new(); // kind: 0 人 1 车 2 楼
         private int m_Level;          // 0=关 1=100 2=300 3=600
         private uint m_Frame;
         private uint m_LastKeyFrame;
@@ -50,6 +53,8 @@ namespace CityLife.GameBridge
 
         // 占位文案（三种长度，测气泡宽度与换行）
         private static readonly string[] k_Texts = { "……", "吃了吗", "今天这公交又晚点了，离谱" };
+        private static readonly string[] k_CarTexts = { "滴——", "又堵了" };
+        private static readonly string[] k_BuildingTexts = { "……", "晚饭吃啥" };
 
         protected override void OnCreate()
         {
@@ -64,6 +69,17 @@ namespace CityLife.GameBridge
                 ComponentType.Exclude<Game.Tools.Temp>());
             m_ResidentQuery = GetEntityQuery(
                 ComponentType.ReadOnly<Game.Creatures.Resident>(),
+                ComponentType.ReadOnly<Transform>(),
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
+            // 车顶/楼顶锚点（M3 设计：市民头/车顶/楼顶三类锚定）
+            m_CarQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Vehicles.Car>(),
+                ComponentType.ReadOnly<Transform>(),
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
+            m_BuildingQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Buildings.Building>(),
                 ComponentType.ReadOnly<Transform>(),
                 ComponentType.Exclude<Game.Common.Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
@@ -136,7 +152,8 @@ namespace CityLife.GameBridge
             var humansT = m_HumanQuery.CalculateEntityCount();
             var residents = GetEntityQuery(ComponentType.ReadOnly<Game.Creatures.Resident>()).CalculateEntityCount();
             var residentsT = m_ResidentQuery.CalculateEntityCount();
-            Mod.Log.Info($"[Bubble] 普查：Human={humans}（带Transform {humansT}）Resident={residents}（带Transform {residentsT}）");
+            Mod.Log.Info($"[Bubble] 普查：Human={humans}（带Transform {humansT}）Resident={residents}（带Transform {residentsT}）"
+                         + $" 车={m_CarQuery.CalculateEntityCount()} 楼={m_BuildingQuery.CalculateEntityCount()}");
             m_QueryReady = humansT > 0 || residentsT > 0;
             m_ActiveQuery = humansT > 0 ? m_HumanQuery : m_ResidentQuery;
             if (!m_QueryReady)
@@ -162,19 +179,32 @@ namespace CityLife.GameBridge
 
         /// <summary>
         /// 重采样（v2：屏幕投影法，替代落点圈法——诊断实锤：镜头 620m 高时落点 535m 内无人，
-        /// 高空本来就不该有气泡）：候选 = 投影在屏内（±5% 边距）且距离 ≤ k_MaxDist 的 creature，
+        /// 高空本来就不该有气泡）：候选 = 投影在屏内（±5% 边距）且距离 ≤ k_MaxDist 的实体，
         /// 按距离取前 N。与"人清晰可见才挂气泡"（§12 #41）同构。
+        /// 三类锚点（M3 设计：市民头/车顶/楼顶）：人:车:楼 配比取样，楼/车是背景氛围不盖过人。
         /// </summary>
         private void Resample(Camera cam)
         {
             var want = LevelCount();
             m_Sampled.Clear();
-            var arr = m_ActiveQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
+            var cars = Collect(cam, m_CarQuery, Math.Max(6, want / 6), 1);
+            var buildings = Collect(cam, m_BuildingQuery, Math.Max(4, want / 10), 2);
+            var humans = Collect(cam, m_ActiveQuery, want, 0);
+            if (m_Diagnose)
+            {
+                m_Diagnose = false;
+                Mod.Log.Info($"[Bubble·诊断] cam={cam.name} 高={cam.transform.position.y:F0}m 屏内候选 人={humans} 车={cars} 楼={buildings}");
+            }
+        }
+
+        /// <summary>屏幕投影采样：屏内（±5% 边距）且 z∈(5,k_MaxDist] 的实体按距离取前 cap 个入 m_Sampled。返回入圈数。</summary>
+        private int Collect(Camera cam, EntityQuery query, int cap, byte kind)
+        {
+            var arr = query.ToEntityArray(Unity.Collections.Allocator.Temp);
             var scored = new List<(float d, Entity e)>(arr.Length);
             foreach (var e in arr)
             {
                 var p = EntityManager.GetComponentData<Transform>(e).m_Position;
-                p.y += 2f;
                 var s = cam.WorldToScreenPoint(p);
                 if (s.z < 5f || s.z > k_MaxDist)
                     continue; // 背后/贴脸/超可读距离
@@ -184,14 +214,14 @@ namespace CityLife.GameBridge
                 scored.Add((s.z, e));
             }
             arr.Dispose();
-            if (m_Diagnose)
-            {
-                m_Diagnose = false;
-                Mod.Log.Info($"[Bubble·诊断] cam={cam.name} 高={cam.transform.position.y:F0}m 屏内候选={scored.Count}/{arr.Length}");
-            }
             scored.Sort((a, b) => a.d.CompareTo(b.d));
-            for (int i = 0; i < scored.Count && i < want; i++)
-                m_Sampled.Add(scored[i].e);
+            var n = 0;
+            for (int i = 0; i < scored.Count && i < cap; i++)
+            {
+                m_Sampled.Add((scored[i].e, kind));
+                n++;
+            }
+            return n;
         }
 
         /// <summary>每帧投影+推送（最坏情况压测：JSON 全量重推）。</summary>
@@ -201,12 +231,12 @@ namespace CityLife.GameBridge
             sb.Append('[');
             var first = true;
             var shown = 0;
-            foreach (var e in m_Sampled)
+            foreach (var (e, kind) in m_Sampled)
             {
                 if (!EntityManager.Exists(e) || !EntityManager.HasComponent<Transform>(e))
                     continue;
                 var p = EntityManager.GetComponentData<Transform>(e).m_Position;
-                p.y += 2f; // 头顶
+                p.y += kind == 0 ? 2f : kind == 1 ? 2.5f : 12f; // 人头/车顶/楼顶（spike 估值，正式版按包围盒）
                 var s = cam.WorldToScreenPoint(p);
                 if (s.z < 0.1f)
                     continue; // 镜头背后
@@ -214,11 +244,14 @@ namespace CityLife.GameBridge
                 var y = (1f - s.y / Screen.height) * 100f; // Unity 自下而上 → CSS 自上而下
                 if (x < -5f || x > 105f || y < -5f || y > 105f)
                     continue;
+                var text = kind == 0 ? k_Texts[shown % k_Texts.Length]
+                    : kind == 1 ? k_CarTexts[shown % k_CarTexts.Length]
+                    : k_BuildingTexts[shown % k_BuildingTexts.Length];
                 if (!first) sb.Append(',');
                 first = false;
                 sb.Append("{\"x\":").Append(x.ToString("F1", CultureInfo.InvariantCulture))
                   .Append(",\"y\":").Append(y.ToString("F1", CultureInfo.InvariantCulture))
-                  .Append(",\"t\":\"").Append(k_Texts[shown % k_Texts.Length]).Append("\"}");
+                  .Append(",\"t\":\"").Append(text).Append("\"}");
                 shown++;
             }
             sb.Append(']');

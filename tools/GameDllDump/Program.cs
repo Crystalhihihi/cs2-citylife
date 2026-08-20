@@ -144,6 +144,11 @@ Section("购物链路（2026-08-20 实质性 spike：购买行为在哪个系统
         Console.WriteLine($"- {t.Name} ({KindOf(t)})");
     Find("Creature", fields: true);
     Find("Resident", fields: true);
+    Console.WriteLine();
+    Console.WriteLine("### 车辆组件补探（2026-08-20 M3-spike：车顶气泡锚点）");
+    Console.WriteLine("### Game.Vehicles 命名空间类型一览（仅类型名）");
+    foreach (var t in allTypes.Where(t => t.Namespace == "Game.Vehicles").OrderBy(t => t.Name))
+        Console.WriteLine($"- {t.Name} ({KindOf(t)})");
 });
 
 Section("旅游", () =>

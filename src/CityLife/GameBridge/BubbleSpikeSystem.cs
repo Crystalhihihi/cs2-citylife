@@ -96,7 +96,7 @@ namespace CityLife.GameBridge
                 m_Frame++;
                 return;
             }
-            var cam = Camera.main;
+            var cam = FindCam();
             if (cam == null)
             {
                 m_Frame++;
@@ -116,6 +116,18 @@ namespace CityLife.GameBridge
             m_Frame++;
         }
 
+        /// <summary>
+        /// 找相机：先 Camera.main， null 再 allCameras[0]。
+        /// 实机踩坑（2026-08-20）：UIUpdate 阶段 Camera.main 恒为 null（游戏主相机没挂 MainCamera
+        /// 标签或该阶段解析不到）——症状是普查/采样永远不执行、气泡一个不出（日志只有 FPS 行）。
+        /// </summary>
+        private static Camera? FindCam()
+        {
+            if (Camera.main != null)
+                return Camera.main;
+            var all = Camera.allCameras;
+            return all != null && all.Length > 0 ? all[0] : null;
+        }
         /// <summary>一次性普查：Human/Resident 两种 creature 标记谁带 Transform 用谁（分类学摸底）。</summary>
         private void Census()
         {

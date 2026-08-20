@@ -135,6 +135,15 @@ Section("购物链路（2026-08-20 实质性 spike：购买行为在哪个系统
     Find("CompanyData", fields: true);
     Find("ServiceCompanyData", fields: true);
     Find("Storefront", fields: true);
+    Console.WriteLine();
+    Console.WriteLine("### 市民世界位置补探（2026-08-20 M3-spike：Citizen 实体不带 Transform，采样恒 0）");
+    Find("CurrentTransport", fields: true);
+    Find("CurrentVehicle", fields: true);
+    Console.WriteLine("### Game.Creatures 命名空间类型一览（仅类型名）");
+    foreach (var t in allTypes.Where(t => t.Namespace == "Game.Creatures").OrderBy(t => t.Name))
+        Console.WriteLine($"- {t.Name} ({KindOf(t)})");
+    Find("Creature", fields: true);
+    Find("Resident", fields: true);
 });
 
 Section("旅游", () =>

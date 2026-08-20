@@ -35,7 +35,11 @@ namespace CityLife.GameBridge
         private const float k_MaxDist = 250f;
 
         private ValueBinding<string> m_BubblesBinding = default!;
-        private EntityQuery m_CitizenQuery = default!;
+        private EntityQuery m_HumanQuery = default!;    // Human 实体 + Transform（行人）
+        private EntityQuery m_ResidentQuery = default!; // Resident 实体 + Transform（备选标记）
+        private EntityQuery m_ActiveQuery;              // 普查后选定的采样查询（m_QueryReady=false 时不可用）
+        private bool m_QueryReady;
+        private bool m_Censused;
         private readonly List<Entity> m_Sampled = new();
         private int m_Level;          // 0=关 1=100 2=300 3=600
         private uint m_Frame;
@@ -51,8 +55,15 @@ namespace CityLife.GameBridge
         {
             base.OnCreate();
             AddBinding(m_BubblesBinding = new ValueBinding<string>("CityLife", "bubbles", "[]"));
-            m_CitizenQuery = GetEntityQuery(
-                ComponentType.ReadOnly<Citizen>(),
+            // 市民本体（Citizen）不带 Transform（实机采样恒 0 实锤）——世界上可见的人是
+            // Game.Creatures 的 creature 实体（Human/Resident 标记），位置挂在它们身上
+            m_HumanQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Creatures.Human>(),
+                ComponentType.ReadOnly<Transform>(),
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
+            m_ResidentQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Creatures.Resident>(),
                 ComponentType.ReadOnly<Transform>(),
                 ComponentType.Exclude<Game.Common.Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
@@ -92,10 +103,32 @@ namespace CityLife.GameBridge
                 return;
             }
 
+            if (!m_Censused)
+                Census();
+            if (!m_QueryReady)
+            {
+                m_Frame++;
+                return;
+            }
             if (m_Frame % 512 == 0 || m_Sampled.Count == 0)
                 Resample(cam);
             PushBubbles(cam);
             m_Frame++;
+        }
+
+        /// <summary>一次性普查：Human/Resident 两种 creature 标记谁带 Transform 用谁（分类学摸底）。</summary>
+        private void Census()
+        {
+            m_Censused = true;
+            var humans = GetEntityQuery(ComponentType.ReadOnly<Game.Creatures.Human>()).CalculateEntityCount();
+            var humansT = m_HumanQuery.CalculateEntityCount();
+            var residents = GetEntityQuery(ComponentType.ReadOnly<Game.Creatures.Resident>()).CalculateEntityCount();
+            var residentsT = m_ResidentQuery.CalculateEntityCount();
+            Mod.Log.Info($"[Bubble] 普查：Human={humans}（带Transform {humansT}）Resident={residents}（带Transform {residentsT}）");
+            m_QueryReady = humansT > 0 || residentsT > 0;
+            m_ActiveQuery = humansT > 0 ? m_HumanQuery : m_ResidentQuery;
+            if (!m_QueryReady)
+                Mod.Log.Warn("[Bubble] Human/Resident 实体都不带 Transform——位置链路仍未知，需下一轮 dump");
         }
 
         /// <summary>
@@ -122,13 +155,13 @@ namespace CityLife.GameBridge
             Mod.Log.Info($"[Bubble] 档位 → {(level == 0 ? "关" : LevelCount().ToString())}");
         }
 
-        /// <summary>重采样：离视线落点最近的市民取前 N（250m 外丢弃）。</summary>
+        /// <summary>重采样：离视线落点最近的 creature 取前 N（250m 外丢弃）。</summary>
         private void Resample(Camera cam)
         {
             var focus = FocusPoint(cam);
             var want = LevelCount();
             m_Sampled.Clear();
-            var arr = m_CitizenQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
+            var arr = m_ActiveQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
             var scored = new List<(float d, Entity e)>(arr.Length);
             foreach (var e in arr)
             {

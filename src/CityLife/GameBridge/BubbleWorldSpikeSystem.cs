@@ -77,6 +77,19 @@ namespace CityLife.GameBridge
             Mod.Log.Info($"[BubbleW] 已加载着色器 {shaders.Length} 个；文本/SDF/Unlit 候选：{interesting}");
         }
 
+        /// <summary>相机普查（统一假说验证用）：全部相机的名字/深度/掩码/带不带 HDAdditionalCameraData——
+        /// 找出真正的世界渲染相机（"Main Camera" 可能只是投影代理）。</summary>
+        private void DumpCameras()
+        {
+            var sb = new StringBuilder();
+            foreach (var c in Camera.allCameras)
+            {
+                var hd = c.GetComponent<HDAdditionalCameraData>() != null ? "+HD" : "-HD";
+                sb.Append($"[{c.name} d={c.depth} mask=0x{c.cullingMask:X} {hd}] ");
+            }
+            Mod.Log.Info($"[BubbleW] 相机普查（{Camera.allCameras.Length}）：{sb}");
+        }
+
         private void Toggle()
         {
             if (m_DrawActive)
@@ -127,12 +140,13 @@ namespace CityLife.GameBridge
                 m_QuadMat.SetColor("_BaseColor", Color.red);
 
             // 渲染接入 = HDRP CustomPass（Unity HDRP 文档明写的自定义渲染注入点，公开 API）：
-            // CustomPassVolume（挂主相机，BeforeTransparent 注入）+ 我们的 CustomPass（cmd.DrawMesh）
+            // 全局 volume（**isGlobal=true 全相机生效**——2026-08-21 统一假说："Main Camera" 可能只是
+            // 投影代理而非真正的世界渲染相机，挂单相机可能挂错对象；全局则谁是真相机都拦得住）+ cmd.DrawMesh
+            DumpCameras();
             m_VolumeGo = new GameObject("CityLifeBubbleVolume");
             m_VolumeGo.hideFlags = HideFlags.HideAndDontSave;
             var volume = m_VolumeGo.AddComponent<CustomPassVolume>();
-            volume.isGlobal = false;
-            volume.targetCamera = cam;
+            volume.isGlobal = true;
             volume.injectionPoint = CustomPassInjectionPoint.BeforeTransparent;
             m_Pass = volume.AddPassOfType(typeof(CityLifeBubblePass)) as CityLifeBubblePass;
             if (m_Pass == null)
@@ -293,9 +307,17 @@ namespace CityLife.GameBridge
         public Material? QuadMat;
         public Vector3 Pos;
 
+        private int m_LogCount;
+
         protected override void Execute(CustomPassContext ctx)
         {
             var cam = ctx.hdCamera.camera;
+            // 判定项：pass 到底跑没跑、跑在谁身上（前 3 次打日志；玩家实机验证后删）
+            if (m_LogCount < 3)
+            {
+                m_LogCount++;
+                CityLife.Mod.Log.Info($"[BubbleW] pass Execute #{m_LogCount} cam={cam.name} pos=({Pos.x:F0},{Pos.y:F0},{Pos.z:F0})");
+            }
             var rot = cam.transform.rotation; // 面向镜头（billboard）
             var cmd = ctx.cmd;
             if (TextMesh != null && TextMat != null)

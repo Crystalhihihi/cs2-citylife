@@ -92,22 +92,20 @@ namespace CityLife.GameBridge
                 return;
             }
 
-            // 锚点：任意一栋建筑（S1 静态验证）
-            var q = GetEntityQuery(
-                ComponentType.ReadOnly<Building>(),
-                ComponentType.ReadOnly<Transform>(),
-                ComponentType.Exclude<Game.Common.Deleted>(),
-                ComponentType.Exclude<Game.Tools.Temp>());
-            var arr = q.ToEntityArray(Unity.Collections.Allocator.Temp);
-            if (arr.Length == 0)
+            // 锚点 = 镜头视线落点 + 10m（2026-08-20 实机踩坑：锚"任意一栋建筑"=天涯海角，
+            // 创建成功但玩家根本看不到它在哪——S1 要的是"你看哪它放哪"）
+            var cam = Camera.main != null ? Camera.main
+                : Camera.allCameras.Length > 0 ? Camera.allCameras[0] : null;
+            if (cam == null)
             {
-                Mod.Log.Warn("[BubbleW] 城里没有建筑");
-                arr.Dispose();
+                Mod.Log.Warn("[BubbleW] 找不到相机");
                 return;
             }
-            var pos = EntityManager.GetComponentData<Transform>(arr[0]).m_Position;
-            arr.Dispose();
-            CreateBubble(pos + new float3(0, 15f, 0));
+            var camPos = cam.transform.position;
+            var fwd = cam.transform.forward;
+            var t = fwd.y < -0.001f ? camPos.y / -fwd.y : 100f;
+            var focus = camPos + fwd * t;
+            CreateBubble(new float3((float)focus.x, (float)(focus.y + 10.0), (float)focus.z));
         }
 
         private void CreateBubble(float3 pos)
@@ -133,7 +131,7 @@ namespace CityLife.GameBridge
                 Mod.Log.Warn("[BubbleW] 字体材质为空（字体无效）");
                 return;
             }
-            var mesh = BuildTextMesh("吃了吗", m_Font, 64, 0.004f); // 64px 字号 × 0.004 = 约 0.26m 字高
+            var mesh = BuildTextMesh("吃了吗", m_Font, 64, 0.02f); // 64px × 0.02 ≈ 1.3m 字高（S1 求看见，非终值）
             if (mesh == null)
                 return; // 日志已在 BuildTextMesh 里打
             var mat = new Material(shader)
@@ -141,6 +139,8 @@ namespace CityLife.GameBridge
                 mainTexture = m_Font.material.mainTexture
             };
             TryMakeTransparent(mat);
+            if (mat.HasProperty("_BaseColor"))
+                mat.SetColor("_BaseColor", Color.red); // S1 醒目验证色（终版按类型配色）
 
             m_Bubble = new GameObject("CityLifeBubbleW");
             m_Bubble.hideFlags = HideFlags.HideAndDontSave;

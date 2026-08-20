@@ -46,7 +46,7 @@ namespace CityLife.GameBridge
     public partial class ShoppingSpikeSystem : GameSystemBase
     {
         private const int k_InjectCount = 30;
-        private const uint k_ObserveFrames = 16384;
+        private const uint k_ObserveFrames = 32768; // R3 教训：跨城改道 16384 帧走不完（窗口末还有 37 在途）
 
         private EntityQuery m_CompanyQuery = default!;
         private EntityQuery m_CitizenQuery = default!;
@@ -101,8 +101,9 @@ namespace CityLife.GameBridge
         {
             var ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
             var debounced = m_Frame - m_LastKeyFrame > 30;
-            if (debounced && ctrl && Input.GetKeyDown(KeyCode.B)) { m_LastKeyFrame = m_Frame; StartInject(targetCompany: false); }
-            if (debounced && ctrl && Input.GetKeyDown(KeyCode.N)) { m_LastKeyFrame = m_Frame; StartInject(targetCompany: true); }
+            if (debounced && ctrl && Input.GetKeyDown(KeyCode.B)) { m_LastKeyFrame = m_Frame; StartInject(targetCompany: false, needBased: false); }
+            if (debounced && ctrl && Input.GetKeyDown(KeyCode.N)) { m_LastKeyFrame = m_Frame; StartInject(targetCompany: true, needBased: false); }
+            if (debounced && ctrl && Input.GetKeyDown(KeyCode.J)) { m_LastKeyFrame = m_Frame; StartInject(targetCompany: false, needBased: true); }
             if (debounced && ctrl && Input.GetKeyDown(KeyCode.M)) { m_LastKeyFrame = m_Frame; StartRetarget(); }
 
             if (m_BaselineStock >= 0)
@@ -179,8 +180,8 @@ namespace CityLife.GameBridge
             return top != Resource.NoResource;
         }
 
-        // —— Ctrl+B/N：就近注入 30 个购物行程（底线：强行注入能不能成交）——
-        private void StartInject(bool targetCompany)
+        // —— Ctrl+B/N/J：就近注入 30 个购物行程（B=店面/N=公司；J=缺口注入——只挑家里缺这个货的市民）——
+        private void StartInject(bool targetCompany, bool needBased)
         {
             if (!TryPickShop())
                 return;
@@ -205,6 +206,10 @@ namespace CityLife.GameBridge
             {
                 if (injected >= k_InjectCount)
                     break;
+                // 缺口注入（Ctrl+J）：只挑家里这个货见底的市民——vanilla 需求驱动同构形态，
+                // AI 不会当僵尸行程冲掉（R3：无需求注入被无视、改道被周期重规划冲掉 86/141）
+                if (needBased && HouseholdStock(citizen, m_Resource) > 20)
+                    continue;
                 EntityManager.GetBuffer<TripNeeded>(citizen).Add(new TripNeeded
                 {
                     m_TargetAgent = m_Target,
@@ -225,8 +230,20 @@ namespace CityLife.GameBridge
             m_Watch.Add((m_Resource, GetStockOf(m_Company, m_Resource)));
             var nearest = scored.Count > 0 ? math.sqrt(scored[0].d) : 0f;
             var farthest = injected > 0 ? math.sqrt(scored[injected - 1].d) : 0f;
-            Mod.Log.Info($"[ShopSpike] 注入：{ShopName()} 主营={m_Resource}，就近 {injected} 人（{nearest:F0}-{farthest:F0}m），"
+            Mod.Log.Info($"[ShopSpike] {(needBased ? "缺口注入" : "注入")}：{ShopName()} 主营={m_Resource}，就近 {injected} 人（{nearest:F0}-{farthest:F0}m），"
                          + $"目标={(targetCompany ? "公司" : "店面")}，{ControlText()}");
+        }
+
+        /// <summary>市民家庭某资源库存（缺口注入的筛选依据）：无家庭/无条目=0（缺）。</summary>
+        private int HouseholdStock(Entity citizen, Resource res)
+        {
+            if (!EntityManager.HasComponent<HouseholdMember>(citizen))
+                return int.MaxValue; // 无家庭（游客等）不当缺口户
+            var hh = EntityManager.GetComponentData<HouseholdMember>(citizen).m_Household;
+            foreach (var r in EntityManager.GetBuffer<Resources>(hh))
+                if (r.m_Resource == res)
+                    return r.m_Amount;
+            return 0; // 没有该资源条目 = 库存 0（缺）
         }
 
         // —— Ctrl+M 改道（重点）：把正在去别家买同种货的市民（真需求）改道到咱家店 ——
@@ -235,6 +252,7 @@ namespace CityLife.GameBridge
             if (!TryPickShop())
                 return;
             m_Target = m_Shop;
+            BeginWave(); // 先清观测（R3 首跑踩坑：先填快照后 BeginWave，库存观测被清空，成交无法判定）
 
             // 快照全店库存（多资源——改道市民买什么跌什么，观测面铺全）
             foreach (var r in EntityManager.GetBuffer<Resources>(m_Company))
@@ -245,8 +263,6 @@ namespace CityLife.GameBridge
                 if (m_Watch.Count >= 6)
                     break;
             }
-
-            BeginWave();
             int retargeted = 0, skipped = 0;
             var arr = m_ArrivalQuery.ToEntityArray(Allocator.Temp);
             foreach (var citizen in arr)

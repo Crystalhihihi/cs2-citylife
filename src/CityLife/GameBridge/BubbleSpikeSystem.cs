@@ -162,10 +162,13 @@ namespace CityLife.GameBridge
         {
             m_Level = level;
             m_Sampled.Clear(); // 强制重采样
+            m_Diagnose = true; // 下次重采样打一行诊断（相机名/位置/朝向/落点/最近距离）
             if (level == 0)
                 m_BubblesBinding.Update("[]");
             Mod.Log.Info($"[Bubble] 档位 → {(level == 0 ? "关" : LevelCount().ToString())}");
         }
+
+        private bool m_Diagnose;
 
         /// <summary>重采样：离视线落点最近的 creature 取前 N（250m 外丢弃）。</summary>
         private void Resample(Camera cam)
@@ -175,13 +178,25 @@ namespace CityLife.GameBridge
             m_Sampled.Clear();
             var arr = m_ActiveQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
             var scored = new List<(float d, Entity e)>(arr.Length);
+            float nearest = float.MaxValue;
             foreach (var e in arr)
             {
                 var d = math.distancesq(EntityManager.GetComponentData<Transform>(e).m_Position, focus);
+                if (d < nearest)
+                    nearest = d;
                 if (d < k_MaxDist * k_MaxDist)
                     scored.Add((d, e));
             }
             arr.Dispose();
+            if (m_Diagnose)
+            {
+                m_Diagnose = false;
+                var camPos = cam.transform.position;
+                var fwd = cam.transform.forward;
+                Mod.Log.Info($"[Bubble·诊断] cam={cam.name} pos=({camPos.x:F0},{camPos.y:F0},{camPos.z:F0}) "
+                             + $"fwd=({fwd.x:F2},{fwd.y:F2},{fwd.z:F2}) focus=({focus.x:F0},{focus.y:F0},{focus.z:F0}) "
+                             + $"池={arr.Length} 最近={math.sqrt(nearest):F0}m 入圈={scored.Count}");
+            }
             scored.Sort((a, b) => a.d.CompareTo(b.d));
             for (int i = 0; i < scored.Count && i < want; i++)
                 m_Sampled.Add(scored[i].e);

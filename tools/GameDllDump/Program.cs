@@ -127,6 +127,14 @@ Section("购物链路（2026-08-20 实质性 spike：购买行为在哪个系统
     Find("FireStation", fields: false);
     Find("Road", fields: false);
     Find("Abandoned", fields: true);
+    Console.WriteLine();
+    Console.WriteLine("### 商业产出声明补探（2026-08-20 R3.1：\"店卖什么\"不能从存货猜——投入品混入，要读 prefab 产出声明）");
+    Find("IndustrialProcessData", fields: true);
+    Find("ResourceStack", fields: true);
+    Find("CommercialCompany", fields: true);
+    Find("CompanyData", fields: true);
+    Find("ServiceCompanyData", fields: true);
+    Find("Storefront", fields: true);
 });
 
 Section("旅游", () =>

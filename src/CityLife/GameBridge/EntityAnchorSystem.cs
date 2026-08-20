@@ -116,7 +116,7 @@ namespace CityLife.GameBridge
                     continue;
 
                 var pos = EntityManager.GetComponentData<Transform>(building).m_Position;
-                var word = BusinessWord(EntityManager.GetBuffer<Resources>(company));
+                var word = BusinessWord(EntityManager, company, EntityManager.GetBuffer<Resources>(company));
                 string detail = kind == AnchorKind.Hiring ? $"空 {vacancy} 个岗"
                     : kind == AnchorKind.BusinessGood ? "听说赚了"
                     : "听说快撑不住了";
@@ -158,9 +158,17 @@ namespace CityLife.GameBridge
             (Resource.Financial, "银行"), (Resource.Media, "传媒公司"), (Resource.Software, "软件公司"),
         };
 
-        /// <summary>公司主业判定：Resources buffer 里存货最多的非货币资源 → 中文业态词。</summary>
-        private static string BusinessWord(DynamicBuffer<Resources> resources)
+        /// <summary>公司主业判定（2026-08-20 R3.1 修正）：产出声明优先（ShopOutput——存货最多≠卖什么，
+        /// 投入品混入实锤：餐厅 Food 是原料 Meals 才是商品）；拿不到回退 Resources 存货猜测。</summary>
+        private static string BusinessWord(EntityManager em, Entity company, DynamicBuffer<Resources> resources)
         {
+            var output = ShopOutput.OutputOf(em, company);
+            if (output != Resource.NoResource)
+            {
+                foreach (var (res, word) in k_ResourceWords)
+                    if (output == res)
+                        return word;
+            }
             Resource top = Resource.NoResource;
             int best = -1;
             foreach (var r in resources)

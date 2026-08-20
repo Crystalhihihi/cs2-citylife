@@ -162,10 +162,12 @@ namespace CityLife.GameBridge
             return true;
         }
 
-        /// <summary>主营资源 = 存货最多的非货币资源（与锚点系统同一判定）。</summary>
+        /// <summary>主营资源 = 店的商品。产出声明优先（ShopOutput，R3.1 实锤路径）；拿不到回退存货猜测（杂货店类无加工数据的场景）。</summary>
         private bool TryGetTopResource(Entity company, out Resource top)
         {
-            top = Resource.NoResource;
+            top = ShopOutput.OutputOf(EntityManager, company);
+            if (top != Resource.NoResource)
+                return true;
             var best = -1;
             foreach (var r in EntityManager.GetBuffer<Resources>(company))
             {

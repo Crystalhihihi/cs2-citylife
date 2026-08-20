@@ -24,8 +24,11 @@ namespace CityLife.GameBridge
     {
         private OverlayRenderSystem m_Overlay = default!;
         private Game.UI.NameSystem m_NameSystem = default!;
+        private CameraUpdateSystem m_CameraUpdate = default!;
         private Entity m_LabelEntity;
         private bool m_Active;
+        private bool m_LoggedDraw;
+        private bool m_LoggedNoCam;
         private uint m_Frame;
         private uint m_LastKeyFrame;
 
@@ -34,6 +37,9 @@ namespace CityLife.GameBridge
             base.OnCreate();
             m_Overlay = World.GetOrCreateSystemManaged<OverlayRenderSystem>();
             m_NameSystem = World.GetOrCreateSystemManaged<Game.UI.NameSystem>();
+            // 相机走游戏自己的 CameraUpdateSystem.activeCamera（BetterTransitView 源码同款）——
+            // Camera.main 在部分相位为 null 且可能是代理；游戏系统的 activeCamera 才是权威
+            m_CameraUpdate = World.GetOrCreateSystemManaged<CameraUpdateSystem>();
         }
 
         public override int GetUpdateInterval(SystemUpdatePhase phase) => 1;
@@ -79,10 +85,19 @@ namespace CityLife.GameBridge
 
         private void Draw()
         {
-            var cam = Camera.main != null ? Camera.main
+            var cam = m_CameraUpdate.activeCamera != null ? m_CameraUpdate.activeCamera
+                : Camera.main != null ? Camera.main
                 : Camera.allCameras.Length > 0 ? Camera.allCameras[0] : null;
             if (cam == null)
+            {
+                // 永不静默失败（2026-08-21 教训：拿不到相机时静默 return，表现="什么都没画"，排查半天）
+                if (!m_LoggedNoCam || m_Frame % 256 == 0)
+                {
+                    m_LoggedNoCam = true;
+                    Mod.Log.Warn("[BubbleW] Draw 拿不到相机（activeCamera/Camera.main/allCameras 全空）");
+                }
                 return;
+            }
             var camPos = cam.transform.position;
             var fwd = cam.transform.forward;
             var t = fwd.y < -0.001f ? camPos.y / -fwd.y : 100f;
@@ -93,6 +108,12 @@ namespace CityLife.GameBridge
             buffer.DrawCustomMesh(Color.white, pos, 1.2f, 3.6f, OverlayRenderSystem.CustomMeshType.Plane, cam.transform.rotation);
             buffer.DrawText(m_LabelEntity, pos, true); // cameraFace=true 自动面向镜头
             m_Overlay.AddBufferWriter(deps);
+
+            if (!m_LoggedDraw)
+            {
+                m_LoggedDraw = true;
+                Mod.Log.Info($"[BubbleW] 首帧已画 @({pos.x:F0},{pos.y:F0},{pos.z:F0}) cam={cam.name}");
+            }
         }
     }
 }

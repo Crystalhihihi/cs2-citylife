@@ -175,15 +175,28 @@ namespace CityLife.GameBridge
             return "市区";
         }
 
-        /// <summary>命中上报：突发帖入信息流（带锚点）+ 写 LastBreaking（下一炉热议串的引信）。</summary>
+        /// <summary>
+        /// 命中上报：突发帖入信息流（带锚点）+ 写 LastBreaking（下一炉热议串的引信）
+        /// + 快讯炉（LLM 写"城市快讯"媒体快讯帖，requestId 带锚点实体，导演路由发帖）。
+        /// 目击模板帖是即时的，LLM 快讯帖有墙钟延迟——两层并存：先看到事，再看到报道。
+        /// </summary>
         private void Report(Entity e, string kind, string breaking, string postText)
         {
             m_Reported.Add(e);
             m_LastAnyAt = Now;
             Mod.Feed.Record(new Content.Post("现场直击", postText, Content.Topic.Breaking, "live"), e.Index, e.Version);
             Content.LiveContext.LastBreaking = breaking;
+            if (Mod.Gateway != null && !Llm.CliGateway.Mute)
+            {
+                s_BreakingHead ??= Content.PromptBuilder.BuildBreakingHead(); // 拼一次缓存复用（缓存纪律）
+                Mod.Gateway.Enqueue(new Llm.CliRequest(
+                    Content.PromptBuilder.BuildBreakingPrompt(s_BreakingHead, breaking),
+                    Llm.CliPriority.Normal, 120, $"breaking:{e.Index}:{e.Version}")); // 快讯宁缺毋滥，120s 过期
+            }
             Mod.Log.Info($"[News] 突发（{kind}）：{breaking}（{e.Index}:{e.Version}）");
         }
+
+        private static string? s_BreakingHead; // 快讯炉固定头（启动后首报时拼一次）
 
         /// <summary>已报道集合清理：实体不存在（火灭/现场撤除）即移除，防无限涨。</summary>
         private void PruneReported()

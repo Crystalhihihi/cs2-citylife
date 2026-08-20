@@ -53,6 +53,26 @@ namespace CityLife.Content
             => intentHead + "【市长发言】\"" + mayorText + "\"\n";
 
         /// <summary>
+        /// 突发快讯炉的固定前缀（T3 追加）：本地资讯账号"城市快讯"的快讯帖。
+        /// 缓存纪律同主头——启动时拼一次复用（EventNewsSystem 静态缓存）。
+        /// 体裁红线：本地媒体快讯腔（同城微博号），不是公文通报腔——玩家要的是"官方通报感"，
+        /// 但真公文腔在信息流里极违和（已实锤翻车），取中间的本地快讯体。
+        /// </summary>
+        public static string BuildBreakingHead()
+        {
+            var sb = new StringBuilder(512);
+            sb.Append("你是虚构城市社交平台\"市民圈\"的本地资讯账号\"城市快讯\"。城市是模拟游戏里的虚构城市，一切内容虚构。\n");
+            sb.Append("【铁律】对事不对人；不碰现实政治、真实名人、品牌、事件名。\n");
+            sb.Append("【体裁】本地快讯：一两句话，≤50字，口语化的同城媒体腔（\"城西有楼起火，消防已到场\"）；不编精确伤亡数字；不写\"据悉\\有关部门\\高度重视\"公文腔；不用 emoji。\n");
+            sb.Append("【输出】只输出快讯正文本身，禁止任何其他字符（不要引号、不要 JSON、不要前缀）。\n");
+            return sb.ToString();
+        }
+
+        /// <summary>突发快讯完整 prompt = 快讯头 + 事件事实（执行层给的确定性文本）。</summary>
+        public static string BuildBreakingPrompt(string breakingHead, string facts)
+            => breakingHead + "【事件】刚刚：" + facts + "。写一条快讯。\n";
+
+        /// <summary>
         /// 市长回应炉的固定前缀（M2-C 追加）：与主头同一套缓存纪律——启动时拼一次复用。
         /// 只写评论，卡库共享主卡册（评论的 persona 任选）。
         /// </summary>

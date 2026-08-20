@@ -74,6 +74,12 @@ namespace CityLife.GameBridge
             // ① 收炉：LLM 结果 → 解析打捞 → 查重兜底 → 入池（锚点实体+评论串随帖入池，绝不阻塞模拟线程）
             while (Mod.Gateway != null && Mod.Gateway.TryDequeueResult(out var r))
             {
+                // 突发快讯炉走专线路由："城市快讯"账号单帖，requestId 带锚点实体（不占常规批次位）
+                if (r.RequestId != null && r.RequestId.StartsWith("breaking:"))
+                {
+                    HandleBreakingFlash(r);
+                    continue;
+                }
                 // 市长回应炉走专线路由：评论挂到市长帖下，不占常规批次位
                 if (r.RequestId != null && r.RequestId.StartsWith("mayor-reply:"))
                 {
@@ -204,6 +210,40 @@ namespace CityLife.GameBridge
             }
 
             m_Tick++;
+        }
+
+        /// <summary>突发快讯炉结果处理：清洗正文 → "城市快讯"账号单帖入信息流（锚点从 requestId 解析）。</summary>
+        private void HandleBreakingFlash(Llm.CliCompletedResult r)
+        {
+            if (!r.Result.Success)
+            {
+                Mod.Log.Info($"[LLM] 快讯炉失败：{r.Result.Error}");
+                return;
+            }
+            // requestId 契约："breaking:{entityIndex}:{entityVersion}"（EventNewsSystem.Report 发炉时埋的锚点）
+            var parts = r.RequestId.Substring("breaking:".Length).Split(':');
+            var entityIndex = 0;
+            var entityVersion = 0;
+            if (parts.Length == 2)
+            {
+                int.TryParse(parts[0], out entityIndex);
+                int.TryParse(parts[1], out entityVersion);
+            }
+
+            // 正文清洗（模型不守规矩也兜得住）：去引号/换行/JSON 残壳，只留第一行，超长硬截
+            var text = r.Result.Text.Trim();
+            var nl = text.IndexOf('\n');
+            if (nl > 0)
+                text = text.Substring(0, nl);
+            text = text.Trim().Trim('"', '"', '"', '{', '}').Trim();
+            if (text.Length == 0)
+                return;
+            if (text.Length > 80)
+                text = text.Substring(0, 80);
+
+            Mod.Feed.Record(new Content.Post("城市快讯", text, Content.Topic.Breaking, "newsflash"),
+                            entityIndex, entityVersion);
+            Mod.Log.Info($"[LLM] 快讯帖：{text.Substring(0, System.Math.Min(24, text.Length))}…");
         }
 
         /// <summary>市长回应炉结果处理：解析评论 → 逐条挂到市长帖（按 seq）。</summary>

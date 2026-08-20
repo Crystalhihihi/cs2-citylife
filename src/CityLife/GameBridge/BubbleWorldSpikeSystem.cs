@@ -27,6 +27,8 @@ namespace CityLife.GameBridge
         private bool m_ShadersDumped;
         private Font? m_Font;
         private GameObject? m_Bubble;
+        private MeshFilter? m_BubbleFilter;
+        private MeshFilter? m_TextGen;
         private bool m_Active;
         private uint m_Frame;
         private uint m_LastKeyFrame;
@@ -52,6 +54,13 @@ namespace CityLife.GameBridge
             // Camera.main 在某些阶段为 null，退 allCameras[0]）
             if (m_Active && m_Bubble != null)
             {
+                // TextMesh 网格懒生成：创建时可能为 null，生成后补挂（2026-08-20 NRE 实锤）
+                if (m_BubbleFilter != null && m_BubbleFilter.sharedMesh == null
+                    && m_TextGen != null && m_TextGen.sharedMesh != null)
+                {
+                    m_BubbleFilter.sharedMesh = m_TextGen.sharedMesh;
+                    Mod.Log.Info("[BubbleW] TextMesh 网格已补挂");
+                }
                 var cam = Camera.main != null ? Camera.main
                     : Camera.allCameras.Length > 0 ? Camera.allCameras[0] : null;
                 if (cam != null)
@@ -117,9 +126,11 @@ namespace CityLife.GameBridge
                 return;
             }
 
-            // TextMesh 只借网格（文本网格+Font 图集），不渲染本体
+            // TextMesh 只借网格（文本网格+Font 图集），不渲染本体。
+            // 踩坑（2026-08-20 NRE）：本环境 AddComponent<TextMesh> 不带 MeshFilter——必须显式先加
             var tmGo = new GameObject("CityLifeBubbleTextGen");
             tmGo.hideFlags = HideFlags.HideAndDontSave;
+            var tmf = tmGo.AddComponent<MeshFilter>();
             var tm = tmGo.AddComponent<TextMesh>();
             tm.text = "吃了吗";
             tm.font = m_Font;
@@ -127,12 +138,18 @@ namespace CityLife.GameBridge
             tm.anchor = TextAnchor.LowerCenter; // 以锚点（头顶）为底边中点
             tm.alignment = TextAlignment.Center;
             tm.characterSize = 0.25f; // 世界尺寸（一格 0.25m）
-            var mesh = tmGo.GetComponent<MeshFilter>().sharedMesh;
+            m_TextGen = tmf;
 
             var shader = PickShader();
             if (shader == null)
             {
                 Mod.Log.Warn("[BubbleW] 无可用着色器（文本候选与 HDRP/Unlit 都没找到）");
+                Object.Destroy(tmGo);
+                return;
+            }
+            if (m_Font.material == null)
+            {
+                Mod.Log.Warn("[BubbleW] 字体材质为空（字体无效）");
                 Object.Destroy(tmGo);
                 return;
             }
@@ -144,10 +161,13 @@ namespace CityLife.GameBridge
 
             m_Bubble = new GameObject("CityLifeBubbleW");
             m_Bubble.hideFlags = HideFlags.HideAndDontSave;
-            m_Bubble.AddComponent<MeshFilter>().sharedMesh = mesh;
+            m_BubbleFilter = m_Bubble.AddComponent<MeshFilter>();
+            m_BubbleFilter.sharedMesh = tmf.sharedMesh; // 可能为 null（懒生成），OnUpdate 补挂
             m_Bubble.AddComponent<MeshRenderer>().sharedMaterial = mat;
             m_Bubble.transform.position = new Vector3(pos.x, pos.y, pos.z);
             m_Active = true;
+            if (tmf.sharedMesh == null)
+                Mod.Log.Info("[BubbleW] TextMesh 网格待生成，OnUpdate 补挂");
             Mod.Log.Info($"[BubbleW] 单气泡已创建 @({pos.x:F0},{pos.y:F0},{pos.z:F0}) shader={shader.name} fontTex={m_Font.material.mainTexture?.GetType().Name}");
         }
 
@@ -171,15 +191,35 @@ namespace CityLife.GameBridge
             mat.renderQueue = 3000;
         }
 
-        /// <summary>CJK 字体：微软雅黑（Windows 必带），回退 OS 字体名。mod 不打包字体文件。</summary>
+        /// <summary>CJK 字体：候选名轮试（雅黑中英文/黑体/宋体/Noto），全灭则枚举 OS 字体打日志留证。</summary>
         private static Font? CreateCjkFont()
         {
-            try { return new Font("msyh"); }
-            catch
+            foreach (var name in new[] { "msyh", "Microsoft YaHei", "SimHei", "SimSun", "Noto Sans SC" })
             {
-                try { return Font.CreateDynamicFontFromOSFont("Microsoft YaHei", 32); }
-                catch { return null; }
+                try
+                {
+                    var f = Font.CreateDynamicFontFromOSFont(name, 64);
+                    if (f != null && f.material != null)
+                    {
+                        Mod.Log.Info($"[BubbleW] CJK 字体就绪：{name}");
+                        return f;
+                    }
+                }
+                catch { }
             }
+            try
+            {
+                var names = Font.GetOSInstalledFontNames();
+                var sb = new StringBuilder();
+                for (int i = 0; i < names.Length && i < 24; i++)
+                {
+                    if (i > 0) sb.Append(", ");
+                    sb.Append(names[i]);
+                }
+                Mod.Log.Warn($"[BubbleW] OS 字体候选全灭，已安装字体前 24：{sb}");
+            }
+            catch { }
+            return null;
         }
     }
 }

@@ -14,23 +14,24 @@
 }
 
 /* 聊天气泡基座：布局/字体/阴影/补间/尾巴形状共享；颜色按类型变体（人白/车淡蓝/楼淡黄）。
-   transition 补间：C# 推送已节流 10Hz，中间帧由它插值——治"一卡一卡"；
-   animation 入场：新气泡淡入微浮起（同一 key 内换文案不重播） */
+   transition 补间：C# 推送 30Hz，中间帧由它插值（外挂感/跟随脱节的折中）；
+   animation 入场：新气泡淡入微浮起（同一 key 内换文案不重播）；
+   高亮：1.5px 边框 + 同色辉光（2026-08-20 玩家反馈"没有边框高亮的东西"） */
 .bubble {
     position: absolute;
     transform: translate(-50%, -100%);  /* 以锚点（头顶）为底边中点 */
-    border: 1px solid;
-    border-radius: 10px;
-    padding: 3px 9px;
-    font-size: 12px;
-    line-height: 18px;
+    border: 1.5px solid;
+    border-radius: 11px;
+    padding: 4px 11px;
+    font-size: 13px;
+    font-weight: bold;
+    line-height: 20px;
     white-space: nowrap;
-    max-width: 180px;
+    max-width: 200px;
     overflow: hidden;
     text-overflow: ellipsis;
     pointer-events: none;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);
-    transition: left 0.1s linear, top 0.1s linear;
+    transition: left 0.05s linear, top 0.05s linear;
     animation: bubbleIn 0.25s ease-out;
 }
 
@@ -44,34 +45,37 @@
     content: "";
     position: absolute;
     left: 50%;
-    bottom: -5px;
+    bottom: -6px;
     margin-left: -4px;
     border-left: 4px solid transparent;
     border-right: 4px solid transparent;
-    border-top-width: 5px;
+    border-top-width: 6px;
     border-top-style: solid;
 }
 
 /* 人：白 */
 .bubblePerson {
-    background-color: rgba(255, 255, 255, 0.94);
-    border-color: rgba(0, 0, 0, 0.12);
+    background-color: rgba(255, 255, 255, 0.95);
+    border-color: rgba(30, 40, 60, 0.4);
     color: rgba(26, 30, 38, 0.95);
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.3), 0 0 7px rgba(255, 255, 255, 0.45);
 }
-.bubblePerson::after { border-top-color: rgba(255, 255, 255, 0.94); }
+.bubblePerson::after { border-top-color: rgba(255, 255, 255, 0.95); }
 
 /* 车：淡蓝 */
 .bubbleCar {
-    background-color: rgba(205, 228, 255, 0.94);
-    border-color: rgba(80, 130, 200, 0.45);
+    background-color: rgba(205, 228, 255, 0.95);
+    border-color: rgba(60, 115, 195, 0.65);
     color: rgba(23, 44, 74, 0.95);
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.3), 0 0 7px rgba(120, 170, 240, 0.5);
 }
-.bubbleCar::after { border-top-color: rgba(205, 228, 255, 0.94); }
+.bubbleCar::after { border-top-color: rgba(205, 228, 255, 0.95); }
 
 /* 楼：淡黄 */
 .bubbleBuilding {
-    background-color: rgba(255, 243, 196, 0.94);
-    border-color: rgba(190, 150, 60, 0.45);
+    background-color: rgba(255, 243, 196, 0.95);
+    border-color: rgba(185, 145, 50, 0.65);
     color: rgba(74, 58, 18, 0.95);
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.3), 0 0 7px rgba(240, 210, 110, 0.5);
 }
-.bubbleBuilding::after { border-top-color: rgba(255, 243, 196, 0.94); }
+.bubbleBuilding::after { border-top-color: rgba(255, 243, 196, 0.95); }

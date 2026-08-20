@@ -56,14 +56,18 @@ namespace CityLife.GameBridge
         private int m_FpsFrames;
         private float m_FpsTimer;
 
-        // 占位文案池（正式版换成内容管道；车/楼已混入环境声——玩家"热闹感"设想的 spike 预览：
-        // 车的滴滴/轰油门、楼里的电视/装修/快递，环境声也是气泡文本的一种）
+        // 占位文案池（正式版换成内容管道，且按载具/建筑类型分池——玩家实机提点：
+        // 自行车/摩托/货车/公交/出租/船/火车 × 住宅/商业/办公/公园/公服，各有各的话）。
+        // 车池只用中性话（出租车专属台词已拿掉——私家车不说出租车话）；
+        // 楼分住宅池/公园池（公园不喊电视声）；环境声混入（车的滴滴/轰油门=热闹感预览）
         private static readonly string[] k_Texts =
             { "……", "吃了吗", "今天这公交又晚点了，离谱", "风好大", "快走要迟到了", "这店排队也太长了", "听说东区新开了家店" };
         private static readonly string[] k_CarTexts =
-            { "嘀嘀——", "又堵了", "轰——", "师傅前面路口下" };
+            { "嘀嘀——", "又堵了", "轰——", "前面路口慢点" };
         private static readonly string[] k_BuildingTexts =
-            { "……", "晚饭吃啥", "电视小点声！", "装修第三天了", "快递放门口" };
+            { "……", "晚饭吃啥", "电视小点声！", "装修第三天了", "快递放门口", "楼上又拖椅子" };
+        private static readonly string[] k_ParkTexts =
+            { "风一吹真舒服", "鸽子真多", "遛弯第三圈了", "这花开得不错" };
 
         protected override void OnCreate()
         {
@@ -139,9 +143,9 @@ namespace CityLife.GameBridge
             }
             if (m_Frame % 512 == 0 || m_Sampled.Count == 0)
                 Resample(cam);
-            // 推送节流（2026-08-20 玩家实机"一卡一卡"）：每帧全量重推 JSON+React 重绘几百 div 是
-            // 卡顿根因——改 10Hz 推送，中间帧由 BubbleLayer 的 CSS transition 补间（顺滑且更省）
-            if (m_Frame % 6 == 0)
+            // 推送 30Hz（2026-08-20 玩家实机"外挂感/跟随脱节"：10Hz+0.1s 过渡在快移视角必然脱离；
+            // 中间帧由 CSS transition 0.05s 补间——跟踪保真与渲染成本的折中，正式版再评直连 DOM）
+            if (m_Frame % 2 == 0)
                 PushBubbles(cam);
             m_Frame++;
         }
@@ -283,7 +287,10 @@ namespace CityLife.GameBridge
                     tb.nextAt = now + HoldFor(e.Index, tb.textIdx);
                     m_Tracked[e] = tb;
                 }
-                var pool = kind == 0 ? k_Texts : kind == 1 ? k_CarTexts : k_BuildingTexts;
+                var pool = kind == 0 ? k_Texts
+                    : kind == 1 ? k_CarTexts
+                    : EntityManager.HasComponent<Game.Buildings.AttractivenessProvider>(e) ? k_ParkTexts // 楼分池：公园不喊电视声
+                    : k_BuildingTexts;
                 var text = pool[(e.Index + tb.textIdx) % pool.Length]; // 同一人按自己的集数换台词
 
                 if (!first) sb.Append(',');
@@ -299,8 +306,8 @@ namespace CityLife.GameBridge
             m_BubblesBinding.Update(sb.ToString());
         }
 
-        /// <summary>气泡驻留时长（3-8s，确定性错相：实体×集数散列——全屏绝不同时切换）。</summary>
+        /// <summary>气泡驻留时长（6-15s，确定性错相：实体×集数散列——全屏绝不同时切换；3-8s 玩家实测太快）。</summary>
         private static float HoldFor(int entityIndex, int textIdx)
-            => 3f + ((entityIndex * 7919 + textIdx * 104729) % 500) / 100f;
+            => 6f + ((entityIndex * 7919 + textIdx * 104729) % 900) / 100f;
     }
 }

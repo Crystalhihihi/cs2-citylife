@@ -93,9 +93,22 @@ namespace CityLife.GameBridge
             }
 
             if (m_Frame % 512 == 0 || m_Sampled.Count == 0)
-                Resample(cam.transform.position);
+                Resample(cam);
             PushBubbles(cam);
             m_Frame++;
+        }
+
+        /// <summary>
+        /// 采样锚点 = 视线中心射线与地平面（y≈0）的交点。
+        /// 实机踩坑（2026-08-20）：锚点用镜头位置（在天上）时，"市民到镜头 <250m" 永远为零——
+        /// 一个气泡都出不来；必须按"看向哪"采样而不是"镜头在哪"。
+        /// </summary>
+        private static float3 FocusPoint(Camera cam)
+        {
+            var camPos = cam.transform.position;
+            var fwd = cam.transform.forward;
+            var t = fwd.y < -0.001f ? camPos.y / -fwd.y : 0f;
+            return camPos + fwd * t;
         }
 
         private int LevelCount() => m_Level == 1 ? 100 : m_Level == 2 ? 300 : 600;
@@ -109,16 +122,17 @@ namespace CityLife.GameBridge
             Mod.Log.Info($"[Bubble] 档位 → {(level == 0 ? "关" : LevelCount().ToString())}");
         }
 
-        /// <summary>重采样：离镜头最近的市民取前 N（250m 外丢弃）。</summary>
-        private void Resample(float3 camPos)
+        /// <summary>重采样：离视线落点最近的市民取前 N（250m 外丢弃）。</summary>
+        private void Resample(Camera cam)
         {
+            var focus = FocusPoint(cam);
             var want = LevelCount();
             m_Sampled.Clear();
             var arr = m_CitizenQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
             var scored = new List<(float d, Entity e)>(arr.Length);
             foreach (var e in arr)
             {
-                var d = math.distancesq(EntityManager.GetComponentData<Transform>(e).m_Position, camPos);
+                var d = math.distancesq(EntityManager.GetComponentData<Transform>(e).m_Position, focus);
                 if (d < k_MaxDist * k_MaxDist)
                     scored.Add((d, e));
             }

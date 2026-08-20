@@ -100,6 +100,9 @@ namespace CityLife
             // M2-A 信息流面板：UI 数据桥挂 UIUpdate 阶段
             // （先例 city-storytelling-mod PromptUISystem / 官方 UI 系统均注册在此阶段）
             updateSystem.UpdateAt<GameBridge.CityLifeUISystem>(SystemUpdatePhase.UIUpdate);
+
+            // M3-spike：气泡渲染管线验证（Ctrl+1/2/3=100/300/600 个，Ctrl+0=关；日志 [Bubble] FPS avg）
+            updateSystem.UpdateAt<GameBridge.BubbleSpikeSystem>(SystemUpdatePhase.UIUpdate);
         }
 
         public void OnDispose()

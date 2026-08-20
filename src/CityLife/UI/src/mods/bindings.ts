@@ -49,6 +49,10 @@ export const eventConfirmResult = (id: number, accept: boolean, venueIdx: number
 export const pickVenue = (id: number, index: number, version: number) =>
     trigger("CityLife", "pickVenue", `${id}:${index}:${version}`);
 
+// M3-spike 气泡层：JSON [{"x":12.3,"y":45.6,"t":"……"}]，坐标为屏宽/屏高百分比（免疫 UI 缩放/DPI，
+// y 已翻转为 CSS 自上而下）。C# 每帧重推（spike 压测最坏情况）；空数组 = 不显示。
+export const bubblesBinding = bindValue<string>("CityLife", "bubbles", "[]");
+
 // 帖子结构（短键名与 FeedStore.ToJson 对应；e/c 为 v2 新增可选键，向后兼容 M2-A 数据）
 export interface FeedPost {
     a: string;               // 作者

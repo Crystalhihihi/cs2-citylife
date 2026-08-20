@@ -1,0 +1,31 @@
+/* M3-spike 气泡层（"Game" overlay）：整层 pointer-events:none（不挡任何游戏操作），
+   z-index 低于活动确认弹窗（1000）。显式指定中文字体（豆腐块教训）。 */
+
+.layer {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    pointer-events: none;
+    z-index: 500;
+    font-family: "Noto Sans SC";
+    overflow: hidden;               /* 屏外余量裁掉，防气泡把层撑出滚动条 */
+}
+
+.bubble {
+    position: absolute;
+    transform: translate(-50%, -100%);  /* 以锚点（头顶）为底边中点 */
+    background-color: rgba(20, 24, 30, 0.85);
+    color: rgba(240, 242, 245, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 2px 8px;
+    font-size: 12px;
+    line-height: 18px;
+    white-space: nowrap;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+}

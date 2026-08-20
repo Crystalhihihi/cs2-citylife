@@ -33,6 +33,9 @@ namespace CityLife.GameBridge
         private List<Content.Assignment> m_CurrentAssigned = new();
         private readonly List<Entity> m_CurrentAnchorEntities = new(); // 与 m_CurrentAssigned 对齐（Null=无锚点）
         private readonly List<string?> m_CurrentCitizenNames = new();  // 与 m_CurrentAssigned 对齐（null=卡名/回退路径）
+        private readonly List<int> m_CurrentSerial = new();            // 与 m_CurrentAssigned 对齐（-1=非连续剧席位）
+        private readonly List<Content.SerialCharacter> m_Cast = new(); // 连续剧剧组（M5 v1）
+        private int m_CastSeed;
         private readonly Queue<string> m_Recent = new();  // 已发帖子正文（去重反馈，RimTalk TalkHistory 移植）
         private readonly Dictionary<string, string> m_LastByPersona = new(); // 人格卡→上集正文（连载机制，超 32 清空重来）
 
@@ -151,6 +154,14 @@ namespace CityLife.GameBridge
                             new Content.Post(mainAuthor, item.Text, m_BatchTopic, item.PersonaId),
                             anchor == Entity.Null ? null : (object)anchor,
                             comments));
+
+                        // 连续剧收炉：推进角色集数并记下本集正文（下炉前情）
+                        var serialIdx = idx < m_CurrentSerial.Count ? m_CurrentSerial[idx] : -1;
+                        if (serialIdx >= 0)
+                        {
+                            m_Cast[serialIdx].Episode++;
+                            m_Cast[serialIdx].LastText = item.Text;
+                        }
                         kept++;
                         idx++;
                     }
@@ -222,6 +233,7 @@ namespace CityLife.GameBridge
                 // 热帖抽签：请愿/突发必热；平时每 7 炉带一炉热帖（大事件/随机对喷，2026-08-19 玩家定案分布）
                 var hotOne = petition != null || breaking != null || m_BatchCount % 7 == 3;
                 m_CurrentAssigned = PickAssigned(k_BatchSize, hotOne);
+                ApplySerialCast(); // 连续剧（M5 v1）：末两席给剧组角色（故事线分集推进，完结退休补新人）
                 var anchorTexts = AssignAnchors(); // 实体锚点：吐槽/求助/盘点席位优先（减半+方位剥前缀，2026-08-20 反馈）
                 var prevPosts = CollectPrevPosts(); // 连载机制：有前情的席位喂回上集
                 var citizenCtx = AssignCitizenContexts(); // 市民语境：每席位一个真实市民的当下（处境进 prompt、真名随炉署名）
@@ -354,12 +366,83 @@ namespace CityLife.GameBridge
             }
         }
 
-        /// <summary>连载机制：收集当前分配里有人格卡前情的席位的上集正文（无则 null）。</summary>
+        /// <summary>剧组规模（同时在线的连续剧角色数）。</summary>
+        private const int k_MaxCast = 4;
+
+        /// <summary>
+        /// 连续剧（M5 v1）：末两席给剧组角色——固定人格卡（声音可辨认）+ 连载形态；
+        /// 席位→角色映射进 m_CurrentSerial，处境/前情/收炉三处对齐消费。角色完结即退休补新人。
+        /// </summary>
+        private void ApplySerialCast()
+        {
+            m_CurrentSerial.Clear();
+            for (int i = 0; i < m_CurrentAssigned.Count; i++)
+                m_CurrentSerial.Add(-1);
+
+            EnsureCast();
+            var serialForm = System.Array.Find(Content.PostForms.All, f => f.Id == "连载");
+            if (serialForm == null || m_Cast.Count == 0)
+                return;
+
+            for (int s = 0; s < System.Math.Min(2, m_Cast.Count); s++)
+            {
+                var slot = m_CurrentAssigned.Count - 1 - s; // 末两席（避开前部 Always 固定位）
+                m_CurrentAssigned[slot] = new Content.Assignment(m_Cast[s].Card, serialForm, 2 + (int)(m_BatchCount % 2));
+                m_CurrentSerial[slot] = s;
+            }
+        }
+
+        /// <summary>剧组维护：完结退休 + 从市民池补新人（真名唯一、非 Always 卡）。</summary>
+        private void EnsureCast()
+        {
+            m_Cast.RemoveAll(c => c.IsDone);
+            var pool = m_CitizenPool.Entries;
+            var guard = 0;
+            while (m_Cast.Count < k_MaxCast && pool.Count > 0 && guard++ < 64)
+            {
+                var entry = pool[m_CastSeed++ % pool.Count];
+                if (m_Cast.Exists(c => c.Name == entry.Name))
+                    continue;
+                Content.Persona? card = null;
+                for (int k = 0; k < m_Personas.Count; k++)
+                {
+                    var c = m_Personas[(m_CastSeed + k) % m_Personas.Count];
+                    if (!c.Always)
+                    {
+                        card = c;
+                        break;
+                    }
+                }
+                if (card == null)
+                    return;
+                var (story, hint) = Content.SerialStories.Pick(m_CastSeed);
+                var maxEp = 4 + m_CastSeed % 4;
+                m_Cast.Add(new Content.SerialCharacter
+                {
+                    Name = entry.Name,
+                    Card = card,
+                    Story = story,
+                    StoryHint = hint,
+                    Episode = 0,
+                    MaxEpisodes = maxEp,
+                });
+                Mod.Log.Info($"[Serial] 新角色进组：{entry.Name}《{story}》（卡 {card.Id}，共 {maxEp} 集）");
+            }
+        }
+        /// <summary>连载机制：收集席位的上集正文（连续剧席位取角色上集；其余取人格卡前情，无则 null）。</summary>
         private List<string?> CollectPrevPosts()
         {
             var list = new List<string?>(m_CurrentAssigned.Count);
-            foreach (var a in m_CurrentAssigned)
-                list.Add(m_LastByPersona.TryGetValue(a.Persona.Id, out var prev) ? prev : null);
+            for (int i = 0; i < m_CurrentAssigned.Count; i++)
+            {
+                var serialIdx = i < m_CurrentSerial.Count ? m_CurrentSerial[i] : -1;
+                if (serialIdx >= 0)
+                {
+                    list.Add(m_Cast[serialIdx].LastText);
+                    continue;
+                }
+                list.Add(m_LastByPersona.TryGetValue(m_CurrentAssigned[i].Persona.Id, out var prev) ? prev : null);
+            }
             return list;
         }
 
@@ -375,6 +458,15 @@ namespace CityLife.GameBridge
             var pool = m_CitizenPool.Entries;
             for (int i = 0; i < m_CurrentAssigned.Count; i++)
             {
+                // 连续剧席位：角色本人 + 故事线处境（完结季带"大结局"）
+                var serialIdx = i < m_CurrentSerial.Count ? m_CurrentSerial[i] : -1;
+                if (serialIdx >= 0)
+                {
+                    var ch = m_Cast[serialIdx];
+                    contexts.Add(ch.StoryHint + (ch.IsFinaleNext ? "（大结局）" : ""));
+                    m_CurrentCitizenNames.Add(ch.Name);
+                    continue;
+                }
                 if (m_CurrentAssigned[i].Persona.Always || pool.Count == 0)
                 {
                     contexts.Add(null);

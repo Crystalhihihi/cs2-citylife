@@ -161,14 +161,15 @@ namespace CityLife.GameBridge
             m_Target = targetCompany ? m_Company : m_Shop;
             var shopPos = EntityManager.GetComponentData<Transform>(m_Shop).m_Position;
 
-            // 就近取 30 人（按当前位置到店的距离²排序——治第一轮"全城徒步走不到"的无效实验）
+            // 就近取 30 人（按当前位置到店的距离²排序——治第一轮"全城徒步走不到"的无效实验；
+            // 位置走回退链：市民在建筑里/车上时位置不挂本人实体——2026-08-20 实机注入 0 人的根因）
             var citizens = m_CitizenQuery.ToEntityArray(Allocator.Temp);
             var scored = new List<(float d, Entity e)>(citizens.Length);
             foreach (var c in citizens)
             {
-                if (!EntityManager.HasComponent<Transform>(c))
+                if (!TryGetPos(c, out var p))
                     continue;
-                scored.Add((math.distancesq(EntityManager.GetComponentData<Transform>(c).m_Position, shopPos), c));
+                scored.Add((math.distancesq(p, shopPos), c));
             }
             citizens.Dispose();
             scored.Sort((a, b) => a.d.CompareTo(b.d));
@@ -286,6 +287,27 @@ namespace CityLife.GameBridge
                 && m_PrefabSystem.TryGetPrefab(EntityManager.GetComponentData<PrefabRef>(m_Shop).m_Prefab, out PrefabBase prefab))
                 return prefab.name;
             return "?";
+        }
+
+        /// <summary>市民位置回退链：本人 Transform → 所在建筑的 Transform（市民在建筑里/车上时位置不挂本人实体）。</summary>
+        private bool TryGetPos(Entity citizen, out float3 pos)
+        {
+            if (EntityManager.HasComponent<Transform>(citizen))
+            {
+                pos = EntityManager.GetComponentData<Transform>(citizen).m_Position;
+                return true;
+            }
+            if (EntityManager.HasComponent<CurrentBuilding>(citizen))
+            {
+                var b = EntityManager.GetComponentData<CurrentBuilding>(citizen).m_CurrentBuilding;
+                if (b != Entity.Null && EntityManager.HasComponent<Transform>(b))
+                {
+                    pos = EntityManager.GetComponentData<Transform>(b).m_Position;
+                    return true;
+                }
+            }
+            pos = default;
+            return false;
         }
 
         private int GetStockOf(Resource res)

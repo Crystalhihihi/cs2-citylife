@@ -220,9 +220,10 @@ namespace CityLife.GameBridge
                 // 热帖抽签：请愿/突发必热；平时每 7 炉带一炉热帖（大事件/随机对喷，2026-08-19 玩家定案分布）
                 var hotOne = petition != null || breaking != null || m_BatchCount % 7 == 3;
                 m_CurrentAssigned = PickAssigned(k_BatchSize, hotOne);
-                var anchorTexts = AssignAnchors(); // 实体锚点：吐槽/求助/盘点席位优先
+                var anchorTexts = AssignAnchors(); // 实体锚点：吐槽/求助/盘点席位优先（减半+方位剥前缀，2026-08-20 反馈）
                 var prevPosts = CollectPrevPosts(); // 连载机制：有前情的席位喂回上集
                 var citizenCtx = AssignCitizenContexts(); // 市民语境：每席位一个真实市民的当下（处境进 prompt、真名随炉署名）
+                var slotTopics = AssignSlotTopics(); // 话题分区制：Daily 炉每席位独立抽题（一帖一题）
                 // 市长发言上下文：一条发言影响随后 3 炉（写回层是 M4，这里只到舆情）
                 string? mayorCtx = null;
                 if (Content.LiveContext.MayorBatchesLeft > 0)
@@ -242,7 +243,7 @@ namespace CityLife.GameBridge
                     m_Head, snapshot, m_BatchTopic, m_CurrentAssigned,
                     new List<string>(m_Recent), m_BatchCount, anchorTexts, prevPosts,
                     breaking, mayorCtx, outcomeCtx, Content.LiveContext.OngoingEvent,
-                    petition, petitionResolvedCtx, citizenCtx);
+                    petition, petitionResolvedCtx, citizenCtx, slotTopics);
                 Mod.Gateway.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Normal, 600));
                 m_BatchPending = true;
                 m_BatchCount++;
@@ -385,8 +386,20 @@ namespace CityLife.GameBridge
             return contexts;
         }
 
+        /// <summary>每席位话题（分区制）：仅 Daily 炉给题；突发/请愿等主题炉全炉一题，返回 null 不占位。</summary>
+        private List<string?> AssignSlotTopics()
+        {
+            var list = new List<string?>(m_CurrentAssigned.Count);
+            var daily = m_BatchTopic == Content.Topic.Daily;
+            for (int i = 0; i < m_CurrentAssigned.Count; i++)
+                list.Add(daily ? Content.PromptBuilder.DailyTopicFor(m_BatchCount, i) : null);
+            return list;
+        }
+
         /// <summary>
         /// 实体锚点分配：吐槽/求助/盘点形态优先挂锚（这些形状吃具体对象），轮换取锚防总写同一家店。
+        /// 2026-08-20 玩家反馈"全是城西北那家"后：**锚点减半**（每席位 1/2 概率）+ **2/3 剥掉方位前缀**
+        /// （方位留在实体上供"前往现场"，prompt 文本少念地名）；prompt 侧另有"别复读锚名"约束。
         /// 返回与 m_CurrentAssigned 对齐的锚点文本表；同步填 m_CurrentAnchorEntities（收炉时随帖入池）。
         /// </summary>
         private List<string?> AssignAnchors()
@@ -396,14 +409,20 @@ namespace CityLife.GameBridge
             var anchors = m_AnchorSystem.Anchors;
             var cursor = anchors.Count > 0 ? (int)(m_BatchCount % (uint)anchors.Count) : 0;
 
-            foreach (var a in m_CurrentAssigned)
+            for (int i = 0; i < m_CurrentAssigned.Count; i++)
             {
-                var wantsAnchor = a.Form.Id == "吐槽" || a.Form.Id == "求助" || a.Form.Id == "盘点";
+                var form = m_CurrentAssigned[i].Form.Id;
+                var wantsAnchor = (form == "吐槽" || form == "求助" || form == "盘点")
+                                  && (m_BatchCount + i) % 2 == 0; // 锚点减半
                 if (wantsAnchor && anchors.Count > 0)
                 {
                     var anchor = anchors[cursor % anchors.Count];
                     cursor++;
-                    texts.Add(anchor.PromptText);
+                    // 2/3 剥方位前缀（"那家便利店（空 3 个岗）"），1/3 保留方位（城市有区感）
+                    var text = (m_BatchCount + i) % 3 != 0
+                        ? StripDirection(anchor.Label) + "（" + anchor.Detail + "）"
+                        : anchor.PromptText;
+                    texts.Add(text);
                     m_CurrentAnchorEntities.Add(anchor.Entity);
                 }
                 else
@@ -413,6 +432,18 @@ namespace CityLife.GameBridge
                 }
             }
             return texts;
+        }
+
+        // 方位前缀表（长前缀在前防误剥："城东北"先于"城东"）
+        private static readonly string[] k_DirectionPrefixes =
+            { "城东北", "城西北", "城西南", "城东南", "市中心", "城东", "城北", "城西", "城南" };
+
+        private static string StripDirection(string label)
+        {
+            foreach (var p in k_DirectionPrefixes)
+                if (label.StartsWith(p))
+                    return label.Substring(p.Length);
+            return label;
         }
 
         /// <summary>

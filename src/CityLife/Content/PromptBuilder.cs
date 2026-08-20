@@ -140,13 +140,15 @@ namespace CityLife.Content
                                         string? breaking = null, string? mayorContext = null,
                                         string? eventOutcome = null, string? ongoingEvent = null,
                                         string? petition = null, string? petitionResolved = null,
-                                        IReadOnlyList<string?>? contexts = null)
+                                        IReadOnlyList<string?>? contexts = null,
+                                        IReadOnlyList<string?>? topics = null)
         {
             var sb = new StringBuilder(head.Length + 896);
             sb.Append(head);
             sb.Append("【城市此刻】").Append(DescribeCity(s)).Append('\n');
             sb.Append("【本轮话题】").Append(DescribeTopic(topic, s, seed)).Append('\n');
             sb.Append("【分配】").Append(assigned.Count).Append(" 条：");
+            var anyTopic = false;
             for (int i = 0; i < assigned.Count; i++)
             {
                 sb.Append(i + 1).Append('=').Append(assigned[i].Persona.Id)
@@ -155,6 +157,13 @@ namespace CityLife.Content
                 // 处境：市民语境池（真实市民的当下）优先，池空回退罐头处境池
                 var ctx = contexts != null && i < contexts.Count ? contexts[i] : null;
                 sb.Append('（').Append(ctx ?? k_Contexts[(int)((seed + (uint)i) % (uint)k_Contexts.Length)]).Append('）');
+                // 话题：每席位独立抽题（分区制——真实社区一帖一题，2026-08-20 玩家定案）
+                var slotTopic = topics != null && i < topics.Count ? topics[i] : null;
+                if (!string.IsNullOrEmpty(slotTopic))
+                {
+                    sb.Append('（').Append("题：").Append(slotTopic).Append('）');
+                    anyTopic = true;
+                }
                 var anchor = anchors != null && i < anchors.Count ? anchors[i] : null;
                 if (!string.IsNullOrEmpty(anchor))
                     sb.Append('（').Append("锚：").Append(anchor).Append('）');
@@ -162,8 +171,10 @@ namespace CityLife.Content
             }
             sb.Append('\n');
             sb.Append("【处境】分配里（…）括注是发帖人此刻的真实状态（谁、在干嘛——真实市民采样）。就照这个人的处境写，别解释别介绍。\n");
+            if (anyTopic)
+                sb.Append("【话题】带（题：…）的帖子写自己那题，各写各的，别串题。\n");
             if (anchors != null)
-                sb.Append("【锚点】带（锚：…）的帖子围绕那个具体对象写（可一笔带过，别编与它矛盾的细节）；没带的自由发挥。\n");
+                sb.Append("【锚点】带（锚：…）的帖子围绕那个具体对象写（可一笔带过，别编与它矛盾的细节）；别逐字复读锚点名，别总把方位挂嘴边（\"那家店\"\"公司楼下\"或干脆不提都行）。没带的自由发挥。\n");
             if (prevPosts != null)
             {
                 // 连载机制：有前情的席位喂回上集正文，允许（不强制）用"更新：/后续："续写
@@ -217,17 +228,26 @@ namespace CityLife.Content
             return $"人口{FuzzPeople(s.Citizens)}，失业率{Qual(s.UnemploymentPercent, 5f, 12f)}，幸福度{Qual(s.Happiness, 40f, 70f)}，天气{weather}，季节{season}，时刻{s.HourOfDay}点";
         }
 
-        // Daily 生活话题池（"日常，没有大事"零素材导致模型只能围着天气写的教训）：
-        // 常青生活流话题，执行层按 seed 轮换，与天气解耦
-        private static readonly string[] k_DailyTopics =
+        // Daily 话题分区池（2026-08-20 玩家用小黑盒分区图定案：真实社区是一帖一题，不是整炉一题）：
+        // 分区制——每席位独立抽（分区,话题），"无意义话题"（猫/饭/快递）与"实际的事"（锚点/突发）混排
+        private static readonly (string Zone, string[] Topics)[] k_DailyZones =
         {
-            "一日三餐吃什么", "通勤路上那些事", "周末打算怎么过",
-            "家里长短", "最近在追的剧或玩的游戏", "今天的心情",
-            "小区快递柜又满了", "楼下新开店的尝鲜报告", "阳台种点什么好",
-            "夜宵哪家强", "停车又绕了三圈", "楼上装修的电钻声",
-            "换季添件衣服", "宽带又卡了", "家里的猫/狗今天又干了什么",
-            "外卖红包又没了", "健身房办卡纠结", "隔壁邻居的八卦",
+            ("美食", new[] { "一日三餐吃什么", "夜宵哪家强", "楼下新店的尝鲜报告", "外卖红包又没了" }),
+            ("通勤", new[] { "通勤路上那些事", "停车又绕了三圈", "公交挤成相片", "油价/电费又动了" }),
+            ("职场", new[] { "加班那点事", "发工资前后的日子", "办公室八卦", "摸鱼心得" }),
+            ("家里", new[] { "家里长短", "娃的作业/学校", "楼上装修的电钻声", "小区快递柜又满了" }),
+            ("萌宠", new[] { "家里的猫/狗今天又干了什么", "楼下那只流浪猫" }),
+            ("消费", new[] { "快递又卡半路", "最近买的好东西/踩的坑", "换季添件衣服" }),
+            ("娱乐", new[] { "最近在追的剧或玩的游戏", "周末打算怎么过", "阳台种点什么好" }),
+            ("沙雕", new[] { "今天的糗事", "随手拍的离谱一幕", "隔壁邻居的八卦", "健身房办卡纠结" }),
         };
+
+        /// <summary>每席位话题：分区按 batch+slot 轮转，区内话题错开——整炉十帖十个题。</summary>
+        public static string DailyTopicFor(uint batch, int slot)
+        {
+            var zone = k_DailyZones[(int)((batch + (uint)slot) % k_DailyZones.Length)];
+            return zone.Topics[(int)((batch + (uint)(slot * 3 + 1)) % zone.Topics.Length)];
+        }
 
         // 处境池（2026-08-20 治僵硬第二刀：模型"凭空发帖"必僵——给个此刻状态就有现场感）；
         // 执行层按 seed+席位轮换，与话题/锚点解耦——锚点管"说什么"，处境管"在干嘛说"
@@ -250,7 +270,7 @@ namespace CityLife.Content
                 case Topic.TouristBoom: return "游客变多了";
                 case Topic.Breaking: return "突发事件（见【突发事件】）";
                 case Topic.Petition: return "民意沸腾（见【民意沸腾】）";
-                default: return "生活闲聊：" + k_DailyTopics[seed % k_DailyTopics.Length];
+                default: return "生活闲聊，各帖话题见分配行（题：…）";
             }
         }
 

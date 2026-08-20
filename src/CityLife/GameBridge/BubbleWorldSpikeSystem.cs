@@ -318,6 +318,9 @@ namespace CityLife.GameBridge
                 m_LogCount++;
                 CityLife.Mod.Log.Info($"[BubbleW] pass Execute #{m_LogCount} cam={cam.name} pos=({Pos.x:F0},{Pos.y:F0},{Pos.z:F0})");
             }
+            // CustomPass 里 DrawMesh 前必须显式 SetRenderTarget（Unity 官方示例标配）——
+            // 不设目标绘制可能画空（2026-08-21：pass 在跑但无显示的最后嫌疑）
+            CoreUtils.SetRenderTarget(ctx.cmd, ctx.cameraColorBuffer, ctx.cameraDepthBuffer);
             var rot = cam.transform.rotation; // 面向镜头（billboard）
             var cmd = ctx.cmd;
             if (TextMesh != null && TextMat != null)

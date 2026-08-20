@@ -151,6 +151,25 @@ Section("购物链路（2026-08-20 实质性 spike：购买行为在哪个系统
         Console.WriteLine($"- {t.Name} ({KindOf(t)})");
 });
 
+Section("Colossal Gizmos 世界渲染通道（2026-08-21 M3-W：着色器枚举 Hidden/Colossal/Gizmos 实锤后的 API 摸底）", () =>
+{
+    foreach (var dll in dlls)
+    {
+        Assembly asm2;
+        try { asm2 = mlc.LoadFromAssemblyPath(dll); }
+        catch { continue; }
+        Type[] types2;
+        try { types2 = asm2.GetTypes(); }
+        catch (ReflectionTypeLoadException e2) { types2 = e2.Types.Where(t => t != null).Cast<Type>().ToArray(); }
+        catch { continue; }
+        var hits = types2.Where(t => (t.Namespace ?? "").Contains("Gizmo")).OrderBy(t => t.FullName).ToList();
+        if (hits.Count == 0) continue;
+        Console.WriteLine($"### [{asm2.GetName().Name}] Gizmo 命名空间类型 {hits.Count} 个");
+        foreach (var t in hits.Take(40))
+            DumpType(t, fields: true, methods: true);
+    }
+});
+
 Section("旅游", () =>
 {
     Find("TouristSpawnSystem", fields: true, methods: true);

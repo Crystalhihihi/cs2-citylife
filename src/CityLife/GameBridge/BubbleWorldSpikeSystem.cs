@@ -5,6 +5,7 @@ using Unity.Entities;
 using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Rendering.HighDefinition;
 
 namespace CityLife.GameBridge
 {
@@ -28,29 +29,20 @@ namespace CityLife.GameBridge
         private bool m_ShadersDumped;
         private Font? m_Font;
         private bool m_DrawActive;
-        private bool m_Subscribed;
         private Mesh? m_TextMesh;
         private Mesh? m_QuadMesh;
         private Material? m_TextMat;
         private Material? m_QuadMat;
-        private Vector3 m_Pos;
-        private Camera? m_Cam;
+        private GameObject? m_VolumeGo;
+        private CityLifeBubblePass? m_Pass;
         private uint m_Frame;
         private uint m_LastKeyFrame;
 
         public override int GetUpdateInterval(SystemUpdatePhase phase) => 1;
 
-        protected override void OnCreate()
-        {
-            base.OnCreate();
-            RenderPipelineManager.beginCameraRendering += OnBeginCameraRendering;
-            m_Subscribed = true;
-        }
-
         protected override void OnDestroy()
         {
-            if (m_Subscribed)
-                RenderPipelineManager.beginCameraRendering -= OnBeginCameraRendering;
+            TearDownVolume();
             DestroyDrawAssets();
             base.OnDestroy();
         }
@@ -72,18 +64,6 @@ namespace CityLife.GameBridge
             m_Frame++;
         }
 
-        /// <summary>注入点：每个相机开始渲染时，把我们的渲染请求塞给它（只塞主相机）。</summary>
-        private void OnBeginCameraRendering(ScriptableRenderContext ctx, Camera cam)
-        {
-            if (!m_DrawActive || cam == null || cam != m_Cam)
-                return;
-            var rot = cam.transform.rotation;
-            if (m_TextMesh != null && m_TextMat != null)
-                Graphics.DrawMesh(m_TextMesh, m_Pos, rot, m_TextMat, 0, cam);
-            if (m_QuadMesh != null && m_QuadMat != null)
-                Graphics.DrawMesh(m_QuadMesh, m_Pos + new Vector3(4f, 0f, 0f), rot, m_QuadMat, 0, cam);
-        }
-
         private void DumpShaders()
         {
             var shaders = Resources.FindObjectsOfTypeAll<Shader>();
@@ -102,25 +82,25 @@ namespace CityLife.GameBridge
             if (m_DrawActive)
             {
                 m_DrawActive = false;
+                TearDownVolume();
                 DestroyDrawAssets();
                 Mod.Log.Info("[BubbleW] 绘制关闭");
                 return;
             }
 
             // 锚点 = 镜头视线落点 + 10m（S1：你看哪它画哪）
-            m_Cam = Camera.main != null ? Camera.main
+            var cam = Camera.main != null ? Camera.main
                 : Camera.allCameras.Length > 0 ? Camera.allCameras[0] : null;
-            if (m_Cam == null)
+            if (cam == null)
             {
                 Mod.Log.Warn("[BubbleW] 找不到相机");
                 return;
             }
-            Mod.Log.Info($"[BubbleW] 相机={m_Cam.name} cullingMask=0x{m_Cam.cullingMask:X} clearFlags={m_Cam.clearFlags}");
-            var camPos = m_Cam.transform.position;
-            var fwd = m_Cam.transform.forward;
+            var camPos = cam.transform.position;
+            var fwd = cam.transform.forward;
             var t = fwd.y < -0.001f ? camPos.y / -fwd.y : 100f;
             var focus = camPos + fwd * t;
-            m_Pos = new Vector3((float)focus.x, (float)(focus.y + 10.0), (float)focus.z);
+            var pos = new Vector3((float)focus.x, (float)(focus.y + 10.0), (float)focus.z);
 
             m_Font ??= CreateCjkFont();
             if (m_Font == null || m_Font.material == null)
@@ -146,8 +126,37 @@ namespace CityLife.GameBridge
             if (m_QuadMat.HasProperty("_BaseColor"))
                 m_QuadMat.SetColor("_BaseColor", Color.red);
 
+            // 渲染接入 = HDRP CustomPass（Unity HDRP 文档明写的自定义渲染注入点，公开 API）：
+            // CustomPassVolume（挂主相机，BeforeTransparent 注入）+ 我们的 CustomPass（cmd.DrawMesh）
+            m_VolumeGo = new GameObject("CityLifeBubbleVolume");
+            m_VolumeGo.hideFlags = HideFlags.HideAndDontSave;
+            var volume = m_VolumeGo.AddComponent<CustomPassVolume>();
+            volume.isGlobal = false;
+            volume.targetCamera = cam;
+            volume.injectionPoint = CustomPassInjectionPoint.BeforeTransparent;
+            m_Pass = volume.AddPassOfType(typeof(CityLifeBubblePass)) as CityLifeBubblePass;
+            if (m_Pass == null)
+            {
+                Mod.Log.Warn("[BubbleW] AddPassOfType 失败（CustomPass API 面不符？）");
+                TearDownVolume();
+                return;
+            }
+            m_Pass.TextMesh = m_TextMesh;
+            m_Pass.QuadMesh = m_QuadMesh;
+            m_Pass.TextMat = m_TextMat;
+            m_Pass.QuadMat = m_QuadMat;
+            m_Pass.Pos = pos;
+
             m_DrawActive = true;
-            Mod.Log.Info($"[BubbleW] 绘制开启 @({m_Pos.x:F0},{m_Pos.y:F0},{m_Pos.z:F0}) shader={shader.name} verts={m_TextMesh.vertexCount}");
+            Mod.Log.Info($"[BubbleW] 绘制开启(CustomPass) @({pos.x:F0},{pos.y:F0},{pos.z:F0}) shader={shader.name} verts={m_TextMesh.vertexCount}");
+        }
+
+        private void TearDownVolume()
+        {
+            if (m_VolumeGo != null)
+                Object.Destroy(m_VolumeGo);
+            m_VolumeGo = null;
+            m_Pass = null;
         }
 
         private void DestroyDrawAssets()
@@ -268,6 +277,31 @@ namespace CityLife.GameBridge
             }
             catch { }
             return null;
+        }
+    }
+
+    /// <summary>
+    /// 气泡渲染 pass（HDRP CustomPass 公开扩展点，Unity HDRP 文档明写的自定义渲染注入方式）：
+    /// BeforeTransparent 注入点，cmd.DrawMesh 直进 HDRP 当帧渲染——不依赖场景 GameObject 是否被相机渲染
+    /// （GameObject 路、beginCameraRendering+Graphics.DrawMesh 路均已实锤不可见，此路是官方答案）。
+    /// </summary>
+    public sealed class CityLifeBubblePass : CustomPass
+    {
+        public Mesh? TextMesh;
+        public Mesh? QuadMesh;
+        public Material? TextMat;
+        public Material? QuadMat;
+        public Vector3 Pos;
+
+        protected override void Execute(CustomPassContext ctx)
+        {
+            var cam = ctx.hdCamera.camera;
+            var rot = cam.transform.rotation; // 面向镜头（billboard）
+            var cmd = ctx.cmd;
+            if (TextMesh != null && TextMat != null)
+                cmd.DrawMesh(TextMesh, Matrix4x4.TRS(Pos, rot, Vector3.one), TextMat);
+            if (QuadMesh != null && QuadMat != null)
+                cmd.DrawMesh(QuadMesh, Matrix4x4.TRS(Pos + new Vector3(4f, 0f, 0f), rot, Vector3.one), QuadMat);
         }
     }
 }

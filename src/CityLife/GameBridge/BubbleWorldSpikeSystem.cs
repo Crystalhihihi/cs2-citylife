@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text;
 using Game;
 using Game.Buildings;
@@ -28,7 +29,6 @@ namespace CityLife.GameBridge
         private Font? m_Font;
         private GameObject? m_Bubble;
         private MeshFilter? m_BubbleFilter;
-        private MeshFilter? m_TextGen;
         private bool m_Active;
         private uint m_Frame;
         private uint m_LastKeyFrame;
@@ -54,13 +54,6 @@ namespace CityLife.GameBridge
             // Camera.main 在某些阶段为 null，退 allCameras[0]）
             if (m_Active && m_Bubble != null)
             {
-                // TextMesh 网格懒生成：创建时可能为 null，生成后补挂（2026-08-20 NRE 实锤）
-                if (m_BubbleFilter != null && m_BubbleFilter.sharedMesh == null
-                    && m_TextGen != null && m_TextGen.sharedMesh != null)
-                {
-                    m_BubbleFilter.sharedMesh = m_TextGen.sharedMesh;
-                    Mod.Log.Info("[BubbleW] TextMesh 网格已补挂");
-                }
                 var cam = Camera.main != null ? Camera.main
                     : Camera.allCameras.Length > 0 ? Camera.allCameras[0] : null;
                 if (cam != null)
@@ -126,35 +119,23 @@ namespace CityLife.GameBridge
                 return;
             }
 
-            // TextMesh 只借网格（文本网格+Font 图集），不渲染本体。
-            // 踩坑①（2026-08-20 NRE）：本环境 AddComponent<TextMesh> 不带 MeshFilter——必须显式先加；
-            // 踩坑②（2026-08-20 NRE）：text setter 会立即重建网格，font 还是默认 null 就炸——
-            // 必须先赋 font 再赋 text（顺序即语义）
-            var tmGo = new GameObject("CityLifeBubbleTextGen");
-            tmGo.hideFlags = HideFlags.HideAndDontSave;
-            var tmf = tmGo.AddComponent<MeshFilter>();
-            var tm = tmGo.AddComponent<TextMesh>();
-            if (m_Font.material == null)
-            {
-                Mod.Log.Warn("[BubbleW] 字体材质为空（字体无效）");
-                Object.Destroy(tmGo);
-                return;
-            }
-            tm.font = m_Font;
-            tm.fontSize = 64;
-            tm.characterSize = 0.25f; // 世界尺寸（一格 0.25m）
-            tm.anchor = TextAnchor.LowerCenter; // 以锚点（头顶）为底边中点
-            tm.alignment = TextAlignment.Center;
-            tm.text = "吃了吗";
-            m_TextGen = tmf;
-
+            // TextMesh 路线已弃（2026-08-20 三连 NRE 实锤：text/font setter 的网格重建路径
+            // 在本环境全灭——TextMesh 在这个运行时里就是坏的）。改手写网格：
+            // Font.GetCharacterInfo 取每个字的 UV/尺寸/步进，四边形逐字拼（纯托管数学，无黑盒）
             var shader = PickShader();
             if (shader == null)
             {
                 Mod.Log.Warn("[BubbleW] 无可用着色器（HDRP/Unlit 与文本候选都没找到）");
-                Object.Destroy(tmGo);
                 return;
             }
+            if (m_Font.material == null)
+            {
+                Mod.Log.Warn("[BubbleW] 字体材质为空（字体无效）");
+                return;
+            }
+            var mesh = BuildTextMesh("吃了吗", m_Font, 64, 0.004f); // 64px 字号 × 0.004 = 约 0.26m 字高
+            if (mesh == null)
+                return; // 日志已在 BuildTextMesh 里打
             var mat = new Material(shader)
             {
                 mainTexture = m_Font.material.mainTexture
@@ -164,13 +145,62 @@ namespace CityLife.GameBridge
             m_Bubble = new GameObject("CityLifeBubbleW");
             m_Bubble.hideFlags = HideFlags.HideAndDontSave;
             m_BubbleFilter = m_Bubble.AddComponent<MeshFilter>();
-            m_BubbleFilter.sharedMesh = tmf.sharedMesh; // 可能为 null（懒生成），OnUpdate 补挂
+            m_BubbleFilter.sharedMesh = mesh;
             m_Bubble.AddComponent<MeshRenderer>().sharedMaterial = mat;
             m_Bubble.transform.position = new Vector3(pos.x, pos.y, pos.z);
             m_Active = true;
-            if (tmf.sharedMesh == null)
-                Mod.Log.Info("[BubbleW] TextMesh 网格待生成，OnUpdate 补挂");
-            Mod.Log.Info($"[BubbleW] 单气泡已创建 @({pos.x:F0},{pos.y:F0},{pos.z:F0}) shader={shader.name} fontTex={m_Font.material.mainTexture?.GetType().Name}");
+            Mod.Log.Info($"[BubbleW] 单气泡已创建 @({pos.x:F0},{pos.y:F0},{pos.z:F0}) shader={shader.name} verts={mesh.vertexCount}");
+        }
+
+        /// <summary>
+        /// 手写文本网格：RequestCharactersInTexture 光栅化进图集，GetCharacterInfo 取
+        /// UV（图集坐标）与 min/max/advance（局部排版），逐字四边形，整体水平居中（LowerCenter）。
+        /// 索引双面写（正反向各一份——省一次"朝向写反不可见"的往返）。
+        /// </summary>
+        private Mesh? BuildTextMesh(string text, Font font, int fontSize, float charScale)
+        {
+            font.RequestCharactersInTexture(text, fontSize);
+            var verts = new List<Vector3>(text.Length * 4);
+            var uvs = new List<Vector2>(text.Length * 4);
+            var tris = new List<int>(text.Length * 12);
+            float penX = 0;
+            var glyphs = 0;
+            foreach (var ch in text)
+            {
+                if (!font.GetCharacterInfo(ch, out CharacterInfo ci, fontSize))
+                {
+                    Mod.Log.Warn($"[BubbleW] 字体缺字形：U+{(int)ch:X4}（{ch}）");
+                    continue;
+                }
+                int b = verts.Count;
+                float x0 = penX + ci.minX * charScale, x1 = penX + ci.maxX * charScale;
+                float y0 = ci.minY * charScale, y1 = ci.maxY * charScale;
+                verts.Add(new Vector3(x0, y0, 0)); // BL
+                verts.Add(new Vector3(x1, y0, 0)); // BR
+                verts.Add(new Vector3(x1, y1, 0)); // TR
+                verts.Add(new Vector3(x0, y1, 0)); // TL
+                uvs.Add(ci.uvBottomLeft);
+                uvs.Add(ci.uvBottomRight);
+                uvs.Add(ci.uvTopRight);
+                uvs.Add(ci.uvTopLeft);
+                tris.AddRange(new[] { b, b + 1, b + 2, b, b + 2, b + 3 });         // 正向
+                tris.AddRange(new[] { b, b + 2, b + 1, b, b + 3, b + 2 });         // 反向（双面保底）
+                penX += ci.advance * charScale;
+                glyphs++;
+            }
+            if (glyphs == 0)
+            {
+                Mod.Log.Warn("[BubbleW] 一个字形都没排到（字体没有这些字？）");
+                return null;
+            }
+            for (int i = 0; i < verts.Count; i++)
+                verts[i] = new Vector3(verts[i].x - penX / 2f, verts[i].y, 0f); // 水平居中
+            var mesh = new Mesh { name = "CityLifeBubbleText" };
+            mesh.SetVertices(verts);
+            mesh.SetUVs(0, uvs);
+            mesh.SetTriangles(tris, 0);
+            mesh.RecalculateBounds();
+            return mesh;
         }
 
         /// <summary>

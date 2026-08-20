@@ -249,12 +249,16 @@ namespace CityLife.GameBridge
                 var y = (1f - s.y / Screen.height) * 100f; // Unity 自下而上 → CSS 自上而下
                 if (x < -5f || x > 105f || y < -5f || y > 105f)
                     continue;
-                var text = kind == 0 ? k_Texts[shown % k_Texts.Length]
-                    : kind == 1 ? k_CarTexts[shown % k_CarTexts.Length]
-                    : k_BuildingTexts[shown % k_BuildingTexts.Length];
+                // 乱跳根治（2026-08-20 玩家实机）：key/文案都按实体定，不按名次——
+                // 成员变动时按下标映射会把别人的气泡抢过来跳变；React 侧按实体 i 作 key
+                var text = kind == 0 ? k_Texts[e.Index % k_Texts.Length]
+                    : kind == 1 ? k_CarTexts[e.Index % k_CarTexts.Length]
+                    : k_BuildingTexts[e.Index % k_BuildingTexts.Length];
                 if (!first) sb.Append(',');
                 first = false;
-                sb.Append("{\"x\":").Append(x.ToString("F1", CultureInfo.InvariantCulture))
+                sb.Append("{\"i\":").Append(e.Index)
+                  .Append(",\"k\":").Append(kind)
+                  .Append(",\"x\":").Append(x.ToString("F1", CultureInfo.InvariantCulture))
                   .Append(",\"y\":").Append(y.ToString("F1", CultureInfo.InvariantCulture))
                   .Append(",\"t\":\"").Append(text).Append("\"}");
                 shown++;

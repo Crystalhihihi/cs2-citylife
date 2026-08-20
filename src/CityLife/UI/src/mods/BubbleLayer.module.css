@@ -13,14 +13,12 @@
     overflow: hidden;               /* 屏外余量裁掉，防气泡把层撑出滚动条 */
 }
 
-/* 白色聊天气泡（2026-08-20 玩家反馈优化：黑盒→白底深字+小尾巴+轻阴影）；
+/* 聊天气泡基座：布局/字体/阴影/补间/尾巴形状共享；颜色按类型变体（人白/车淡蓝/楼淡黄）。
    transition 补间：C# 推送已节流 10Hz，中间帧由它插值——治"一卡一卡" */
 .bubble {
     position: absolute;
     transform: translate(-50%, -100%);  /* 以锚点（头顶）为底边中点 */
-    background-color: rgba(255, 255, 255, 0.94);
-    color: rgba(26, 30, 38, 0.95);
-    border: 1px solid rgba(0, 0, 0, 0.08);
+    border: 1px solid;
     border-radius: 10px;
     padding: 3px 9px;
     font-size: 12px;
@@ -30,11 +28,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
     pointer-events: none;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);
     transition: left 0.1s linear, top 0.1s linear;
 }
 
-/* 气泡小尾巴（朝下，指向说话的人） */
+/* 气泡小尾巴（朝下，指向说话的人；颜色随类型变体） */
 .bubble::after {
     content: "";
     position: absolute;
@@ -43,5 +41,30 @@
     margin-left: -4px;
     border-left: 4px solid transparent;
     border-right: 4px solid transparent;
-    border-top: 5px solid rgba(255, 255, 255, 0.94);
+    border-top-width: 5px;
+    border-top-style: solid;
 }
+
+/* 人：白 */
+.bubblePerson {
+    background-color: rgba(255, 255, 255, 0.94);
+    border-color: rgba(0, 0, 0, 0.12);
+    color: rgba(26, 30, 38, 0.95);
+}
+.bubblePerson::after { border-top-color: rgba(255, 255, 255, 0.94); }
+
+/* 车：淡蓝 */
+.bubbleCar {
+    background-color: rgba(205, 228, 255, 0.94);
+    border-color: rgba(80, 130, 200, 0.45);
+    color: rgba(23, 44, 74, 0.95);
+}
+.bubbleCar::after { border-top-color: rgba(205, 228, 255, 0.94); }
+
+/* 楼：淡黄 */
+.bubbleBuilding {
+    background-color: rgba(255, 243, 196, 0.94);
+    border-color: rgba(190, 150, 60, 0.45);
+    color: rgba(74, 58, 18, 0.95);
+}
+.bubbleBuilding::after { border-top-color: rgba(255, 243, 196, 0.94); }

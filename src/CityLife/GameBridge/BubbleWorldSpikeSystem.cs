@@ -57,7 +57,11 @@ namespace CityLife.GameBridge
                 var cam = Camera.main != null ? Camera.main
                     : Camera.allCameras.Length > 0 ? Camera.allCameras[0] : null;
                 if (cam != null)
+                {
                     m_Bubble.transform.rotation = cam.transform.rotation;
+                    if (m_Quad != null)
+                        m_Quad.transform.rotation = cam.transform.rotation;
+                }
             }
             m_Frame++;
         }
@@ -86,7 +90,10 @@ namespace CityLife.GameBridge
             {
                 if (m_Bubble != null)
                     Object.Destroy(m_Bubble);
+                if (m_Quad != null)
+                    Object.Destroy(m_Quad);
                 m_Bubble = null;
+                m_Quad = null;
                 m_Active = false;
                 Mod.Log.Info("[BubbleW] 单气泡已销毁");
                 return;
@@ -138,9 +145,10 @@ namespace CityLife.GameBridge
             {
                 mainTexture = m_Font.material.mainTexture
             };
-            TryMakeTransparent(mat);
+            // 先不透明（排障序：证明"能渲染"在前，透明正确性在后——透明设错会整批丢弃像素）
             if (mat.HasProperty("_BaseColor"))
                 mat.SetColor("_BaseColor", Color.red); // S1 醒目验证色（终版按类型配色）
+            Mod.Log.Info($"[BubbleW] 文本网格 bounds={mesh.bounds}");
 
             m_Bubble = new GameObject("CityLifeBubbleW");
             m_Bubble.hideFlags = HideFlags.HideAndDontSave;
@@ -148,8 +156,41 @@ namespace CityLife.GameBridge
             m_BubbleFilter.sharedMesh = mesh;
             m_Bubble.AddComponent<MeshRenderer>().sharedMaterial = mat;
             m_Bubble.transform.position = new Vector3(pos.x, pos.y, pos.z);
+
+            // 对照组：无光板红方块（无纹理、不透明、同着色器）——它出来说明管线通，
+            // 它也不出说明 GameObject/渲染接入有问题（分诊用，S1 后拆）
+            var quadGo = new GameObject("CityLifeBubbleQuad");
+            quadGo.hideFlags = HideFlags.HideAndDontSave;
+            quadGo.AddComponent<MeshFilter>().sharedMesh = BuildQuadMesh(3f);
+            var quadMat = new Material(shader);
+            if (quadMat.HasProperty("_BaseColor"))
+                quadMat.SetColor("_BaseColor", Color.red);
+            quadGo.AddComponent<MeshRenderer>().sharedMaterial = quadMat;
+            quadGo.transform.position = new Vector3(pos.x + 4f, pos.y, pos.z);
+            quadGo.transform.rotation = m_Bubble.transform.rotation;
+            m_Quad = quadGo;
+
             m_Active = true;
             Mod.Log.Info($"[BubbleW] 单气泡已创建 @({pos.x:F0},{pos.y:F0},{pos.z:F0}) shader={shader.name} verts={mesh.vertexCount}");
+        }
+
+        private GameObject? m_Quad;
+
+        /// <summary>对照组网格：边长 size 的正方形四边形（含法线，双面索引）。</summary>
+        private static Mesh BuildQuadMesh(float size)
+        {
+            var h = size / 2f;
+            var mesh = new Mesh { name = "CityLifeQuad" };
+            mesh.vertices = new[]
+            {
+                new Vector3(-h, 0, 0), new Vector3(h, 0, 0),
+                new Vector3(h, size, 0), new Vector3(-h, size, 0),
+            };
+            mesh.uv = new[] { Vector2.zero, Vector2.right, Vector2.one, Vector2.up };
+            mesh.triangles = new[] { 0, 1, 2, 0, 2, 3, 0, 2, 1, 0, 3, 2 }; // 双面
+            mesh.RecalculateBounds();
+            mesh.RecalculateNormals();
+            return mesh;
         }
 
         /// <summary>
@@ -200,6 +241,7 @@ namespace CityLife.GameBridge
             mesh.SetUVs(0, uvs);
             mesh.SetTriangles(tris, 0);
             mesh.RecalculateBounds();
+            mesh.RecalculateNormals(); // HDRP/Unlit 顶点输入要法线，没有直接不画（2026-08-20 隐形实锤）
             return mesh;
         }
 

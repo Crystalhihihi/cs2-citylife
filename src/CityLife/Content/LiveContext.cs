@@ -3,7 +3,7 @@ namespace CityLife.Content
     /// <summary>
     /// 生成侧共享上下文（主线程读写，纯静态）：
     /// - 市长发言：面板 trigger 写入，一条发言影响随后 3 炉（市民的讨论有惯性；写回层 EventSpec 是 M4 的事）
-    /// - 突发事件：EventNewsSystem 写入，导演读一次即清（新闻热度不过夜）
+    /// - 突发事件：EventNewsSystem 直采写入（OnFire/AccidentSite 组件，2026-08-20 起），导演读一次即清（新闻热度不过夜）
     /// </summary>
     public static class LiveContext
     {

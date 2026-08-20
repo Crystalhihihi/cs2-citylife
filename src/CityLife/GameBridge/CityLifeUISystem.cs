@@ -1,6 +1,7 @@
 using Colossal.UI.Binding;
 using Game;
 using Game.UI;
+using Unity.Entities;
 
 namespace CityLife.GameBridge
 {
@@ -14,7 +15,8 @@ namespace CityLife.GameBridge
     /// - replyPost（TriggerBinding&lt;string&gt;）：市长回复市民帖（"seq|text"）；
     /// - panelState（TriggerBinding&lt;int&gt;）：面板开合（feedMode 联动）；
     /// - eventConfirm（ValueBinding&lt;string&gt;）：活动确认卡 JSON，空串=不显示（M4）；
-    /// - eventConfirmResult（TriggerBinding&lt;string&gt;）：确认回执 "{id}:{1|0}"（M4）。
+    /// - eventConfirmResult（TriggerBinding&lt;string&gt;）：确认回执 "{id}:{1|0}[:{场馆下标|-1=地图选定}]"（M4）；
+    /// - pickVenue（TriggerBinding&lt;string&gt;）：地图选点 "{id}:{entityIndex}:{entityVersion}"（T2，玩家点选任意建筑作场馆）。
     ///
     /// 为什么脏检查：ToJson 每次全量序列化环形缓冲（最多 100 条），
     /// 逐帧无脑重推既浪费主线程又刷 binding 流量；Feed.Version 每次新增自增，
@@ -42,6 +44,7 @@ namespace CityLife.GameBridge
             AddBinding(new TriggerBinding<string>("CityLife", "mayorPost", OnMayorPost));
             AddBinding(new TriggerBinding<string>("CityLife", "replyPost", OnReplyPost));
             AddBinding(new TriggerBinding<string>("CityLife", "eventConfirmResult", OnEventConfirmResult));
+            AddBinding(new TriggerBinding<string>("CityLife", "pickVenue", OnPickVenue));
             AddBinding(new TriggerBinding<int>("CityLife", "panelState", v => Content.LiveContext.PanelOpen = v == 1));
 
             // 关停原版 Chirper 显示闸。两条实机教训：
@@ -104,7 +107,7 @@ namespace CityLife.GameBridge
                 Mod.Log.Info($"[UI] 市长回复帖 #{seq}：{t.Substring(0, System.Math.Min(24, t.Length))}…");
         }
 
-        /// <summary>活动确认回执："{id}:{1|0}[:{场馆下标}]" → 路由给活动链（id 不匹配的迟到回执丢弃）。</summary>
+        /// <summary>活动确认回执："{id}:{1|0}[:{场馆下标|-1=地图选定}]" → 路由给活动链（id 不匹配的迟到回执丢弃）。</summary>
         private void OnEventConfirmResult(string payload)
         {
             var parts = (payload ?? "").Split(':');
@@ -113,6 +116,17 @@ namespace CityLife.GameBridge
             var ok = parts[1] == "1";
             var venueIdx = parts.Length > 2 && int.TryParse(parts[2], out var vi) ? vi : 0;
             EventChainSystem.SetConfirmResult(id, ok, venueIdx);
+        }
+
+        /// <summary>地图选点（T2）："{confirmId}:{entityIndex}:{entityVersion}" → 活动链校验应用（重建 Entity 只读校验，不写）。</summary>
+        private void OnPickVenue(string payload)
+        {
+            var parts = (payload ?? "").Split(':');
+            if (parts.Length < 3 || !int.TryParse(parts[0], out var id)
+                || !int.TryParse(parts[1], out var index) || !int.TryParse(parts[2], out var version))
+                return;
+            World.GetOrCreateSystemManaged<EventChainSystem>()
+                .ApplyPick(id, new Entity { Index = index, Version = version });
         }
 
         protected override void OnUpdate()

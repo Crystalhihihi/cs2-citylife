@@ -30,16 +30,24 @@ export const panelState = (open: boolean) => trigger("CityLife", "panelState", o
 // 活动确认弹窗（M4）：空串 "" = 不显示；非空 = JSON：
 //   {"id":7,"title":"活动确认","lines":["活动：周末市集",...],"danger":false,
 //    "venues":["城东南公园","市中心公园","城西北景点"],  // 可选：候选场馆标签，缺省=只有 1 个候选，不显示选择器
-//    "venueIdx":0}                                      // 可选：当前默认推荐的下标
+//    "venueIdx":0,                                      // 可选：当前默认推荐的下标
+//    "picked":"城西·中央公园"}                          // 可选（T2）：玩家地图选定的场馆名；存在时地点行显示它，
+//                                                      // 确认回执 venueIdx 发 -1；"改回列表"后按正常下标发
 // lines 逐行渲染；danger=true 时标题警示色 + 首行警告样式（危险操作用，如透支财政）。
 // 同一时刻最多一张，新 id 替换旧的；C# 在收到应答后清空回 ""。
 export const eventConfirmBinding = bindValue<string>("CityLife", "eventConfirm", "");
 
 // 弹窗应答通道：线格式 "{id}:{1|0}:{venueIdx}"，1=确认执行，0=取消（Esc/点压暗背景都算取消）。
-// venueIdx = 玩家最终选中的候选下标（无选择器时为 0；取消时给当前显示值，C# 第三段缺省兼容）。
+// venueIdx = 玩家最终选中的候选下标；-1 = 使用地图选定的场馆（T2）；取消时给当前显示值（C# 忽略）。
 // UI 侧应答后立即本地隐藏，不等 C# 清空 binding。
 export const eventConfirmResult = (id: number, accept: boolean, venueIdx: number) =>
     trigger("CityLife", "eventConfirmResult", `${id}:${accept ? 1 : 0}:${venueIdx}`);
+
+// 地图选点（T2）：确认卡"在地图上选点"进入选点模式后，玩家在游戏里点中的建筑经此发给 C#。
+// 线格式 "{id}:{entityIndex}:{entityVersion}"；C# 校验（是建筑/不在冷却）后重推带 picked 的确认卡。
+// 选中无效（非建筑/冷却中）时 C# 只打日志不动卡片——玩家重新点即可。
+export const pickVenue = (id: number, index: number, version: number) =>
+    trigger("CityLife", "pickVenue", `${id}:${index}:${version}`);
 
 // 帖子结构（短键名与 FeedStore.ToJson 对应；e/c 为 v2 新增可选键，向后兼容 M2-A 数据）
 export interface FeedPost {

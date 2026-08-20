@@ -110,3 +110,46 @@
     cursor: pointer;
     user-select: none;
 }
+
+/* 地图选点按钮（T2）：夹在确认/取消之间，视觉弱于确认强于取消 */
+.btnPick {
+    margin-left: 8px;
+    padding: 0 14px;
+    line-height: 28px;
+    font-size: 13px;
+    color: rgba(140, 180, 255, 0.95);
+    background-color: rgba(60, 130, 246, 0.15);
+    border: 1px solid rgba(140, 180, 255, 0.4);
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+}
+
+/* 选点模式提示条（T2）：整卡收起只剩它——pointer-events:none 是关键，
+   点击穿透到游戏地图（点选建筑），它只负责提示，不拦截任何操作 */
+.pickHint {
+    position: absolute;
+    left: 50%;
+    bottom: 120px;                  /* 避开底部工具栏 */
+    transform: translateX(-50%);
+    padding: 8px 18px;
+    background-color: rgba(24, 28, 35, 0.95);
+    border: 1px solid rgba(140, 180, 255, 0.5);
+    border-radius: 6px;
+    color: rgba(140, 180, 255, 0.95);
+    font-size: 14px;
+    font-family: "Noto Sans SC";    /* 显式指定中文字体（豆腐块教训） */
+    pointer-events: none;
+    z-index: 1000;
+}
+
+/* "改回列表"小链接（T2）：地图选定态的地点行右侧，点了回候选列表 */
+.clearPick {
+    margin-left: 10px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.45);
+    text-decoration: underline;
+    cursor: pointer;
+    user-select: none;
+    flex: none;
+}

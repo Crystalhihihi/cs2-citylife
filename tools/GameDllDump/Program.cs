@@ -83,6 +83,15 @@ Section("事件/事故", () =>
     Find("EventJournalSystem", fields: true, methods: true);
     Find("EventJournalEntry", fields: true);
     Find("EventJournalData", fields: true);
+    Console.WriteLine();
+    Console.WriteLine("### 事件组件字段补探（2026-08-20 突发直采用：OnFire/AccidentSite 挂在什么实体上）");
+    Dump("Game.Events.Fire", fields: true);
+    Dump("Game.Events.OnFire", fields: true);
+    Dump("Game.Events.TrafficAccident", fields: true);
+    Dump("Game.Events.Event", fields: true);
+    Dump("Game.Events.Destruction", fields: true);
+    Dump("Game.Events.HealthEvent", fields: true);
+    Dump("Game.Buildings.Building", fields: true);
 });
 
 Section("旅游", () =>

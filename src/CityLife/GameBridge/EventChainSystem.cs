@@ -4,8 +4,11 @@ using Game;
 using Game.Buildings;
 using Game.Citizens;
 using Game.Common;
+using Game.Prefabs;
 using Game.Simulation;
 using Unity.Entities;
+using Unity.Mathematics;
+using Transform = Game.Objects.Transform;
 
 namespace CityLife.GameBridge
 {
@@ -46,18 +49,25 @@ namespace CityLife.GameBridge
         private EntityQuery m_CitizenQuery = default!;
         private EntityQuery m_InjectQuery = default!;
         private EntityQuery m_AttendanceQuery = default!;
+        private EntityQuery m_VenueQuery = default!;      // 场馆候选自有查询（全量公园/景点，不借锚点采样池）
         private EntityQuery m_TimeDataQuery = default!;
         private EntityQuery m_TimeSettingsQuery = default!;
-        private EntityAnchorSystem m_AnchorSystem = default!;
+        private PrefabSystem m_PrefabSystem = default!;
+        private Game.UI.NameSystem? m_NameSystem;         // 真名解析（惰性：GetExisting 拿不到就回退 prefab 名）
         private CitySystem m_CitySystem = default!;
         private SimulationSystem m_SimulationSystem = default!;
         private TimeSystem m_TimeSystem = default!;
         private List<Content.EventPack> m_Packs = default!;
 
+        private const int k_MaxVenueCandidates = 16;   // 确认卡选择器的候选上限（跨步抽样）
+
         private ChainState m_State = ChainState.Idle;
         private Content.EventPack? m_Pack;
         private Entity m_Venue;
         private string m_VenueLabel = "";
+        private Entity m_VenueOverride;                  // 地图选定的场馆（T2：玩家在地图上点选任意建筑）
+        private string m_VenueOverrideLabel = "";
+        private bool m_HasVenueOverride;
         private readonly List<Anchor> m_Candidates = new(); // 场馆候选（确认卡选择器的数据源）
         private int m_VenueIdx;                              // 当前选中的候选下标
         private int m_BudgetTier = 1;      // 0 低 1 中 2 高
@@ -89,11 +99,17 @@ namespace CityLife.GameBridge
                 ComponentType.ReadOnly<Citizen>(),
                 ComponentType.Exclude<Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
+            m_VenueQuery = GetEntityQuery(
+                ComponentType.ReadOnly<AttractivenessProvider>(),
+                ComponentType.ReadOnly<Transform>(),
+                ComponentType.ReadOnly<PrefabRef>(),
+                ComponentType.Exclude<Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
             // 时间查询走 EntityQuery.GetSingleton——SystemAPI 依赖 Unity 源码生成器，我们的构建不跑生成器，
             // 用了会在运行时抛 "No suitable code replacement generated"（2026-08-20 CRITICAL 实锤）
             m_TimeDataQuery = GetEntityQuery(ComponentType.ReadOnly<Game.Common.TimeData>());
             m_TimeSettingsQuery = GetEntityQuery(ComponentType.ReadOnly<Game.Prefabs.TimeSettingsData>());
-            m_AnchorSystem = World.GetOrCreateSystemManaged<EntityAnchorSystem>();
+            m_PrefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             m_CitySystem = World.GetOrCreateSystemManaged<CitySystem>();
             m_SimulationSystem = World.GetOrCreateSystemManaged<SimulationSystem>();
             m_TimeSystem = World.GetOrCreateSystemManaged<TimeSystem>();
@@ -167,21 +183,26 @@ namespace CityLife.GameBridge
                 return;
             }
 
-            // 场馆候选：全部公园锚点（冷却中的剔除）；LLM 地点原文能对上标签的当默认推荐，对不上用第一个。
-            // 确认卡带选择器，玩家可改（2026-08-20 实机：对不上就随机扔，玩家看不到人）
+            // 场馆候选：自有查询全量公园/景点池（跨步抽样 ≤16），剔除冷却中——不借锚点系统的采样池
+            // （那池公园上限只有 4，2026-08-20 玩家实机"怎么就 5 个地点"的根因）。
+            // LLM 地点原文能对上标签的当默认推荐；玩家还可在确认卡里"在地图上选点"指定任意建筑（T2）。
             var venueText = Util.JsonMini.GetStr(json, "venue") ?? "";
             m_Candidates.Clear();
             var defaultIdx = 0;
-            foreach (var a in m_AnchorSystem.Anchors)
+            var venuePool = m_VenueQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
+            var stride = Math.Max(1, venuePool.Length / k_MaxVenueCandidates);
+            for (int i = 0; i < venuePool.Length && m_Candidates.Count < k_MaxVenueCandidates; i += stride)
             {
-                if (a.Kind != AnchorKind.Park)
-                    continue;
-                if (m_VenueCooldownUntil.TryGetValue(a.Entity, out var cd) && Now < cd)
+                var v = venuePool[i];
+                if (m_VenueCooldownUntil.TryGetValue(v, out var cd) && Now < cd)
                     continue; // 冷却中的场馆不进候选
-                if (venueText.Length > 0 && (a.Label.Contains(venueText) || venueText.Contains(a.Label)))
+                var pos = EntityManager.GetComponentData<Transform>(v).m_Position;
+                var label = VenueLabel(v, pos);
+                if (venueText.Length > 0 && (label.Contains(venueText) || venueText.Contains(label)))
                     defaultIdx = m_Candidates.Count;
-                m_Candidates.Add(a);
+                m_Candidates.Add(new Anchor(v, AnchorKind.Park, label, ""));
             }
+            venuePool.Dispose();
             if (m_Candidates.Count == 0)
             {
                 Mod.Log.Info("[Event] 没有可用场馆（没公园或全在冷却），降级纯舆情");
@@ -204,31 +225,86 @@ namespace CityLife.GameBridge
             m_Venue = m_Candidates[defaultIdx].Entity;
             m_VenueLabel = m_Candidates[defaultIdx].Label;
             m_CardId++;
+            m_HasVenueOverride = false;
+            PushConfirmJson();
+            m_State = ChainState.AwaitingConfirm;
+            Mod.Log.Info($"[Event] 待确认：{pack.Name} @ {m_VenueLabel}，等玩家确认");
+        }
 
+        /// <summary>重组并重推确认卡 JSON（初始/地图选点后同步 UI）。版本号自增，UI 侧脏检查推送。</summary>
+        private void PushConfirmJson()
+        {
             // 费用 = 预算档 × 时长费用系数（非线性）
-            var cost = (int)(pack.Budgets[m_BudgetTier] * DurationCostFactor(m_DurationH));
+            var cost = (int)(m_Pack!.Budgets[m_BudgetTier] * DurationCostFactor(m_DurationH));
             var hour = CurrentHour();
             var whenText = m_StartHour > hour ? $"今晚 {m_StartHour}:00" : $"明晚 {m_StartHour}:00";
             var timeWarn = TimeFactor(m_StartHour) <= 0.3f;
+            var venueShown = m_HasVenueOverride ? m_VenueOverrideLabel : m_VenueLabel;
 
-            // 候选场馆标签数组（确认卡选择器）
+            // 候选场馆标签数组（确认卡选择器；标签全部经 JSON 转义——玩家自定义建筑名可能带引号）
             var venueArr = new System.Text.StringBuilder();
             for (int i = 0; i < m_Candidates.Count; i++)
             {
                 if (i > 0) venueArr.Append(',');
-                venueArr.Append('\"').Append(m_Candidates[i].Label).Append('\"');
+                venueArr.Append('\"').Append(Util.JsonMini.Escape(m_Candidates[i].Label)).Append('\"');
             }
 
             PendingConfirmJson = "{\"id\":" + m_CardId + ",\"title\":\"活动确认\",\"lines\":["
-                + $"\"活动：{pack.Name}\",\"地点：{m_VenueLabel}\","
+                + $"\"活动：{Util.JsonMini.Escape(m_Pack!.Name)}\",\"地点：{Util.JsonMini.Escape(venueShown)}\","
                 + $"\"预算：{BudgetTierName(m_BudgetTier)}（约 {cost / 10000} 万，含时长系数，从财政真扣）\","
                 + $"\"开始：{whenText}（时长 {m_DurationH} 小时）\",\"预计到场：约 {m_Expected} 人（规模 {m_Scale} × 时段系数）\""
                 + (timeWarn ? ",\"⚠ 时段阴间，预计人气惨淡，市民可能开骂\"" : "")
                 + "],\"danger\":" + (Content.ModSettings.WriteBackTier == "crazy" || timeWarn ? "true" : "false")
-                + ",\"venues\":[" + venueArr + "],\"venueIdx\":" + defaultIdx + "}";
+                + ",\"venues\":[" + venueArr + "],\"venueIdx\":" + m_VenueIdx
+                + (m_HasVenueOverride ? ",\"picked\":\"" + Util.JsonMini.Escape(m_VenueOverrideLabel) + "\"" : "")
+                + "}";
             PendingConfirmVersion++;
-            m_State = ChainState.AwaitingConfirm;
-            Mod.Log.Info($"[Event] 待确认：{pack.Name} @ {m_VenueLabel} {whenText}，等玩家确认");
+        }
+
+        /// <summary>场馆标签："城西·口袋公园"——方位（Geo 统一口径）+ 本地化真名（NameSystem，拿不到回退 prefab 名清洗）。</summary>
+        private string VenueLabel(Entity building, float3 pos)
+        {
+            string? real = null;
+            m_NameSystem ??= World.GetExistingSystemManaged<Game.UI.NameSystem>();
+            if (m_NameSystem != null)
+                real = m_NameSystem.GetRenderedLabelName(building);
+            if (string.IsNullOrEmpty(real) && EntityManager.HasComponent<PrefabRef>(building))
+            {
+                var prefabRef = EntityManager.GetComponentData<PrefabRef>(building);
+                if (m_PrefabSystem.TryGetPrefab(prefabRef.m_Prefab, out PrefabBase prefab))
+                    real = prefab.name.Replace('_', ' ');
+            }
+            if (string.IsNullOrEmpty(real))
+                real = "未知建筑";
+            return Geo.DirectionOf(pos) + "·" + real;
+        }
+
+        /// <summary>
+        /// 地图选点入口（T2：CityLifeUISystem 的 pickVenue trigger 在主线程调它）。
+        /// 校验：待确认状态 + 卡片 id + 实体存在且是建筑 + 不在冷却；过则设为地图选定并重推卡片（带 picked 字段）。
+        /// </summary>
+        public void ApplyPick(int id, Entity picked)
+        {
+            if (m_State != ChainState.AwaitingConfirm || id != m_CardId)
+                return;
+            if (!EntityManager.Exists(picked) || !EntityManager.HasComponent<Building>(picked))
+            {
+                Mod.Log.Info("[Pick] 选中的不是建筑，确认卡不变");
+                return;
+            }
+            if (m_VenueCooldownUntil.TryGetValue(picked, out var cd) && Now < cd)
+            {
+                Mod.Log.Info("[Pick] 该场馆 24h 内办过活动（冷却中），确认卡不变");
+                return;
+            }
+            var pos = EntityManager.HasComponent<Transform>(picked)
+                ? EntityManager.GetComponentData<Transform>(picked).m_Position
+                : float3.zero;
+            m_VenueOverride = picked;
+            m_VenueOverrideLabel = VenueLabel(picked, pos);
+            m_HasVenueOverride = true;
+            PushConfirmJson();
+            Mod.Log.Info($"[Pick] 地图选定场馆：{m_VenueOverrideLabel}（{picked.Index}:{picked.Version}）");
         }
 
         private static string BudgetTierName(int tier) => tier == 0 ? "低档" : tier == 2 ? "高档" : "中档";
@@ -247,11 +323,20 @@ namespace CityLife.GameBridge
                         PendingConfirmVersion++;
                         if (ok)
                         {
-                            // 玩家可能在确认卡里换了场馆——以回执下标为准
-                            var pick = Math.Clamp(s_ConfirmVenueIdx, 0, m_Candidates.Count - 1);
-                            m_VenueIdx = pick;
-                            m_Venue = m_Candidates[pick].Entity;
-                            m_VenueLabel = m_Candidates[pick].Label;
+                            // 以回执为准：-1=地图选定（T2），>=0=候选下标（玩家可能在确认卡里换了场馆）
+                            if (s_ConfirmVenueIdx == -1 && m_HasVenueOverride)
+                            {
+                                m_Venue = m_VenueOverride;
+                                m_VenueLabel = m_VenueOverrideLabel;
+                            }
+                            else
+                            {
+                                var pick = Math.Clamp(s_ConfirmVenueIdx, 0, m_Candidates.Count - 1);
+                                m_VenueIdx = pick;
+                                m_Venue = m_Candidates[pick].Entity;
+                                m_VenueLabel = m_Candidates[pick].Label;
+                            }
+                            m_HasVenueOverride = false;
                             ConfirmAndSchedule();
                         }
                         else
@@ -297,6 +382,7 @@ namespace CityLife.GameBridge
         private void Cancel(string reason)
         {
             OfficialPost($"公告取消：{m_Pack?.Name ?? "活动"}（{m_VenueLabel}）取消举办。（{reason}）");
+            m_HasVenueOverride = false;
             m_State = ChainState.Idle;
             Mod.Log.Info($"[Event] 取消：{reason}");
         }
@@ -401,6 +487,7 @@ namespace CityLife.GameBridge
             m_State = ChainState.Cooldown;
             m_EndFrame = Now + TicksPerHour; // 全局冷静 1 游戏小时
             m_Pack = null;
+            m_HasVenueOverride = false;
             m_InjectedTotal = 0;
             m_AttendancePeak = 0;
             m_Spent = 0;

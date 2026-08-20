@@ -46,8 +46,9 @@ namespace CityLife.GameBridge
     /// </summary>
     public partial class EntityAnchorSystem : GameSystemBase
     {
-        private const int k_MaxCompanyAnchors = 8;
-        private const int k_MaxParkAnchors = 4;
+        // 上限随"全面"反馈上调（2026-08-20）：锚点是 LLM 唯一的城市具体名词来源，池子太浅话题就干瘪
+        private const int k_MaxCompanyAnchors = 12;
+        private const int k_MaxParkAnchors = 6;
 
         private EntityQuery m_CitizenQuery = default!;
         private EntityQuery m_CompanyQuery = default!;
@@ -120,7 +121,7 @@ namespace CityLife.GameBridge
                 string detail = kind == AnchorKind.Hiring ? $"空 {vacancy} 个岗"
                     : kind == AnchorKind.BusinessGood ? "听说赚了"
                     : "听说快撑不住了";
-                m_Anchors.Add(new Anchor(building, kind.Value, DirectionOf(pos) + "那家" + word, detail));
+                m_Anchors.Add(new Anchor(building, kind.Value, Geo.DirectionOf(pos) + "那家" + word, detail));
                 added++;
 
                 if (calibrate)
@@ -138,7 +139,7 @@ namespace CityLife.GameBridge
                 var building = parks[i];
                 var pos = EntityManager.GetComponentData<Transform>(building).m_Position;
                 var name = PrefabNameOf(building);
-                var label = DirectionOf(pos) + (name.Contains("Park") ? "公园" : "景点");
+                var label = Geo.DirectionOf(pos) + (name.Contains("Park") ? "公园" : "景点");
                 m_Anchors.Add(new Anchor(building, AnchorKind.Park, label, "散心的好去处"));
                 added++;
             }
@@ -187,22 +188,6 @@ namespace CityLife.GameBridge
             return m_PrefabSystem.TryGetPrefab(prefabRef.m_Prefab, out PrefabBase prefab) ? prefab.name : "?";
         }
 
-        /// <summary>方位命名：相对地图原点的 8 方位+距离带（"城东""市中心"），不读游戏本地化。</summary>
-        private static string DirectionOf(float3 pos)
-        {
-            var dist = math.length(pos.xz);
-            if (dist < 500f)
-                return "市中心";
-
-            var angle = math.degrees(math.atan2(pos.z, pos.x)); // x 东 z 北，-180..180
-            if (angle >= -22.5f && angle < 22.5f) return "城东";
-            if (angle >= 22.5f && angle < 67.5f) return "城东北";
-            if (angle >= 67.5f && angle < 112.5f) return "城北";
-            if (angle >= 112.5f && angle < 157.5f) return "城西北";
-            if (angle >= 157.5f || angle < -157.5f) return "城西";
-            if (angle >= -157.5f && angle < -112.5f) return "城西南";
-            if (angle >= -112.5f && angle < -67.5f) return "城南";
-            return "城东南";
-        }
+        // 方位命名已抽到 Geo.DirectionOf（GameBridge 共享：锚点/场馆/突发定位同一口径）
     }
 }

@@ -41,26 +41,40 @@ namespace CityLife.GameBridge
 
         public override int GetUpdateInterval(SystemUpdatePhase phase) => 512;
 
+        private uint m_Cycle;   // 采样周期计数（校准日志低频用）
+
         protected override void OnUpdate()
         {
             var settings = m_TimeSettingsQuery.GetSingleton<Game.Prefabs.TimeSettingsData>();
             var data = m_TimeDataQuery.GetSingleton<Game.Common.TimeData>();
             var tod = m_TimeSystem.GetTimeOfDay(settings, data, m_SimulationSystem.frameIndex); // 0..1
 
+            var citizens = m_CitizenQuery.CalculateEntityCount();
+            var workable = m_HouseholdData.WorkableCitizenCount;
+            var workers = m_HouseholdData.CityWorkerCount;
+
             Latest = new Content.CitySnapshot
             {
-                Citizens = m_CitizenQuery.CalculateEntityCount(),
+                Citizens = citizens,
                 Households = m_HouseholdQuery.CalculateEntityCount(),
                 Tourists = m_HouseholdData.TouristCitizenCount,
                 Happiness = m_HouseholdData.AverageCitizenHappiness,
                 UnemploymentRate = m_HouseholdData.UnemploymentRate,
                 HomelessnessRate = m_HouseholdData.HomelessnessRate,
+                // 失业率/无家可归率：计数直算（2026-08-20 实机冤案：raw=1.2（已是百分数）被启发式
+                // 当成分数×100→120%，全城"失业率高"——启发式已废，改计数直算量纲实锤）
+                UnemploymentPercent = workable > 0 ? System.Math.Max(0f, (workable - workers) * 100f / workable) : 0f,
+                HomelessPercent = citizens > 0 ? m_HouseholdData.HomelessCitizenCount * 100f / citizens : 0f,
                 IsRaining = m_Climate.isRaining,
                 IsSnowing = m_Climate.isSnowing,
                 Temperature = m_Climate.temperature.value,
                 SeasonName = m_Climate.currentSeasonName,
                 HourOfDay = System.Math.Clamp((int)(tod * 24f), 0, 23),
             };
+
+            // 校准日志：raw vs 计数直算（低频；与游戏 UI 对账一致后可视情况删减）
+            if (m_Cycle++ % 32 == 0)
+                Mod.Log.Info($"[Radar·校准] 失业率 raw={m_HouseholdData.UnemploymentRate:F2} → 计数直算 {Latest.UnemploymentPercent:F1}%（劳动人口 {workable} 就业 {workers}）；无家可归 raw={m_HouseholdData.HomelessnessRate:F2} → {Latest.HomelessPercent:F1}%");
         }
     }
 }

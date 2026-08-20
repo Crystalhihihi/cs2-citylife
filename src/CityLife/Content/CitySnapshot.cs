@@ -11,15 +11,14 @@ namespace CityLife.Content
         public int Households;
         public int Tourists;
         public float Happiness;         // 平均幸福度（0-100 量级）
-        public float UnemploymentRate;  // 原始值，量纲见 UnemploymentPercent 注释
-        public float HomelessnessRate;
+        public float UnemploymentRate;  // 原始值（量纲不可靠：低失业率城市会被启发式误判，仅留档对照）
+        public float HomelessnessRate;  // 原始值（同）
+        public float UnemploymentPercent;   // 失业率%（TopicRadarSystem 用 WorkableCitizenCount/CityWorkerCount 计数直算，量纲实锤）
+        public float HomelessPercent;       // 无家可归率%（HomelessCitizenCount/Citizens 计数直算）
         public bool IsRaining;
         public bool IsSnowing;
         public float Temperature;
         public string? SeasonName;
         public int HourOfDay;           // 游戏时刻 0-23（昼夜节律：深夜帖少且内容不同）
-
-        /// <summary>失业率百分数。原始值量纲未实测（可能 0-1 或 0-100），>1.5 视为已是百分数。</summary>
-        public readonly float UnemploymentPercent => UnemploymentRate > 1.5f ? UnemploymentRate : UnemploymentRate * 100f;
     }
 }

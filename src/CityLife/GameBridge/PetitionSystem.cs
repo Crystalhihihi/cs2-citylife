@@ -175,7 +175,7 @@ namespace CityLife.GameBridge
         {
             var u = s.UnemploymentPercent - 12f;  // 失业率超标量
             var h = 45f - s.Happiness;            // 幸福度缺口
-            var w = s.HomelessnessRate - 5f;      // 无家可归率超标量
+            var w = s.HomelessPercent - 5f;       // 无家可归率超标量（计数直算）
             if (u <= 0 && h <= 0 && w <= 0)
                 return null;
             if (u >= h && u >= w)

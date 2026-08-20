@@ -126,6 +126,9 @@ namespace CityLife.GameBridge
 
         public override int GetUpdateInterval(SystemUpdatePhase phase) => 256;
 
+        /// <summary>活动是否进行中（含待确认/已排期/在办/冷静期）——请愿系统据此互斥，防双注入。</summary>
+        public bool IsActive => m_State != ChainState.Idle;
+
         private uint Now => (uint)m_SimulationSystem.frameIndex;
         private static uint TicksPerHour => (uint)Math.Max(1, TimeSystem.kTicksPerDay / 24);
 
@@ -416,26 +419,8 @@ namespace CityLife.GameBridge
                 m_InjectedTotal += CrowdInjector.InjectBatch(EntityManager, m_InjectQuery, m_Venue, batch, 128);
             }
 
-            // 实数到场： Leisure 目标=场馆的（在路上）+ 人已经在场馆的
-            int onTheWay = 0, onSite = 0;
-            var arr = m_AttendanceQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
-            foreach (var citizen in arr)
-            {
-                if (EntityManager.HasComponent<CurrentBuilding>(citizen)
-                    && EntityManager.GetComponentData<CurrentBuilding>(citizen).m_CurrentBuilding == m_Venue)
-                {
-                    onSite++;
-                    continue;
-                }
-                if (EntityManager.HasComponent<TravelPurpose>(citizen)
-                    && EntityManager.GetComponentData<TravelPurpose>(citizen).m_Purpose == Purpose.Leisure
-                    && EntityManager.HasComponent<Target>(citizen)
-                    && EntityManager.GetComponentData<Target>(citizen).m_Target == m_Venue)
-                {
-                    onTheWay++;
-                }
-            }
-            arr.Dispose();
+            // 实数到场（共享助手）： Leisure 目标=场馆的（在路上）+ 人已经在场馆的
+            var (onSite, onTheWay) = CrowdCount.At(EntityManager, m_AttendanceQuery, m_Venue);
             m_AttendancePeak = Math.Max(m_AttendancePeak, onSite + onTheWay);
 
             if (Now >= m_EndFrame)

@@ -16,5 +16,6 @@ namespace CityLife.Content
         LowHappiness,       // 低幸福
         TouristBoom,        // 游客潮
         Breaking,           // 突发事件（EventJournal 实体级话题；不进 DetectTopic/模板引擎，由 EventNewsSystem 直接成文）
+        Petition,           // 民意沸腾（请愿热议串；不进 DetectTopic，由 PetitionSystem 写 LiveContext.PendingPetition 触发）
     }
 }

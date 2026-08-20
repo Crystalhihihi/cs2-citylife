@@ -23,3 +23,11 @@
 - `Game.Buildings.Building`：`m_RoadEdge / m_CurvePosition / m_OptionMask / m_Flags`——建筑校验用存在性即可（地图选点校验）。
 - `Game.UI.NameSystem`：`GetRenderedLabelName(Entity)` / `TryGetCustomName(Entity, ref string)` / `GetDebugName(Entity)`——任意建筑本地化真名（地图选点标签、场馆候选真名用）。
 - UI 侧：`cs2/bindings` 顶层 `selectedEntity$: ValueBinding<Entity>`——玩家当前选中实体，地图选点的 UI 数据源。
+
+## 标志性建筑补探（2026-08-20 民意层 v2：请愿聚集点识别）
+
+- `Game.Prefabs.SignatureBuildingData`：**空 struct 标记组件（IComponentData）**——挂标志性建筑实体，
+  请愿聚集点查询即它（+ PrefabRef/Transform，排除 Deleted/Temp）；
+- `Game.Prefabs.SignatureBuilding`：prefab 侧 ComponentBase（m_ZoneType/m_XPReward 等），不用于查询；
+- `SignatureBuildingType` 不存在；Game.dll 全文无 "CityHall"——市政厅只是标志性建筑资产，
+  运行时按 `PrefabRef → PrefabBase.name` 含 "CityHall" 匹配（名录先打日志摸底）。

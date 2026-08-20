@@ -21,6 +21,11 @@ namespace CityLife.Content
     /// - breakingHotHours（int，默认 12，钳 1-72）：热议档闸门（游戏小时）——
     ///   每这么久最多一次"全城集中讨论某事件"；快讯帖不受此限（它有自己的分类限流）。
     ///   2026-08-20 玩家定案：盗窃/车祸是高频事件，没这道闸信息流会全变成讨论事件。
+    /// - petitionEnabled（bool，默认 true）：民意层 v2 总开关（市民请愿→聚集市政厅）。
+    /// - petitionCooldownH（int，默认 48，钳 6-240）：两次请愿的最小间隔（游戏小时）。
+    /// - petitionWindowH（int，默认 6，钳 1-48）：诉求窗口期——市长在此期限内发帖算回应，超时聚集。
+    /// - petitionScale（int，默认 150，钳 50-800）：聚集注入总量基数（再乘写回档位系数）。
+    /// - petitionDebug（bool，默认 false）：测试开关——绕过情绪阈值（幸福城也能触发请愿）。
     /// 如何扩展：加字段 = 这里加属性 + Load 加一行 + 消费处读属性。
     /// </summary>
     public static class ModSettings
@@ -34,6 +39,16 @@ namespace CityLife.Content
         public static bool BreakingNews { get; private set; } = true;
         /// <summary>热议档闸门：两次"全城集中讨论"的最小间隔（游戏小时，默认 12，钳 1-72）。</summary>
         public static int BreakingHotHours { get; private set; } = 12;
+        /// <summary>民意层总开关（默认开）：市民请愿 → 超时未回应聚集市政厅/地标。</summary>
+        public static bool PetitionEnabled { get; private set; } = true;
+        /// <summary>两次请愿的最小间隔（游戏小时，默认 48，钳 6-240）。</summary>
+        public static int PetitionCooldownH { get; private set; } = 48;
+        /// <summary>诉求窗口期（游戏小时，默认 6，钳 1-48）：市长期限内发帖算回应，超时聚集。</summary>
+        public static int PetitionWindowH { get; private set; } = 6;
+        /// <summary>聚集注入总量基数（默认 150，钳 50-800；再乘写回档位系数）。</summary>
+        public static int PetitionScale { get; private set; } = 150;
+        /// <summary>测试开关（默认关）：绕过情绪阈值触发请愿。</summary>
+        public static bool PetitionDebug { get; private set; } = false;
 
         public static void Load(string cfgDir, Action<string> log)
         {
@@ -64,7 +79,22 @@ namespace CityLife.Content
                 var bh = JsonMini.GetInt(json, "breakingHotHours");
                 if (bh != null)
                     BreakingHotHours = System.Math.Clamp(bh.Value, 1, 72);
-                log($"[Settings] t0Fallback={T0Fallback} feedMode={FeedMode} writeBackTier={WriteBackTier} feedMaxItems={FeedMaxItems} breakingNews={BreakingNews} breakingHotHours={BreakingHotHours}");
+                var pe = JsonMini.GetRaw(json, "petitionEnabled");
+                if (pe != null)
+                    PetitionEnabled = pe != "false";
+                var pc = JsonMini.GetInt(json, "petitionCooldownH");
+                if (pc != null)
+                    PetitionCooldownH = System.Math.Clamp(pc.Value, 6, 240);
+                var pw = JsonMini.GetInt(json, "petitionWindowH");
+                if (pw != null)
+                    PetitionWindowH = System.Math.Clamp(pw.Value, 1, 48);
+                var ps = JsonMini.GetInt(json, "petitionScale");
+                if (ps != null)
+                    PetitionScale = System.Math.Clamp(ps.Value, 50, 800);
+                var pd = JsonMini.GetRaw(json, "petitionDebug");
+                if (pd != null)
+                    PetitionDebug = pd == "true";
+                log($"[Settings] t0Fallback={T0Fallback} feedMode={FeedMode} writeBackTier={WriteBackTier} feedMaxItems={FeedMaxItems} breakingNews={BreakingNews} breakingHotHours={BreakingHotHours} petition={PetitionEnabled}/{PetitionCooldownH}h/{PetitionWindowH}h/{PetitionScale}人/debug={PetitionDebug}");
             }
             catch (Exception e)
             {

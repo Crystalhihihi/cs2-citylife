@@ -92,6 +92,11 @@ Section("事件/事故", () =>
     Dump("Game.Events.Destruction", fields: true);
     Dump("Game.Events.HealthEvent", fields: true);
     Dump("Game.Buildings.Building", fields: true);
+    Console.WriteLine();
+    Console.WriteLine("### 标志性建筑补探（2026-08-20 民意层 v2：请愿聚集点识别）");
+    Find("SignatureBuilding", fields: true);
+    Find("SignatureBuildingType", fields: true);
+    Find("SignatureBuildingData", fields: true);
 });
 
 Section("旅游", () =>

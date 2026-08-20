@@ -201,14 +201,20 @@ namespace CityLife.GameBridge
             if (allowRefill && !m_BatchPending && m_Pool.Count < k_RefillWatermark
                 && Mod.Gateway != null && !Llm.CliGateway.Mute && m_Personas.Count > 0)
             {
-                // 突发联动：新闻入刊 → 本炉变热议串（事件文本进尾 + 热帖评论配额）
-                var breaking = Content.LiveContext.LastBreaking;
-                Content.LiveContext.LastBreaking = null;
-                m_BatchTopic = breaking != null
-                    ? Content.Topic.Breaking
-                    : Content.ContentDirector.DetectTopic(snapshot, m_LastTopic);
-                // 热帖抽签：突发事件必热；平时每 7 炉带一炉热帖（大事件/随机对喷，2026-08-19 玩家定案分布）
-                var hotOne = breaking != null || m_BatchCount % 7 == 3;
+                // 民意/突发联动：请愿优先于突发（请愿是玩家可交互的，突发是纯新闻）；
+                // 请愿在场时突发留到下一炉（LastBreaking 不清，排队不丢）
+                var petition = Content.LiveContext.PendingPetition;
+                Content.LiveContext.PendingPetition = null;
+                var breaking = petition == null ? Content.LiveContext.LastBreaking : null;
+                if (petition == null)
+                    Content.LiveContext.LastBreaking = null;
+                m_BatchTopic = petition != null
+                    ? Content.Topic.Petition
+                    : breaking != null
+                        ? Content.Topic.Breaking
+                        : Content.ContentDirector.DetectTopic(snapshot, m_LastTopic);
+                // 热帖抽签：请愿/突发必热；平时每 7 炉带一炉热帖（大事件/随机对喷，2026-08-19 玩家定案分布）
+                var hotOne = petition != null || breaking != null || m_BatchCount % 7 == 3;
                 m_CurrentAssigned = PickAssigned(k_BatchSize, hotOne);
                 var anchorTexts = AssignAnchors(); // 实体锚点：吐槽/求助/盘点席位优先
                 var prevPosts = CollectPrevPosts(); // 连载机制：有前情的席位喂回上集
@@ -224,10 +230,14 @@ namespace CityLife.GameBridge
                 // 活动结果上下文：结算一次喂一炉，市民议论现场/财政账
                 var outcomeCtx = Content.LiveContext.LastEventOutcome;
                 Content.LiveContext.LastEventOutcome = null;
+                // 请愿后续上下文：回应/散去一次喂一炉（有人满意有人继续怼）
+                var petitionResolvedCtx = Content.LiveContext.PetitionResolved;
+                Content.LiveContext.PetitionResolved = null;
                 var prompt = Content.PromptBuilder.BuildBatch(
                     m_Head, snapshot, m_BatchTopic, m_CurrentAssigned,
                     new List<string>(m_Recent), m_BatchCount, anchorTexts, prevPosts,
-                    breaking, mayorCtx, outcomeCtx, Content.LiveContext.OngoingEvent);
+                    breaking, mayorCtx, outcomeCtx, Content.LiveContext.OngoingEvent,
+                    petition, petitionResolvedCtx);
                 Mod.Gateway.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Normal, 600));
                 m_BatchPending = true;
                 m_BatchCount++;

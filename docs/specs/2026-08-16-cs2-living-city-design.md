@@ -304,6 +304,7 @@ M0-M2 为最小可玩闭环。业余节奏约 2-3 个月，配合 coding AI 可�
 | 30 | 活动场馆选择（2026-08-20 实机迭代） | **玩家在地图上点选任意建筑**为主（确认卡"在地图上选点"→ 收卡点图 → C# 校验建筑/冷却 → 回执 venueIdx=-1）；候选列表保留作快捷默认，改为自有查询全量公园池（≤16，不再借锚点采样池的 4 上限），标签"方位·本地化真名"（NameSystem.GetRenderedLabelName） |
 | 31 | 突发事件话题源（2026-08-20 实机迭代） | **直采事件组件**替代 EventJournal+猜测 prefab 名：火灾=OnFire（挂燃烧建筑本体）、车祸/犯罪=AccidentSite.m_Flags 位标志（TrafficAccident=8/CrimeScene=4/CrimeFinished=16），字段级实锤见 docs/spikes/2026-08-20-event-taxonomy.md；命中=突发帖（带锚点）+ **写 LiveContext.LastBreaking**（此前全库无写入方，热议炉从未触发——"大事没人谈论"的根因）；频率两档分离：快讯按类限流（火4h/车祸6h/罪8h/全局1h 游戏小时），热议单独闸门（breakingHotHours 默认 12h） |
 | 32 | 作者署名与评论区生态（2026-08-20 实机迭代） | **发帖/评论作者一律真实市民名**（CitizenNamePoolSystem 采样 NameSystem，特殊注入卡除外——落实此前"用原版名"定案）；争论串：prompt 引导评论@卡id 互怼、执行层替换为显示名；**评论续热炉**：每 5 炉挑一条热帖（评论 4-29）续 2-4 条新评论（@已有评论者接着吵），评论区随时间生长 |
+| 33 | 民意层 v2（2026-08-20，活动链逆向闭环） | 市民发起：负面情绪超阈值（幸福<45/失业>12%/无家>5）+1/4 抽签+48h 冷却 → 诉求热议串（LiveContext.PendingPetition，零额外调用）→ **窗口 6h 内市长发帖=回应**；超时聚集市政厅/地标（SignatureBuildingData 查询，prefab 名含 CityHall 优先，无则地标，再无则降级纯舆情）→ 3h 散去结算。**触发权全在执行层，v1 只动舆情不动数值**（唯一写操作=TripNeeded 注入，petitionScale×写回档位）；与活动链互斥（IsActive）防双注入；凌晨超时顺延到 7:00 |
 
 
 ## 13. 角色层（v4 新增，拷问会后定案）

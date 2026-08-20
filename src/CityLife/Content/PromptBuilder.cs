@@ -128,7 +128,8 @@ namespace CityLife.Content
                                         IReadOnlyList<string?>? anchors = null,
                                         IReadOnlyList<string?>? prevPosts = null,
                                         string? breaking = null, string? mayorContext = null,
-                                        string? eventOutcome = null, string? ongoingEvent = null)
+                                        string? eventOutcome = null, string? ongoingEvent = null,
+                                        string? petition = null, string? petitionResolved = null)
         {
             var sb = new StringBuilder(head.Length + 896);
             sb.Append(head);
@@ -168,6 +169,12 @@ namespace CityLife.Content
             if (!string.IsNullOrEmpty(breaking))
                 sb.Append("【突发事件】刚才城里出事：").Append(breaking)
                   .Append("。本炉是热议帖：锚定这件事写，评论串要多要热。\n");
+            if (!string.IsNullOrEmpty(petition))
+                sb.Append("【民意沸腾】市民对").Append(petition)
+                  .Append("强烈不满，正在联署要求市长回应。本炉是热议帖：帖子带怨气（对事不对人，别攻击市长本人），评论多站队吵起来。\n");
+            if (!string.IsNullOrEmpty(petitionResolved))
+                sb.Append("【请愿后续】").Append(petitionResolved)
+                  .Append("。市民还在议论这事（有人满意有人继续怼，别一边倒）。\n");
             if (!string.IsNullOrEmpty(mayorContext))
                 sb.Append("【市长说】市长刚刚发言：\"").Append(mayorContext)
                   .Append("\"。市民会读到；帖子和评论可以回应他（夸怼随意，对事不对人）。\n");
@@ -219,6 +226,7 @@ namespace CityLife.Content
                 case Topic.LowHappiness: return "市民心情低落";
                 case Topic.TouristBoom: return "游客变多了";
                 case Topic.Breaking: return "突发事件（见【突发事件】）";
+                case Topic.Petition: return "民意沸腾（见【民意沸腾】）";
                 default: return "生活闲聊：" + k_DailyTopics[seed % k_DailyTopics.Length];
             }
         }

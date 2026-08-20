@@ -16,6 +16,12 @@ namespace CityLife.Content
         /// <summary>最近一条突发事件文本（下一炉变热议串的引信）。</summary>
         public static string? LastBreaking;
 
+        /// <summary>请愿主题（"失业率太高，工作难找"）：PetitionSystem 写入，下一炉变民意沸腾热议串（读一次即清）。</summary>
+        public static string? PendingPetition;
+
+        /// <summary>请愿后续（"市长回应了…"/"聚集散去，问题未解"）：PetitionSystem 写入，喂下一炉议论（读一次即清）。</summary>
+        public static string? PetitionResolved;
+
         /// <summary>最近一次活动的结算结果（"爆棚/冷场"），喂下一炉让市民议论（读一次即清）。</summary>
         public static string? LastEventOutcome;
 

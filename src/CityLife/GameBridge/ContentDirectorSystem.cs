@@ -398,8 +398,8 @@ namespace CityLife.GameBridge
 
         /// <summary>
         /// 实体锚点分配：吐槽/求助/盘点形态优先挂锚（这些形状吃具体对象），轮换取锚防总写同一家店。
-        /// 2026-08-20 玩家反馈"全是城西北那家"后：**锚点减半**（每席位 1/2 概率）+ **2/3 剥掉方位前缀**
-        /// （方位留在实体上供"前往现场"，prompt 文本少念地名）；prompt 侧另有"别复读锚名"约束。
+        /// 锚点减半（每席位 1/2 概率，2026-08-20"全是城西北"反馈）；锚点标签已是真实店名/地名
+        /// （EntityAnchorSystem 经 NameSystem 取名），不再有方位前缀可剥。
         /// 返回与 m_CurrentAssigned 对齐的锚点文本表；同步填 m_CurrentAnchorEntities（收炉时随帖入池）。
         /// </summary>
         private List<string?> AssignAnchors()
@@ -418,11 +418,7 @@ namespace CityLife.GameBridge
                 {
                     var anchor = anchors[cursor % anchors.Count];
                     cursor++;
-                    // 2/3 剥方位前缀（"那家便利店（空 3 个岗）"），1/3 保留方位（城市有区感）
-                    var text = (m_BatchCount + i) % 3 != 0
-                        ? StripDirection(anchor.Label) + "（" + anchor.Detail + "）"
-                        : anchor.PromptText;
-                    texts.Add(text);
+                    texts.Add(anchor.PromptText);
                     m_CurrentAnchorEntities.Add(anchor.Entity);
                 }
                 else
@@ -432,18 +428,6 @@ namespace CityLife.GameBridge
                 }
             }
             return texts;
-        }
-
-        // 方位前缀表（长前缀在前防误剥："城东北"先于"城东"）
-        private static readonly string[] k_DirectionPrefixes =
-            { "城东北", "城西北", "城西南", "城东南", "市中心", "城东", "城北", "城西", "城南" };
-
-        private static string StripDirection(string label)
-        {
-            foreach (var p in k_DirectionPrefixes)
-                if (label.StartsWith(p))
-                    return label.Substring(p.Length);
-            return label;
         }
 
         /// <summary>

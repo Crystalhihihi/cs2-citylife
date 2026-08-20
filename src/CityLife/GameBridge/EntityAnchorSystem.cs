@@ -39,9 +39,9 @@ namespace CityLife.GameBridge
     /// <summary>
     /// 实体锚点系统（读侧）：每 1024 帧从公司/公园实体采样一批话题锚点，供内容导演分配。
     /// 信号全部来自元数据已验证组件：空缺=WorkProvider.m_MaxWorkers−Employee buffer 数；
-    /// 盈亏=Profitability.m_Profitability；业态=Resources buffer 里存货最多的非货币资源
-    /// （"那家便利店"而不是"那家店"——2026-08-20 玩家反馈"全是吃的"的根治：模型只会把泛词
-    /// 自由发挥成吃的，真实业态名喂给它就没得编了）。
+    /// 盈亏=Profitability.m_Profitability；业态=Resources buffer 里存货最多的非货币资源。
+    /// 标签=**真实店名/地名**（NameSystem.GetRenderedLabelName + 所在路名，2026-08-20 玩家定案：
+    /// 人发帖会说"解放路那家面馆"，不会说"城西北"——方位只作无名时的兜底）。
     /// 纪律：跨步抽样防总抓同一批；采样整体轮换（m_Offset）；只读不写。
     /// </summary>
     public partial class EntityAnchorSystem : GameSystemBase
@@ -53,7 +53,7 @@ namespace CityLife.GameBridge
         private EntityQuery m_CitizenQuery = default!;
         private EntityQuery m_CompanyQuery = default!;
         private EntityQuery m_ParkQuery = default!;
-        private PrefabSystem m_PrefabSystem = default!;
+        private Game.UI.NameSystem? m_NameSystem;  // 惰性解析（真实店名/路名；拿不到回退方位兜底）
         private readonly List<Anchor> m_Anchors = new();
         private int m_Offset;
         private uint m_Cycle;
@@ -80,7 +80,6 @@ namespace CityLife.GameBridge
                 ComponentType.ReadOnly<PrefabRef>(),
                 ComponentType.Exclude<Game.Common.Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
-            m_PrefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             RequireForUpdate(m_CitizenQuery);
         }
 
@@ -121,7 +120,7 @@ namespace CityLife.GameBridge
                 string detail = kind == AnchorKind.Hiring ? $"空 {vacancy} 个岗"
                     : kind == AnchorKind.BusinessGood ? "听说赚了"
                     : "听说快撑不住了";
-                m_Anchors.Add(new Anchor(building, kind.Value, Geo.DirectionOf(pos) + "那家" + word, detail));
+                m_Anchors.Add(new Anchor(building, kind.Value, CompanyLabel(company, building, word, pos), detail));
                 added++;
 
                 if (calibrate)
@@ -138,9 +137,7 @@ namespace CityLife.GameBridge
             {
                 var building = parks[i];
                 var pos = EntityManager.GetComponentData<Transform>(building).m_Position;
-                var name = PrefabNameOf(building);
-                var label = Geo.DirectionOf(pos) + (name.Contains("Park") ? "公园" : "景点");
-                m_Anchors.Add(new Anchor(building, AnchorKind.Park, label, "散心的好去处"));
+                m_Anchors.Add(new Anchor(building, AnchorKind.Park, PlaceLabel(building, pos, "公园/景点"), "散心的好去处"));
                 added++;
             }
             parks.Dispose();
@@ -182,10 +179,45 @@ namespace CityLife.GameBridge
             return "店"; // 兜底：未知/无存货业态
         }
 
-        private string PrefabNameOf(Entity entity)
+        /// <summary>
+        /// 公司锚点标签（2026-08-20 玩家定案：人说"解放路那家面馆"，不说"城西北"）：
+        /// 真实公司名（NameSystem）+ 所在路名后缀；无名系统时回退"方位+那家+业态"的旧兜底。
+        /// </summary>
+        private string CompanyLabel(Entity company, Entity building, string word, float3 pos)
         {
-            var prefabRef = EntityManager.GetComponentData<PrefabRef>(entity);
-            return m_PrefabSystem.TryGetPrefab(prefabRef.m_Prefab, out PrefabBase prefab) ? prefab.name : "?";
+            m_NameSystem ??= World.GetExistingSystemManaged<Game.UI.NameSystem>();
+            if (m_NameSystem != null)
+            {
+                var name = m_NameSystem.GetRenderedLabelName(company);
+                if (!string.IsNullOrEmpty(name))
+                    return name + RoadSuffix(building);
+            }
+            return Geo.DirectionOf(pos) + "那家" + word + RoadSuffix(building);
+        }
+
+        /// <summary>地点锚点标签（公园/景点）：真实地名 + 路名后缀；无名系统回退方位+兜底词。</summary>
+        private string PlaceLabel(Entity building, float3 pos, string fallback)
+        {
+            m_NameSystem ??= World.GetExistingSystemManaged<Game.UI.NameSystem>();
+            if (m_NameSystem != null)
+            {
+                var name = m_NameSystem.GetRenderedLabelName(building);
+                if (!string.IsNullOrEmpty(name))
+                    return name + RoadSuffix(building);
+            }
+            return Geo.DirectionOf(pos) + fallback;
+        }
+
+        /// <summary>所在路名后缀"（神太街）"：建筑 m_RoadEdge 的渲染名；拿不到就空串（不硬造）。</summary>
+        private string RoadSuffix(Entity building)
+        {
+            if (m_NameSystem == null || !EntityManager.HasComponent<Game.Buildings.Building>(building))
+                return "";
+            var road = EntityManager.GetComponentData<Game.Buildings.Building>(building).m_RoadEdge;
+            if (road == Entity.Null)
+                return "";
+            var name = m_NameSystem.GetRenderedLabelName(road);
+            return string.IsNullOrEmpty(name) ? "" : $"（{name}）";
         }
 
         // 方位命名已抽到 Geo.DirectionOf（GameBridge 共享：锚点/场馆/突发定位同一口径）

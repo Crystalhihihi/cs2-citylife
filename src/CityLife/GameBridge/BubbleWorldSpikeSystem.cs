@@ -114,6 +114,7 @@ namespace CityLife.GameBridge
             var t = fwd.y < -0.001f ? camPos.y / -fwd.y : 100f;
             var focus = camPos + fwd * t;
             var pos = new Vector3((float)focus.x, (float)(focus.y + 10.0), (float)focus.z);
+            var quadPos = camPos + fwd.normalized * 30f; // 贴脸对照组：相机正前 30m（排除一切位置/视锥怀疑）
 
             m_Font ??= CreateCjkFont();
             if (m_Font == null || m_Font.material == null)
@@ -143,6 +144,7 @@ namespace CityLife.GameBridge
             // 全局 volume（**isGlobal=true 全相机生效**——2026-08-21 统一假说："Main Camera" 可能只是
             // 投影代理而非真正的世界渲染相机，挂单相机可能挂错对象；全局则谁是真相机都拦得住）+ cmd.DrawMesh
             DumpCameras();
+            DumpVolumes();
             m_VolumeGo = new GameObject("CityLifeBubbleVolume");
             m_VolumeGo.hideFlags = HideFlags.HideAndDontSave;
             var volume = m_VolumeGo.AddComponent<CustomPassVolume>();
@@ -160,9 +162,20 @@ namespace CityLife.GameBridge
             m_Pass.TextMat = m_TextMat;
             m_Pass.QuadMat = m_QuadMat;
             m_Pass.Pos = pos;
+            m_Pass.QuadPos = quadPos;
 
             m_DrawActive = true;
             Mod.Log.Info($"[BubbleW] 绘制开启(CustomPass) @({pos.x:F0},{pos.y:F0},{pos.z:F0}) shader={shader.name} verts={m_TextMesh.vertexCount}");
+        }
+
+        /// <summary>CustomPassVolume 枚举（CS2 支持 CustomPass 的铁证/反证）：游戏自己注册了几个、注入点都是啥。</summary>
+        private void DumpVolumes()
+        {
+            var volumes = Resources.FindObjectsOfTypeAll<CustomPassVolume>();
+            var sb = new StringBuilder();
+            foreach (var v in volumes)
+                sb.Append($"[{v.injectionPoint} global={v.isGlobal} enabled={v.enabled}] ");
+            Mod.Log.Info($"[BubbleW] CustomPassVolume 共 {volumes.Length} 个：{sb}");
         }
 
         private void TearDownVolume()
@@ -306,6 +319,7 @@ namespace CityLife.GameBridge
         public Material? TextMat;
         public Material? QuadMat;
         public Vector3 Pos;
+        public Vector3 QuadPos; // 贴脸对照组位置（相机正前 30m）
 
         private int m_LogCount;
 
@@ -326,7 +340,7 @@ namespace CityLife.GameBridge
             if (TextMesh != null && TextMat != null)
                 cmd.DrawMesh(TextMesh, Matrix4x4.TRS(Pos, rot, Vector3.one), TextMat);
             if (QuadMesh != null && QuadMat != null)
-                cmd.DrawMesh(QuadMesh, Matrix4x4.TRS(Pos + new Vector3(4f, 0f, 0f), rot, Vector3.one), QuadMat);
+                cmd.DrawMesh(QuadMesh, Matrix4x4.TRS(QuadPos, rot, Vector3.one), QuadMat);
         }
     }
 }

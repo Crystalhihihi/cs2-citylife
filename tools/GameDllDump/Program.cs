@@ -303,6 +303,113 @@ Section("财政与弹窗（2026-08-20 M4 spike：预算真扣+原生确认弹窗
     Dump("Game.Common.TimeData", fields: true);
 });
 
+Section("通知图标渲染·类型普查（2026-08-20 调查：建筑上方悬浮图标如何画进 3D 世界）", () =>
+{
+    Console.WriteLine("### Game.dll 名称含 Notification 的类型");
+    foreach (var t in allTypes.Where(t => t.Name.Contains("Notification")).OrderBy(t => t.FullName))
+        Console.WriteLine($"  {t.FullName} ({KindOf(t)})");
+    Console.WriteLine();
+    Console.WriteLine("### Game.dll 名称含 Icon 的类型（不含 ICommand）");
+    foreach (var t in allTypes.Where(t => t.Name.Contains("Icon")).OrderBy(t => t.FullName))
+        Console.WriteLine($"  {t.FullName} ({KindOf(t)})");
+    Console.WriteLine();
+    Console.WriteLine("### Game.dll 名称含 Overlay / Billboard / WorldSpace / Sprite 的类型");
+    foreach (var t in allTypes.Where(t => t.Name.Contains("Overlay") || t.Name.Contains("Billboard")
+             || t.Name.Contains("WorldSpace") || t.Name.Contains("Sprite")).OrderBy(t => t.FullName))
+        Console.WriteLine($"  {t.FullName} ({KindOf(t)})");
+});
+
+Section("通知图标渲染·系统深挖", () =>
+{
+    Find("NotificationIconRenderSystem", fields: true, methods: true);
+    Find("NotificationIconDisplaySystem", fields: true, methods: true);
+    Find("OverlayRenderSystem", fields: true, methods: true);
+    Find("IconFlags", fields: true);
+    Find("IconElement", fields: true);
+    Find("Icon", fields: true);
+    Find("IconCluster", fields: true);
+    Find("NotificationIconData", fields: true);
+    Find("NotificationIconPrefab", fields: true);
+});
+
+Section("通知图标渲染·嵌套类型（RenderJob/Buffer/ShaderIDs 线索）", () =>
+{
+    foreach (var outerName in new[] { "NotificationIconRenderSystem", "NotificationIconDisplaySystem", "OverlayRenderSystem" })
+    {
+        if (!byName.TryGetValue(outerName, out var outers)) continue;
+        foreach (var outer in outers)
+        {
+            Type[] nested;
+            try { nested = outer.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic); }
+            catch { continue; }
+            foreach (var nt in nested) DumpType(nt, fields: true, methods: true);
+        }
+    }
+});
+
+Section("跨程序集扫描·Icon/Billboard/WorldSpace/Overlay（Colossal.* 等）", () =>
+{
+    foreach (var dll in dlls)
+    {
+        var asmName = Path.GetFileNameWithoutExtension(dll);
+        if (asmName == "Game") continue; // Game.dll 已单独普查
+        Assembly asm2;
+        try { asm2 = mlc.LoadFromAssemblyPath(dll); }
+        catch { continue; }
+        Type[] types2;
+        try { types2 = asm2.GetTypes(); }
+        catch (ReflectionTypeLoadException e2) { types2 = e2.Types.Where(t => t != null).Cast<Type>().ToArray(); }
+        catch { continue; }
+        var hits = types2.Where(t =>
+                t.Name.Contains("Billboard") || t.Name.Contains("WorldSpace")
+                || (t.Name.Contains("Icon") && !t.Name.Contains("ICommand") && !t.Name.Contains("IconDirectory"))
+                || t.Name.Contains("Overlay")).OrderBy(t => t.FullName).ToList();
+        if (hits.Count == 0) continue;
+        Console.WriteLine($"### [{asmName}] 命中 {hits.Count} 个（仅列名）");
+        foreach (var t in hits.Take(60))
+            Console.WriteLine($"  {t.FullName} ({KindOf(t)})");
+    }
+});
+
+Section("Game.dll 嵌入资源清单（shader/贴图名线索）", () =>
+{
+    foreach (var n in game.GetManifestResourceNames().OrderBy(n => n))
+        Console.WriteLine($"  {n}");
+});
+
+Section("通知图标渲染·第二轮：数据链路与注入点", () =>
+{
+    // Buffer 系统：实例数据怎么组织
+    Find("NotificationIconBufferSystem", fields: true, methods: true);
+    // Location 系统：世界坐标怎么定
+    Find("NotificationIconLocationSystem", fields: true, methods: true);
+    // 配置 prefab：Material/Shader 来源候选
+    Find("IconConfigurationPrefab", fields: true, methods: true);
+    Find("IconConfigurationData", fields: true);
+    Find("NotificationIconDisplayData", fields: true);
+    Find("IconAnimationElement", fields: true);
+    Find("IconCategory", fields: true);
+    // 渲染注入点：RenderingSystem 暴露什么
+    Find("RenderingSystem", fields: true, methods: true);
+    // 相似渲染路径参照：MarkerIconSystem
+    Find("MarkerIconSystem", fields: true, methods: true);
+});
+
+Section("通知图标渲染·第二轮嵌套（BufferSystem 的 IconData 等）", () =>
+{
+    foreach (var outerName in new[] { "NotificationIconBufferSystem", "NotificationIconLocationSystem", "MarkerIconSystem" })
+    {
+        if (!byName.TryGetValue(outerName, out var outers)) continue;
+        foreach (var outer in outers)
+        {
+            Type[] nested;
+            try { nested = outer.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic); }
+            catch { continue; }
+            foreach (var nt in nested) DumpType(nt, fields: true, methods: false);
+        }
+    }
+});
+
 return 0;
 
 // ================== helpers ==================

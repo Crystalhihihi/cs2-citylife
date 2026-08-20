@@ -438,6 +438,15 @@ Section("OverlayRenderSystem 文字/图元 API（2026-08-21 M3-W 调查后：世
     Console.WriteLine("### 名称含 hideOverlay/SetShaderEnabled 的类型");
     foreach (var t in allTypes.Where(t => t.Name.Contains("RenderingSystem") || t.Name.Contains("Overlay")).OrderBy(t => t.FullName))
         Console.WriteLine($"  {t.FullName} ({KindOf(t)})");
+    Console.WriteLine();
+    Console.WriteLine("### OverlayRenderSystem 嵌套数据类型（2026-08-21 计数全 0 调查：写入被收下的条件）");
+    foreach (var outer in allTypes.Where(t => t.Name == "OverlayRenderSystem"))
+    {
+        Type[] nested;
+        try { nested = outer.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic); }
+        catch { continue; }
+        foreach (var nt in nested) DumpType(nt, fields: true, methods: false);
+    }
 });
 
 return 0;

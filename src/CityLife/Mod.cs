@@ -104,9 +104,10 @@ namespace CityLife
             // M3-spike：气泡渲染管线验证（Ctrl+1/2/3=100/300/600 个，Ctrl+0=关；日志 [Bubble] FPS avg）
             updateSystem.UpdateAt<GameBridge.BubbleSpikeSystem>(SystemUpdatePhase.UIUpdate);
 
-            // M3-W：世界渲染 spike——走游戏原生 OverlayRenderSystem（DrawText/DrawCustomMesh），
-            // 写入侧纪律注册在 Rendering 相位（Move It 源码同款）
-            updateSystem.UpdateAt<GameBridge.BubbleWorldSpikeSystem>(SystemUpdatePhase.Rendering);
+            // M3-W：世界渲染 spike——走游戏原生 OverlayRenderSystem（DrawText/DrawCustomMesh/DrawCircle）。
+            // 相位调查（2026-08-21 计数全 0）：先挂 GameSimulation 验证"写入时机/清空顺序"嫌疑
+            // （OverlayRenderSystem 若在 GameSimulation 消费，Rendering 相位的写入可能先清后拷被永久跳过）
+            updateSystem.UpdateAt<GameBridge.BubbleWorldSpikeSystem>(SystemUpdatePhase.GameSimulation);
         }
 
         public void OnDispose()

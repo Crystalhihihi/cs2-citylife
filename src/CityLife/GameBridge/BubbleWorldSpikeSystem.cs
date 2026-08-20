@@ -123,7 +123,9 @@ namespace CityLife.GameBridge
             var pos = (float3)(camPos + fwd * t + new Vector3(0, 10f, 0));
 
             var buffer = m_Overlay.GetBuffer(out var deps);
-            // 底板：面朝镜头的平面（白），文字压上
+            // 探针三件套：红圈（Move It 验证过的原语）+ 白平面底板 + 文字——分别落不同渲染列表，
+            // 哪个计数起来就知道哪条道通（2026-08-21 计数全 0 调查）
+            buffer.DrawCircle(Color.red, pos, 4f);
             buffer.DrawCustomMesh(Color.white, pos, 1.2f, 3.6f, OverlayRenderSystem.CustomMeshType.Plane, cam.transform.rotation);
             buffer.DrawText(m_LabelEntity, pos, true); // cameraFace=true 自动面向镜头
             m_Overlay.AddBufferWriter(deps);
@@ -148,6 +150,7 @@ namespace CityLife.GameBridge
                 const BindingFlags priv = BindingFlags.NonPublic | BindingFlags.Instance;
                 var textCount = (int)(t.GetField("m_TextInstanceCount", priv)?.GetValue(m_Overlay) ?? -1);
                 var absCount = (int)(t.GetField("m_AbsoluteInstanceCount", priv)?.GetValue(m_Overlay) ?? -1);
+                var projCount = (int)(t.GetField("m_ProjectedInstanceCount", priv)?.GetValue(m_Overlay) ?? -1);
                 var customCounts = t.GetField("m_CustomMeshInstanceCount", priv)?.GetValue(m_Overlay) as int[];
                 var planeCount = customCounts != null && customCounts.Length > 2 ? customCounts[2] : -1;
 
@@ -161,7 +164,7 @@ namespace CityLife.GameBridge
                     var v = pi != null ? pi.GetValue(rendering) : fi?.GetValue(rendering);
                     hideOverlay = v?.ToString() ?? "?";
                 }
-                Mod.Log.Info($"[BubbleW·诊断] 渲染列表：text={textCount} absolute={absCount} plane={planeCount}；hideOverlay={hideOverlay}");
+                Mod.Log.Info($"[BubbleW·诊断] 渲染列表：text={textCount} absolute={absCount} projected={projCount} plane={planeCount}；hideOverlay={hideOverlay}");
             }
             catch (System.Exception e)
             {

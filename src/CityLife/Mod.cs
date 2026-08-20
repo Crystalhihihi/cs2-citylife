@@ -71,6 +71,9 @@ namespace CityLife
             // 验证完成后拆除，正式版进"原语执行器库"（设计文档 §4 M6）。
             updateSystem.UpdateAt<GameBridge.InjectionSpikeSystem>(SystemUpdatePhase.GameSimulation);
 
+            // 实质性 spike（2026-08-20）：购物注入是否真成交（Ctrl+B）。验证后拆除，结论决定商家广告层形态。
+            updateSystem.UpdateAt<GameBridge.ShoppingSpikeSystem>(SystemUpdatePhase.GameSimulation);
+
             // 内容引擎：话题雷达（读侧蒸馏快照）+ 内容导演（一炉出串/滴灌/T0 兜底）。
             updateSystem.UpdateAt<GameBridge.TopicRadarSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<GameBridge.ContentDirectorSystem>(SystemUpdatePhase.GameSimulation);

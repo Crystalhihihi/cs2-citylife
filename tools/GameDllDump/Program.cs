@@ -99,6 +99,28 @@ Section("事件/事故", () =>
     Find("SignatureBuildingData", fields: true);
 });
 
+Section("购物链路（2026-08-20 实质性 spike：购买行为在哪个系统发生）", () =>
+{
+    Console.WriteLine("### 名称含 Shop/Purchase/Transaction/Trade 的类型");
+    foreach (var t in allTypes.Where(t => t.Name.Contains("Shop") || t.Name.Contains("Purchase")
+             || t.Name.Contains("Transaction") || t.Name.Contains("Trade")).OrderBy(t => t.FullName))
+        Console.WriteLine($"  {t.FullName} ({KindOf(t)})");
+    Console.WriteLine();
+    Console.WriteLine("### Game.Economy 命名空间类型一览（仅类型名）");
+    foreach (var t in allTypes.Where(t => t.Namespace == "Game.Economy").OrderBy(t => t.Name))
+        Console.WriteLine($"- {t.Name} ({KindOf(t)})");
+    Console.WriteLine();
+    Console.WriteLine("### 名称含 CitizenAI/CitizenAction/Behavior 的类型");
+    foreach (var t in allTypes.Where(t => t.Name.Contains("CitizenAI") || t.Name.Contains("CitizenAction")
+             || t.Name.Contains("Behavior")).OrderBy(t => t.FullName))
+        Console.WriteLine($"  {t.FullName} ({KindOf(t)})");
+    Console.WriteLine();
+    Console.WriteLine("### 购买结算核心深挖（ResourceBuyerSystem 的查询=成交触发条件）");
+    Find("ResourceBuyerSystem", fields: true, methods: true);
+    Find("FailedShoppingOrigin", fields: true);
+    Find("EconomyUtils", methods: true);
+});
+
 Section("旅游", () =>
 {
     Find("TouristSpawnSystem", fields: true, methods: true);

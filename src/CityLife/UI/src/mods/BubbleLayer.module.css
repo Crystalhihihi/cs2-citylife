@@ -14,7 +14,8 @@
 }
 
 /* 聊天气泡基座：布局/字体/阴影/补间/尾巴形状共享；颜色按类型变体（人白/车淡蓝/楼淡黄）。
-   transition 补间：C# 推送已节流 10Hz，中间帧由它插值——治"一卡一卡" */
+   transition 补间：C# 推送已节流 10Hz，中间帧由它插值——治"一卡一卡"；
+   animation 入场：新气泡淡入微浮起（同一 key 内换文案不重播） */
 .bubble {
     position: absolute;
     transform: translate(-50%, -100%);  /* 以锚点（头顶）为底边中点 */
@@ -30,6 +31,12 @@
     pointer-events: none;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);
     transition: left 0.1s linear, top 0.1s linear;
+    animation: bubbleIn 0.25s ease-out;
+}
+
+@keyframes bubbleIn {
+    from { opacity: 0; transform: translate(-50%, calc(-100% + 4px)); }
+    to { opacity: 1; transform: translate(-50%, -100%); }
 }
 
 /* 气泡小尾巴（朝下，指向说话的人；颜色随类型变体） */

@@ -44,6 +44,11 @@ namespace CityLife.GameBridge
         private bool m_QueryReady;
         private bool m_Censused;
         private readonly List<(Entity e, byte kind)> m_Sampled = new(); // kind: 0 人 1 车 2 楼
+        // 气泡生命周期（各气泡独立时钟：3-8s 错相，到点各自换下一句——"同时切换过度逆天"的根治；
+        // 玩家定案：同一人永远同一句=小剧场死刑，要的是连续不断的感觉）
+        private readonly Dictionary<Entity, (byte kind, int textIdx, float nextAt)> m_Tracked = new();
+        private readonly HashSet<Entity> m_SampleSet = new();
+        private readonly List<Entity> m_PruneScratch = new();
         private int m_Level;          // 0=关 1=100 2=300 3=600
         private uint m_Frame;
         private uint m_LastKeyFrame;
@@ -51,10 +56,14 @@ namespace CityLife.GameBridge
         private int m_FpsFrames;
         private float m_FpsTimer;
 
-        // 占位文案（三种长度，测气泡宽度与换行）
-        private static readonly string[] k_Texts = { "……", "吃了吗", "今天这公交又晚点了，离谱" };
-        private static readonly string[] k_CarTexts = { "滴——", "又堵了" };
-        private static readonly string[] k_BuildingTexts = { "……", "晚饭吃啥" };
+        // 占位文案池（正式版换成内容管道；车/楼已混入环境声——玩家"热闹感"设想的 spike 预览：
+        // 车的滴滴/轰油门、楼里的电视/装修/快递，环境声也是气泡文本的一种）
+        private static readonly string[] k_Texts =
+            { "……", "吃了吗", "今天这公交又晚点了，离谱", "风好大", "快走要迟到了", "这店排队也太长了", "听说东区新开了家店" };
+        private static readonly string[] k_CarTexts =
+            { "嘀嘀——", "又堵了", "轰——", "师傅前面路口下" };
+        private static readonly string[] k_BuildingTexts =
+            { "……", "晚饭吃啥", "电视小点声！", "装修第三天了", "快递放门口" };
 
         protected override void OnCreate()
         {
@@ -200,6 +209,17 @@ namespace CityLife.GameBridge
                 m_Diagnose = false;
                 Mod.Log.Info($"[Bubble·诊断] cam={cam.name} 高={cam.transform.position.y:F0}m 屏内候选 人={humans} 车={cars} 楼={buildings}");
             }
+
+            // 样本集重建 + 生命周期表清理（出组的移除，防字典无限涨）
+            m_SampleSet.Clear();
+            foreach (var (e, _) in m_Sampled)
+                m_SampleSet.Add(e);
+            m_PruneScratch.Clear();
+            foreach (var kv in m_Tracked)
+                if (!m_SampleSet.Contains(kv.Key))
+                    m_PruneScratch.Add(kv.Key);
+            foreach (var e in m_PruneScratch)
+                m_Tracked.Remove(e);
         }
 
         /// <summary>屏幕投影采样：屏内（±5% 边距）且 z∈(5,k_MaxDist] 的实体按距离取前 cap 个入 m_Sampled。返回入圈数。</summary>
@@ -229,10 +249,11 @@ namespace CityLife.GameBridge
             return n;
         }
 
-        /// <summary>每帧投影+推送（最坏情况压测：JSON 全量重推）。</summary>
+        /// <summary>每帧投影+节流推送；气泡文本走各自的生命周期（独立时钟，错相切换）。</summary>
         private void PushBubbles(Camera cam)
         {
-            var sb = new StringBuilder(m_Sampled.Count * 40 + 2);
+            var now = UnityEngine.Time.time;
+            var sb = new StringBuilder(m_Sampled.Count * 48 + 2);
             sb.Append('[');
             var first = true;
             var shown = 0;
@@ -249,11 +270,22 @@ namespace CityLife.GameBridge
                 var y = (1f - s.y / Screen.height) * 100f; // Unity 自下而上 → CSS 自上而下
                 if (x < -5f || x > 105f || y < -5f || y > 105f)
                     continue;
-                // 乱跳根治（2026-08-20 玩家实机）：key/文案都按实体定，不按名次——
-                // 成员变动时按下标映射会把别人的气泡抢过来跳变；React 侧按实体 i 作 key
-                var text = kind == 0 ? k_Texts[e.Index % k_Texts.Length]
-                    : kind == 1 ? k_CarTexts[e.Index % k_CarTexts.Length]
-                    : k_BuildingTexts[e.Index % k_BuildingTexts.Length];
+
+                // 生命周期：新入组登记（相位按实体散列）/ 到点换下一句（各自的时钟）
+                if (!m_Tracked.TryGetValue(e, out var tb) || tb.kind != kind)
+                {
+                    tb = (kind, 0, now + HoldFor(e.Index, 0));
+                    m_Tracked[e] = tb;
+                }
+                else if (now >= tb.nextAt)
+                {
+                    tb.textIdx++;
+                    tb.nextAt = now + HoldFor(e.Index, tb.textIdx);
+                    m_Tracked[e] = tb;
+                }
+                var pool = kind == 0 ? k_Texts : kind == 1 ? k_CarTexts : k_BuildingTexts;
+                var text = pool[(e.Index + tb.textIdx) % pool.Length]; // 同一人按自己的集数换台词
+
                 if (!first) sb.Append(',');
                 first = false;
                 sb.Append("{\"i\":").Append(e.Index)
@@ -266,5 +298,9 @@ namespace CityLife.GameBridge
             sb.Append(']');
             m_BubblesBinding.Update(sb.ToString());
         }
+
+        /// <summary>气泡驻留时长（3-8s，确定性错相：实体×集数散列——全屏绝不同时切换）。</summary>
+        private static float HoldFor(int entityIndex, int textIdx)
+            => 3f + ((entityIndex * 7919 + textIdx * 104729) % 500) / 100f;
     }
 }

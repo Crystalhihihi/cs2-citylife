@@ -45,6 +45,7 @@ namespace CityLife.GameBridge
         private readonly List<TrackedBubble> m_Bubbles = new();
         private uint m_Frame;
         private uint m_LastKeyFrame;
+        private bool m_LoggedDraw;
         private bool m_TmpLogged;
         private float m_FpsAccum;
         private int m_FpsFrames;
@@ -293,7 +294,17 @@ namespace CityLife.GameBridge
         {
             // LOD 闸（§12 #41：镜头高于 k_LodMaxHeight 不画——看不清人的高度就不该有气泡）
             if (cam.transform.position.y > k_LodMaxHeight)
+            {
+                // 诊断：每 256 帧报一次当前高度（"又没了"的头号嫌疑——闸太紧）
+                if (m_Frame % 256 == 0)
+                    Mod.Log.Info($"[BubbleW] LOD 拦截：镜头高 {cam.transform.position.y:F0}m > {k_LodMaxHeight}m（阈值待定，紧就调）");
                 return;
+            }
+            if (!m_LoggedDraw)
+            {
+                m_LoggedDraw = true;
+                Mod.Log.Info($"[BubbleW] 首帧已画（镜头高 {cam.transform.position.y:F0}m，TMP 默认字号={m_Overlay.GetTextMesh()?.fontSize.ToString() ?? "null"}）");
+            }
 
             var tmp = m_Overlay.GetTextMesh();
             float? origSize = null;

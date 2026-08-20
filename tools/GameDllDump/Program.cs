@@ -371,6 +371,20 @@ Section("跨程序集扫描·Icon/Billboard/WorldSpace/Overlay（Colossal.* 等�
     }
 });
 
+Section("通知图标渲染·第三轮：图标生成 API 面（mod 可复用性）", () =>
+{
+    Find("NotificationIconPrefabSystem", fields: true, methods: true);
+    Find("IconCommandSystem", fields: true, methods: true);
+    Find("IconCommandBuffer", fields: true, methods: true);
+    Find("IconAnimationSystem", fields: true, methods: true);
+    Find("IconClusterSystem", fields: true, methods: true);
+    Find("IconClusterLayer", fields: true);
+    Find("IconPriority", fields: true);
+    Find("IconLayerMask", fields: true);
+    Find("DisallowCluster", fields: true);
+    Find("NotificationsUtils", methods: true);
+});
+
 Section("Game.dll 嵌入资源清单（shader/贴图名线索）", () =>
 {
     foreach (var n in game.GetManifestResourceNames().OrderBy(n => n))
@@ -408,6 +422,17 @@ Section("通知图标渲染·第二轮嵌套（BufferSystem 的 IconData 等）"
             foreach (var nt in nested) DumpType(nt, fields: true, methods: false);
         }
     }
+});
+
+Section("OverlayRenderSystem 文字/图元 API（2026-08-21 M3-W 调查后：世界渲染正路，社区 20+ mod 验证）", () =>
+{
+    Find("OverlayRenderSystem", fields: true, methods: true);
+    Find("OverlayConfigurationPrefab", fields: true, methods: true);
+    Find("StyleFlags", fields: true);
+    Find("CustomMeshType", fields: true);
+    // Buffer 嵌套类型（DrawText/DrawCircle/DrawCustomMesh 等写入 API）
+    foreach (var t in allTypes.Where(t => t.Name.Contains("Buffer") && (t.Namespace ?? "").Contains("Rendering")).OrderBy(t => t.FullName))
+        DumpType(t, fields: true, methods: true);
 });
 
 return 0;

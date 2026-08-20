@@ -30,8 +30,9 @@ namespace CityLife.GameBridge
     public partial class BubbleWorldSpikeSystem : GameSystemBase
     {
         private const int k_MaxBubbles = 120;
-        private const float k_MaxDist = 400f;      // 可读距离上限（spike 取值；LOD 闸 §12 #41 对齐人形渲染）
-        private const float k_LodMaxHeight = 350f; // 镜头高于此不再画（人形 LOD 直觉：看不清人就不该有气泡）
+        private const float k_MaxDist = 800f;       // 可读距离上限（spike 宽放；终值按 LOD 实机标定）
+        private const float k_LodMaxFocusDist = 1000f; // 镜头到落点距离上限（spike 宽放——先求看见，
+                                                       // 再按"人清晰可见"标定收拢，§12 #41）
 
         private OverlayRenderSystem m_Overlay = default!;
         private Game.UI.NameSystem m_NameSystem = default!;
@@ -289,34 +290,31 @@ namespace CityLife.GameBridge
         private static float HoldFor(int entityIndex, int textIdx)
             => 6f + ((entityIndex * 7919 + textIdx * 104729) % 900) / 100f;
 
+        /// <summary>视线落点（x/z 作搜索圆心；y 只作参照——真实高度借实体 Transform，地形 y 不可信）。</summary>
+        private static float3 FocusGround(Camera cam)
+        {
+            var camPos = cam.transform.position;
+            var fwd = cam.transform.forward;
+            var t = fwd.y < -0.001f ? camPos.y / -fwd.y : 100f;
+            return (float3)(camPos + fwd * t);
+        }
+
         // —— 绘制：每帧（世界空间 overlay，零屏幕贴纸）——
         private void Draw(Camera cam)
         {
-            // LOD 闸（§12 #41：镜头高于 k_LodMaxHeight 不画——看不清人的高度就不该有气泡）
-            if (cam.transform.position.y > k_LodMaxHeight)
+            // LOD 闸（按镜头到落点距离，不按裸高度——俯仰角变化时高度根本不代表远近，实机踩坑）
+            var focus = FocusGround(cam);
+            var focusDist = math.distance(cam.transform.position, focus);
+            if (focusDist > k_LodMaxFocusDist)
             {
-                // 诊断：每 256 帧报一次当前高度（"又没了"的头号嫌疑——闸太紧）
                 if (m_Frame % 256 == 0)
-                    Mod.Log.Info($"[BubbleW] LOD 拦截：镜头高 {cam.transform.position.y:F0}m > {k_LodMaxHeight}m（阈值待定，紧就调）");
+                    Mod.Log.Info($"[BubbleW] LOD 拦截：落点距离 {focusDist:F0}m > {k_LodMaxFocusDist:F0}m（zoom={m_CameraUpdate.zoom:F1}）");
                 return;
             }
             if (!m_LoggedDraw)
             {
                 m_LoggedDraw = true;
-                Mod.Log.Info($"[BubbleW] 首帧已画（镜头高 {cam.transform.position.y:F0}m，TMP 默认字号={m_Overlay.GetTextMesh()?.fontSize.ToString() ?? "null"}）");
-            }
-
-            var tmp = m_Overlay.GetTextMesh();
-            float? origSize = null;
-            if (tmp != null)
-            {
-                origSize = tmp.fontSize;
-                if (!m_TmpLogged)
-                {
-                    m_TmpLogged = true;
-                    Mod.Log.Info($"[BubbleW] TMP 默认字号={origSize}（我们的文本以小字号烘焙）");
-                }
-                tmp.fontSize = origSize.Value * 0.22f; // 小字号窗口期开始（游戏既有字符串已缓存，不受影响）
+                Mod.Log.Info($"[BubbleW] 首帧已画（落点距离 {focusDist:F0}m，zoom={m_CameraUpdate.zoom:F1}，TMP 默认字号={m_Overlay.GetTextMesh()?.fontSize.ToString() ?? "null"}）");
             }
 
             var deps = default(JobHandle);
@@ -338,9 +336,6 @@ namespace CityLife.GameBridge
                 buffer.DrawText(b.Label, p - (float3)cam.transform.forward * 0.15f, true);
             }
             m_Overlay.AddBufferWriter(deps);
-
-            if (tmp != null && origSize.HasValue)
-                tmp.fontSize = origSize.Value; // 窗口期结束：恢复游戏默认字号
         }
     }
 }

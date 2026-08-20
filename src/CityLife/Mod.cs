@@ -103,6 +103,9 @@ namespace CityLife
 
             // M3-spike：气泡渲染管线验证（Ctrl+1/2/3=100/300/600 个，Ctrl+0=关；日志 [Bubble] FPS avg）
             updateSystem.UpdateAt<GameBridge.BubbleSpikeSystem>(SystemUpdatePhase.UIUpdate);
+
+            // M3-W S1：世界空间渲染气泡探索（Ctrl+9 单气泡渲染验证；日志 [BubbleW] 着色器枚举）
+            updateSystem.UpdateAt<GameBridge.BubbleWorldSpikeSystem>(SystemUpdatePhase.GameSimulation);
         }
 
         public void OnDispose()

@@ -25,6 +25,7 @@ namespace CityLife.GameBridge
         private TopicRadarSystem m_Radar = default!;
         private EntityAnchorSystem m_AnchorSystem = default!;
         private CitizenPoolSystem m_CitizenPool = default!;
+        private CityChangeSystem m_ChangeSystem = default!;
         private Content.PostPool m_Pool = default!;
         private List<Content.Persona> m_Personas = default!;
         private List<string> m_Usernames = default!;
@@ -53,6 +54,7 @@ namespace CityLife.GameBridge
             m_Radar = World.GetOrCreateSystemManaged<TopicRadarSystem>();
             m_AnchorSystem = World.GetOrCreateSystemManaged<EntityAnchorSystem>();
             m_CitizenPool = World.GetOrCreateSystemManaged<CitizenPoolSystem>();
+            m_ChangeSystem = World.GetOrCreateSystemManaged<CityChangeSystem>();
             m_Pool = new Content.PostPool();
 
             // 风格卡册 + 全网名字池（ModsSettings/CityLife/ 下，schema 见 Persona.cs 头注释）
@@ -409,8 +411,21 @@ namespace CityLife.GameBridge
             var anchors = m_AnchorSystem.Anchors;
             var cursor = anchors.Count > 0 ? (int)(m_BatchCount % (uint)anchors.Count) : 0;
 
+            // 变化锚点优先（城市变化感知器：新落成/拆除——"与我有关"的素材，每炉最多 2 条，不复用）
+            var changes = new List<Anchor>(2);
+            m_ChangeSystem.DrainChanges(changes, 2);
+            var changeIdx = 0;
+
             for (int i = 0; i < m_CurrentAssigned.Count; i++)
             {
+                if (changeIdx < changes.Count)
+                {
+                    var ca = changes[changeIdx++];
+                    texts.Add(ca.PromptText);
+                    m_CurrentAnchorEntities.Add(ca.Entity); // 拆除锚 Entity=Null（楼没了，不带"前往现场"）
+                    continue;
+                }
+
                 var form = m_CurrentAssigned[i].Form.Id;
                 var wantsAnchor = (form == "吐槽" || form == "求助" || form == "盘点")
                                   && (m_BatchCount + i) % 2 == 0; // 锚点减半

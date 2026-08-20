@@ -11,8 +11,8 @@ using Transform = Game.Objects.Transform;
 
 namespace CityLife.GameBridge
 {
-    /// <summary>锚点类型（实体话题第二刀的第一批信号，全部来自已验证组件）。</summary>
-    public enum AnchorKind { Hiring, BusinessGood, BusinessBad, Park }
+    /// <summary>锚点类型（实体话题第二刀的第一批信号 + 城市变化感知器的变化信号，全部来自已验证组件）。</summary>
+    public enum AnchorKind { Hiring, BusinessGood, BusinessBad, Park, NewShop, NewService, NewPark, NewSignature, Demolished }
 
     /// <summary>
     /// 实体锚点：一条"具体到对象"的话题线索。Label=中文方位+真实业态名（"城东那家便利店"），

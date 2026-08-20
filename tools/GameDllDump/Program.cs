@@ -119,6 +119,14 @@ Section("购物链路（2026-08-20 实质性 spike：购买行为在哪个系统
     Find("ResourceBuyerSystem", fields: true, methods: true);
     Find("FailedShoppingOrigin", fields: true);
     Find("EconomyUtils", methods: true);
+    Console.WriteLine();
+    Console.WriteLine("### 城市变化感知补探（2026-08-20：学校/医院/警察/消防/道路组件名核实）");
+    Find("School", fields: false);
+    Find("Hospital", fields: false);
+    Find("PoliceStation", fields: false);
+    Find("FireStation", fields: false);
+    Find("Road", fields: false);
+    Find("Abandoned", fields: true);
 });
 
 Section("旅游", () =>

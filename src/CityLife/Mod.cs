@@ -82,6 +82,9 @@ namespace CityLife
             updateSystem.UpdateAt<GameBridge.EventNewsSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<GameBridge.EntityAnchorSystem>(SystemUpdatePhase.GameSimulation);
 
+            // 城市变化感知器：新落成/拆除/新路/人口门槛 → 变化锚点+快讯（"与我有关"的素材地基）
+            updateSystem.UpdateAt<GameBridge.CityChangeSystem>(SystemUpdatePhase.GameSimulation);
+
             // 市民语境池（作者署名+处境：每个作者是一个真实市民的当下——"创造条件，不做限制"）
             updateSystem.UpdateAt<GameBridge.CitizenPoolSystem>(SystemUpdatePhase.GameSimulation);
 

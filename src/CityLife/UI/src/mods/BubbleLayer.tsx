@@ -51,7 +51,11 @@ export const BubbleLayer = () => {
                               ? styles.bubbleBuilding
                               : styles.bubblePerson)
                     }
-                    style={{ left: b.x + "%", top: b.y + "%" }}
+                    style={{
+                        // transform 定位（GPU 合成，不触发 layout）+ 无 CSS 过渡：
+                        // 外挂感根治——跟踪延迟压到 1 帧，不做人为补间
+                        transform: `translate(${b.x}vw, ${b.y}vh) translate(-50%, -100%)`,
+                    }}
                 >
                     {b.t}
                 </div>

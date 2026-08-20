@@ -13,13 +13,14 @@
     overflow: hidden;               /* 屏外余量裁掉，防气泡把层撑出滚动条 */
 }
 
-/* 聊天气泡基座：布局/字体/阴影/补间/尾巴形状共享；颜色按类型变体（人白/车淡蓝/楼淡黄）。
-   transition 补间：C# 推送 30Hz，中间帧由它插值（外挂感/跟随脱节的折中）；
-   animation 入场：新气泡淡入微浮起（同一 key 内换文案不重播）；
-   高亮：1.5px 边框 + 同色辉光（2026-08-20 玩家反馈"没有边框高亮的东西"） */
+/* 聊天气泡基座：布局/字体/阴影/尾巴形状共享；颜色按类型变体（人白/车淡蓝/楼淡黄）。
+   定位走 inline transform（GPU 合成）；**无 CSS 过渡**（外挂感根治：过渡本身是人为延迟，
+   每帧推送下跟踪必须零补间，延迟压到 1 帧）；animation 入场淡入保留（仅挂载时一次）；
+   高亮：1.5px 边框 + 同色辉光 */
 .bubble {
     position: absolute;
-    transform: translate(-50%, -100%);  /* 以锚点（头顶）为底边中点 */
+    left: 0;
+    top: 0;                             /* 实际定位由 inline transform 给（translate(vw,vh)） */
     border: 1.5px solid;
     border-radius: 11px;
     padding: 4px 11px;
@@ -31,13 +32,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     pointer-events: none;
-    transition: left 0.05s linear, top 0.05s linear;
+    will-change: transform;             /* 提示合成层常驻，高频移动不抖 */
     animation: bubbleIn 0.25s ease-out;
 }
 
 @keyframes bubbleIn {
-    from { opacity: 0; transform: translate(-50%, calc(-100% + 4px)); }
-    to { opacity: 1; transform: translate(-50%, -100%); }
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 /* 气泡小尾巴（朝下，指向说话的人；颜色随类型变体） */

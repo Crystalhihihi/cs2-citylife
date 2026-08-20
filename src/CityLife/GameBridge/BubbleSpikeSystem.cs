@@ -143,10 +143,9 @@ namespace CityLife.GameBridge
             }
             if (m_Frame % 512 == 0 || m_Sampled.Count == 0)
                 Resample(cam);
-            // 推送 30Hz（2026-08-20 玩家实机"外挂感/跟随脱节"：10Hz+0.1s 过渡在快移视角必然脱离；
-            // 中间帧由 CSS transition 0.05s 补间——跟踪保真与渲染成本的折中，正式版再评直连 DOM）
-            if (m_Frame % 2 == 0)
-                PushBubbles(cam);
+            // 每帧推送（2026-08-20 玩家"外挂感"定义：贴纸感=跟踪延迟——唯一解是把延迟压到 1 帧：
+            // 每帧投影推送 + UI 撤掉 CSS 过渡（过渡本身是人为延迟）+ transform GPU 定位）
+            PushBubbles(cam);
             m_Frame++;
         }
 

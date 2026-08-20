@@ -139,7 +139,8 @@ namespace CityLife.Content
                                         IReadOnlyList<string?>? prevPosts = null,
                                         string? breaking = null, string? mayorContext = null,
                                         string? eventOutcome = null, string? ongoingEvent = null,
-                                        string? petition = null, string? petitionResolved = null)
+                                        string? petition = null, string? petitionResolved = null,
+                                        IReadOnlyList<string?>? contexts = null)
         {
             var sb = new StringBuilder(head.Length + 896);
             sb.Append(head);
@@ -150,15 +151,17 @@ namespace CityLife.Content
             {
                 sb.Append(i + 1).Append('=').Append(assigned[i].Persona.Id)
                   .Append('/').Append(assigned[i].Form.Id)
-                  .Append('×').Append(assigned[i].CommentTarget).Append("评")
-                  .Append('（').Append(k_Contexts[(int)((seed + (uint)i) % (uint)k_Contexts.Length)]).Append('）');
+                  .Append('×').Append(assigned[i].CommentTarget).Append("评");
+                // 处境：市民语境池（真实市民的当下）优先，池空回退罐头处境池
+                var ctx = contexts != null && i < contexts.Count ? contexts[i] : null;
+                sb.Append('（').Append(ctx ?? k_Contexts[(int)((seed + (uint)i) % (uint)k_Contexts.Length)]).Append('）');
                 var anchor = anchors != null && i < anchors.Count ? anchors[i] : null;
                 if (!string.IsNullOrEmpty(anchor))
                     sb.Append('（').Append("锚：").Append(anchor).Append('）');
                 sb.Append(' ');
             }
             sb.Append('\n');
-            sb.Append("【处境】分配里（刚下班）这类括注是发帖人此刻的状态，带一点现场感（一笔带过，别展开别解释）。\n");
+            sb.Append("【处境】分配里（…）括注是发帖人此刻的真实状态（谁、在干嘛——真实市民采样）。就照这个人的处境写，别解释别介绍。\n");
             if (anchors != null)
                 sb.Append("【锚点】带（锚：…）的帖子围绕那个具体对象写（可一笔带过，别编与它矛盾的细节）；没带的自由发挥。\n");
             if (prevPosts != null)

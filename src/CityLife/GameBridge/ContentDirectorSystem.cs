@@ -24,13 +24,14 @@ namespace CityLife.GameBridge
         private EntityQuery m_CitizenQuery = default!;
         private TopicRadarSystem m_Radar = default!;
         private EntityAnchorSystem m_AnchorSystem = default!;
-        private CitizenNamePoolSystem m_NamePool = default!;
+        private CitizenPoolSystem m_CitizenPool = default!;
         private Content.PostPool m_Pool = default!;
         private List<Content.Persona> m_Personas = default!;
         private List<string> m_Usernames = default!;
         private string m_Head = "";
         private List<Content.Assignment> m_CurrentAssigned = new();
         private readonly List<Entity> m_CurrentAnchorEntities = new(); // 与 m_CurrentAssigned 对齐（Null=无锚点）
+        private readonly List<string?> m_CurrentCitizenNames = new();  // 与 m_CurrentAssigned 对齐（null=卡名/回退路径）
         private readonly Queue<string> m_Recent = new();  // 已发帖子正文（去重反馈，RimTalk TalkHistory 移植）
         private readonly Dictionary<string, string> m_LastByPersona = new(); // 人格卡→上集正文（连载机制，超 32 清空重来）
 
@@ -51,7 +52,7 @@ namespace CityLife.GameBridge
             m_CitizenQuery = GetEntityQuery(ComponentType.ReadOnly<Citizen>());
             m_Radar = World.GetOrCreateSystemManaged<TopicRadarSystem>();
             m_AnchorSystem = World.GetOrCreateSystemManaged<EntityAnchorSystem>();
-            m_NamePool = World.GetOrCreateSystemManaged<CitizenNamePoolSystem>();
+            m_CitizenPool = World.GetOrCreateSystemManaged<CitizenPoolSystem>();
             m_Pool = new Content.PostPool();
 
             // 风格卡册 + 全网名字池（ModsSettings/CityLife/ 下，schema 见 Persona.cs 头注释）
@@ -121,7 +122,10 @@ namespace CityLife.GameBridge
                             continue;
                         }
                         var anchor = idx < m_CurrentAnchorEntities.Count ? m_CurrentAnchorEntities[idx] : Entity.Null;
-                        var mainAuthor = AuthorFor(item.PersonaId);
+                        // 署名：市民语境席位 → 那个市民的真名；否则回退卡名路径（Always 卡在 AuthorFor 内恒显本人名）
+                        var mainAuthor = idx < m_CurrentCitizenNames.Count && m_CurrentCitizenNames[idx] != null
+                            ? m_CurrentCitizenNames[idx]!
+                            : AuthorFor(item.PersonaId);
                         // 评论者名字解析（人格 id → 显示名，规则与主帖一致）
                         var comments = new string[item.Comments.Count][];
                         for (int ci = 0; ci < comments.Length; ci++)
@@ -218,6 +222,7 @@ namespace CityLife.GameBridge
                 m_CurrentAssigned = PickAssigned(k_BatchSize, hotOne);
                 var anchorTexts = AssignAnchors(); // 实体锚点：吐槽/求助/盘点席位优先
                 var prevPosts = CollectPrevPosts(); // 连载机制：有前情的席位喂回上集
+                var citizenCtx = AssignCitizenContexts(); // 市民语境：每席位一个真实市民的当下（处境进 prompt、真名随炉署名）
                 // 市长发言上下文：一条发言影响随后 3 炉（写回层是 M4，这里只到舆情）
                 string? mayorCtx = null;
                 if (Content.LiveContext.MayorBatchesLeft > 0)
@@ -237,7 +242,7 @@ namespace CityLife.GameBridge
                     m_Head, snapshot, m_BatchTopic, m_CurrentAssigned,
                     new List<string>(m_Recent), m_BatchCount, anchorTexts, prevPosts,
                     breaking, mayorCtx, outcomeCtx, Content.LiveContext.OngoingEvent,
-                    petition, petitionResolvedCtx);
+                    petition, petitionResolvedCtx, citizenCtx);
                 Mod.Gateway.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Normal, 600));
                 m_BatchPending = true;
                 m_BatchCount++;
@@ -356,6 +361,31 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>
+        /// 市民语境分配（"创造条件，不做限制"——2026-08-20 玩家狼人杀经验）：
+        /// 每席位抽一个真实市民，处境进 prompt、真名随炉署名（收炉时按席位对齐取用）。
+        /// Always 卡（明星/彩蛋位）跳过——卡本人就是人设；池空时回退罐头处境池/卡名路径。
+        /// </summary>
+        private List<string?> AssignCitizenContexts()
+        {
+            m_CurrentCitizenNames.Clear();
+            var contexts = new List<string?>(m_CurrentAssigned.Count);
+            var pool = m_CitizenPool.Entries;
+            for (int i = 0; i < m_CurrentAssigned.Count; i++)
+            {
+                if (m_CurrentAssigned[i].Persona.Always || pool.Count == 0)
+                {
+                    contexts.Add(null);
+                    m_CurrentCitizenNames.Add(null);
+                    continue;
+                }
+                var entry = pool[(int)((m_BatchCount + (uint)i) % (uint)pool.Count)];
+                contexts.Add(entry.Context);
+                m_CurrentCitizenNames.Add(entry.Name);
+            }
+            return contexts;
+        }
+
+        /// <summary>
         /// 实体锚点分配：吐槽/求助/盘点形态优先挂锚（这些形状吃具体对象），轮换取锚防总写同一家店。
         /// 返回与 m_CurrentAssigned 对齐的锚点文本表；同步填 m_CurrentAnchorEntities（收炉时随帖入池）。
         /// </summary>
@@ -429,9 +459,9 @@ namespace CityLife.GameBridge
                 return p.Names[0];
 
             // 常规作者：真实市民名（原版名）——满屏"热心大妈"的根治
-            var pool = m_NamePool.Names;
+            var pool = m_CitizenPool.Entries;
             if (pool.Count > 0)
-                return pool[(int)(m_Seed % pool.Count)];
+                return pool[(int)(m_Seed % pool.Count)].Name;
 
             // 回退：卡候选名 ∪ 全网网名（usernames.jsonl 目前只在这条回退路径用）
             if (p == null)

@@ -24,6 +24,7 @@ namespace CityLife.GameBridge
         private EntityQuery m_CitizenQuery = default!;
         private TopicRadarSystem m_Radar = default!;
         private EntityAnchorSystem m_AnchorSystem = default!;
+        private CitizenNamePoolSystem m_NamePool = default!;
         private Content.PostPool m_Pool = default!;
         private List<Content.Persona> m_Personas = default!;
         private List<string> m_Usernames = default!;
@@ -37,6 +38,7 @@ namespace CityLife.GameBridge
         private Content.Topic m_BatchTopic;      // 在飞那一炉的话题（收炉时给池帖用）
         private uint m_Seed;
         private uint m_BatchCount;               // 炉计数（Daily 话题/形态轮换用——别用 m_Seed：它按 k_BatchSize 步进会与池长撞车）
+        private uint m_LastThreadBatch;          // 上一次发续热炉的炉计数（每 5 炉一次的节流）
         private uint m_Tick;                     // 导演自身节拍计数（feedMode=throttled 降频用）
         private bool m_BatchPending;
 
@@ -49,6 +51,7 @@ namespace CityLife.GameBridge
             m_CitizenQuery = GetEntityQuery(ComponentType.ReadOnly<Citizen>());
             m_Radar = World.GetOrCreateSystemManaged<TopicRadarSystem>();
             m_AnchorSystem = World.GetOrCreateSystemManaged<EntityAnchorSystem>();
+            m_NamePool = World.GetOrCreateSystemManaged<CitizenNamePoolSystem>();
             m_Pool = new Content.PostPool();
 
             // 风格卡册 + 全网名字池（ModsSettings/CityLife/ 下，schema 见 Persona.cs 头注释）
@@ -78,6 +81,12 @@ namespace CityLife.GameBridge
                 if (r.RequestId != null && r.RequestId.StartsWith("breaking:"))
                 {
                     HandleBreakingFlash(r);
+                    continue;
+                }
+                // 评论续热炉走专线路由：新评论追加到热帖评论串（不占常规批次位）
+                if (r.RequestId != null && r.RequestId.StartsWith("thread:"))
+                {
+                    HandleThreadContinue(r);
                     continue;
                 }
                 // 市长回应炉走专线路由：评论挂到市长帖下，不占常规批次位
@@ -112,13 +121,28 @@ namespace CityLife.GameBridge
                             continue;
                         }
                         var anchor = idx < m_CurrentAnchorEntities.Count ? m_CurrentAnchorEntities[idx] : Entity.Null;
+                        var mainAuthor = AuthorFor(item.PersonaId);
                         // 评论者名字解析（人格 id → 显示名，规则与主帖一致）
                         var comments = new string[item.Comments.Count][];
                         for (int ci = 0; ci < comments.Length; ci++)
                             comments[ci] = new[] { AuthorFor(item.Comments[ci].PersonaId), item.Comments[ci].Text };
 
+                        // 争论串 @替换：模型只认识卡 id（prompt 里让它 @卡id 互怼），显示名在这里换——
+                        // 含主帖作者（@主帖卡 id = 怼楼主）。string.Replace 精确串，误伤可忽略
+                        for (int ci = 0; ci < comments.Length; ci++)
+                        {
+                            if (item.PersonaId.Length > 0)
+                                comments[ci][1] = comments[ci][1].Replace("@" + item.PersonaId, "@" + mainAuthor);
+                            for (int cj = 0; cj < comments.Length; cj++)
+                            {
+                                var cid = item.Comments[cj].PersonaId;
+                                if (cid.Length > 0)
+                                    comments[ci][1] = comments[ci][1].Replace("@" + cid, "@" + comments[cj][0]);
+                            }
+                        }
+
                         m_Pool.Add(new Content.PoolEntry(
-                            new Content.Post(AuthorFor(item.PersonaId), item.Text, m_BatchTopic, item.PersonaId),
+                            new Content.Post(mainAuthor, item.Text, m_BatchTopic, item.PersonaId),
                             anchor == Entity.Null ? null : (object)anchor,
                             comments));
                         kept++;
@@ -209,7 +233,40 @@ namespace CityLife.GameBridge
                 m_BatchCount++;
             }
 
+            // ④ 评论续热炉（评论区生态：热帖过一会儿继续长评论，争论有来回——2026-08-20 玩家反馈）
+            // 每 5 炉一次、Low 优先级、TTL 180s（宁缺毋滥）；只挑评论 4-29 的帖（太冷没得聊，太热已完结）
+            if (!paused && Mod.Gateway != null && !Llm.CliGateway.Mute
+                && m_BatchCount % 5 == 2 && m_BatchCount != m_LastThreadBatch
+                && ReplyHead != null
+                && Mod.Feed.TryGetHotThread(4, 29, out var tSeq, out var tAuthor, out var tText, out var tComments))
+            {
+                m_LastThreadBatch = m_BatchCount;
+                var count = 2 + (int)(tSeq % 3); // 2-4 条，别千篇整数
+                Mod.Gateway.Enqueue(new Llm.CliRequest(
+                    Content.PromptBuilder.BuildThreadPrompt(ReplyHead, tAuthor, tText, tComments, count),
+                    Llm.CliPriority.Low, 180, "thread:" + tSeq));
+            }
+
             m_Tick++;
+        }
+
+        /// <summary>评论续热炉结果处理：解析评论 → 逐条追加到热帖评论串（模型看着真名@人，无需替换）。</summary>
+        private void HandleThreadContinue(Llm.CliCompletedResult r)
+        {
+            if (!r.Result.Success)
+            {
+                Mod.Log.Info($"[LLM] 续热炉失败：{r.Result.Error}");
+                return;
+            }
+            if (!uint.TryParse(r.RequestId.Substring("thread:".Length), out var seq))
+                return;
+            var comments = Content.BatchParser.ParseCommentArray(r.Result.Text, msg => Mod.Log.Info(msg));
+            var added = 0;
+            foreach (var (pid, text) in comments)
+                if (Mod.Feed.AppendComment(seq, AuthorFor(pid), text))
+                    added++;
+            if (added > 0)
+                Mod.Log.Info($"[LLM] 帖 #{seq} 续热 +{added} 条评论");
         }
 
         /// <summary>突发快讯炉结果处理：清洗正文 → "城市快讯"账号单帖入信息流（锚点从 requestId 解析）。</summary>
@@ -344,7 +401,11 @@ namespace CityLife.GameBridge
         private Content.PostForm PickForm(int slot)
             => Content.PostForms.All[(int)((m_BatchCount + slot) % Content.PostForms.All.Length)];
 
-        /// <summary>收炉取名：优先按模型返回的 persona id 找卡；显示名 = 卡候选名 ∪ 全网名字池混抽。</summary>
+        /// <summary>
+        /// 收炉取名（2026-08-20 玩家定案：发帖用原版名，除非特殊注入）：
+        /// 特殊注入卡（Always，明星/彩蛋位）恒显卡本人名；其余一律用真实市民名池（CitizenNamePoolSystem）。
+        /// 池空（开局未采到）回退旧逻辑：卡候选名 ∪ 网名字池混抽。
+        /// </summary>
         private string AuthorFor(string personaId)
         {
             var p = m_Personas.Find(x => x.Id == personaId)
@@ -352,10 +413,19 @@ namespace CityLife.GameBridge
                         ? m_CurrentAssigned[(int)(m_Seed % m_CurrentAssigned.Count)].Persona
                         : null);
             m_Seed++;
+
+            // 特殊注入：Crystal 这类彩蛋/明星卡恒显本人名
+            if (p != null && p.Always && p.Names.Length > 0)
+                return p.Names[0];
+
+            // 常规作者：真实市民名（原版名）——满屏"热心大妈"的根治
+            var pool = m_NamePool.Names;
+            if (pool.Count > 0)
+                return pool[(int)(m_Seed % pool.Count)];
+
+            // 回退：卡候选名 ∪ 全网网名（usernames.jsonl 目前只在这条回退路径用）
             if (p == null)
                 return "热心市民";
-
-            // 名字池合并：卡自带候选 + 全网网名（社区贡献）；Crystal 这类单名卡自然恒显本人名
             var poolCount = p.Names.Length + m_Usernames.Count;
             var idx = (int)(m_Seed % poolCount);
             return idx < p.Names.Length ? p.Names[idx] : m_Usernames[idx - p.Names.Length];

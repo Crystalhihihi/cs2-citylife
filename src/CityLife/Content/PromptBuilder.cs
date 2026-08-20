@@ -30,6 +30,7 @@ namespace CityLife.Content
             sb.Append("【体裁】禁止新闻发布会/官方通报腔；禁止\"作为一名市民\"\"谢邀\"式开头；禁止升华式结尾；禁止像回复别人；禁止编造精确数字与\"调查显示\"式伪引用——你只知道【城市此刻】里写了的事；禁止\"今天也是普普通通的一天\"式零细节句；禁止\"一方面另一方面\"式端水；禁止每句结尾都问\"你们怎么看\"；书面连接词（然而/因此/与此同时）少用；真人会断句会重复，不用句句标点正确。\n");
             // 评论区角色分工（调研 §4c）+ 数量分布（2026-08-19 玩家定案：常态 1-3，热帖 8-30）
             sb.Append("【评论】评论条数按分配行 ×N 评为准。角色按序分配：神回复（必须咬住主帖最具体的名词做反转或延伸，禁泛夸）、细节补充（同类经历+一个新细节）、抬杠（挑刺但对事不对人）、共情复读（≤10字）。立场不许一边倒；评论必须短于主帖；评论的 persona 从风格卡里任选，不必与主帖同卡。×8 以上是热帖：评论要吵起来/接龙/多方混战，楼主可以下场。\n");
+            sb.Append("【争论串】评论之间可以@前面的人（\"@卡id \"开头，系统会自动换成显示名）：×4 评起至少有两条@前面的评论者；热帖必须形成争论串——多人互相@、有来有回、别各说各话；@主帖卡 id 就是怼楼主。\n");
             sb.Append("【输出】只输出一个 JSON 对象 {\"posts\":[{\"persona\":\"卡id\",\"text\":\"主帖\",\"comments\":[{\"persona\":\"卡id\",\"text\":\"评论\"}]}]}，条数与【分配】完全一致，顺序一致。禁止输出任何其他字符。\n");
             return sb.ToString();
         }
@@ -95,6 +96,26 @@ namespace CityLife.Content
         public static string BuildReplyPrompt(string replyHead, string mayorText, int count)
         {
             return replyHead + "【市长发帖】\"" + mayorText + "\"\n【任务】写 " + count + " 条市民评论。\n";
+        }
+
+        /// <summary>
+        /// 评论续热完整 prompt（评论区生态：老帖新一波评论，争论有来回）=
+        /// 回应头（复用市长回应炉同一张固定头，缓存纪律）+ 帖子 + 已有评论 + 任务。
+        /// 与 BuildReplyPrompt 的差别：语境是老帖续热，必须@已有评论者接着聊。
+        /// </summary>
+        public static string BuildThreadPrompt(string replyHead, string author, string text,
+                                               IReadOnlyList<string[]> comments, int count)
+        {
+            var sb = new StringBuilder(replyHead.Length + 512);
+            sb.Append(replyHead);
+            sb.Append("【帖子】").Append(author).Append('：').Append(text).Append('\n');
+            sb.Append("【已有评论】\n");
+            var start = System.Math.Max(0, comments.Count - 12); // 只带最近 12 条，控长度
+            for (int i = start; i < comments.Count; i++)
+                sb.Append("- ").Append(comments[i][0]).Append('：').Append(comments[i][1]).Append('\n');
+            sb.Append("【任务】这是老帖的新一波评论。写 ").Append(count)
+              .Append(" 条新评论：必须@已有评论者或楼主（@名字 开头）接着聊——抬杠/补刀/站队/反转/爆新细节；别复述已有观点，别各说各话。\n");
+            return sb.ToString();
         }
 
         /// <summary>

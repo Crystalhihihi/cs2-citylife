@@ -97,6 +97,42 @@ namespace CityLife.Content
             }
         }
 
+        /// <summary>
+        /// 找一条适合续热的热帖（评论续热炉数据源）：评论数落在 [min,max] 的帖里评论最多的一条。
+        /// min 防冷帖没得聊，max 防热帖已完结还硬续。找到返回 true（comments 是内部数组引用，只读用）。
+        /// </summary>
+        public bool TryGetHotThread(int minComments, int maxComments,
+                                    out uint seq, out string author, out string text, out string[][] comments)
+        {
+            lock (m_Lock)
+            {
+                var arr = m_Items.ToArray();
+                var best = -1;
+                for (int i = arr.Length - 1; i >= 0; i--)
+                {
+                    var c = arr[i].Comments.Length;
+                    if (c < minComments || c > maxComments)
+                        continue;
+                    if (best < 0 || c > arr[best].Comments.Length)
+                        best = i;
+                }
+                if (best < 0)
+                {
+                    seq = 0;
+                    author = "";
+                    text = "";
+                    comments = System.Array.Empty<string[]>();
+                    return false;
+                }
+                var it = arr[best];
+                seq = it.Seq;
+                author = it.Author;
+                text = it.Text;
+                comments = it.Comments;
+                return true;
+            }
+        }
+
         /// <summary>整流序列化为 JSON（最新在后）。短键名省流量：a=作者 t=正文 k=话题 p=人格 n=序号 e=锚点实体[index,version] c=评论[[名,文]]。</summary>
         public string ToJson()
         {

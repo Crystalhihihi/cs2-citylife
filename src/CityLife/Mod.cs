@@ -79,6 +79,9 @@ namespace CityLife
             updateSystem.UpdateAt<GameBridge.EventNewsSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<GameBridge.EntityAnchorSystem>(SystemUpdatePhase.GameSimulation);
 
+            // 市民真名池（作者署名用：发帖用原版名，除非特殊注入——2026-08-20 玩家定案）
+            updateSystem.UpdateAt<GameBridge.CitizenNamePoolSystem>(SystemUpdatePhase.GameSimulation);
+
             // M4 写回层：活动链状态机（意图解析 → 确认 → 扣款 → 注入 → 数人 → 结算 → 恢复）
             updateSystem.UpdateAt<GameBridge.EventChainSystem>(SystemUpdatePhase.GameSimulation);
 

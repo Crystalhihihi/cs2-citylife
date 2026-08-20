@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using Game;
 using Game.Buildings;
 using Game.Citizens;
@@ -13,6 +15,7 @@ using Unity.Entities;
 using Unity.Mathematics;
 using UnityEngine;
 using Resources = Game.Economy.Resources;
+using Transform = Game.Objects.Transform;
 
 namespace CityLife.GameBridge
 {
@@ -23,17 +26,24 @@ namespace CityLife.GameBridge
     /// 假设：TripNeeded{ Purpose.Shopping, m_Resource=店的主营资源 } 能触发游戏原生购买
     /// （ResourceBuyerSystem 存在 m_SalesQueue/FailedShopping 追踪——购买结算链路 dump 实锤）。
     ///
-    /// 判定（按 Ctrl+B 向第一家商业公司注入 30 个购物行程）：
-    /// - 成交实锤：到店人数上升时该资源库存同步明显下降 → 商家广告层按"真实购买"建；
-    /// - 库存不动：打卡实锤 → 广告层降级纯舆情，照实记录不包装。
+    /// 第一轮教训（实机日志 2026-08-20 17:31）：全城随机注入 30 人 + 4096 帧窗口——
+    /// 在途恒 89、到店恒 0，没人走到就出了"结论"，**窗口太短+目标太远，实验无效**。
+    /// 第二轮修正：
+    /// - **就近注入**：按市民当前位置取最近 30 人（顺带验证广告层要的"距离衰减"机制）；
+    /// - 窗口放宽到 16384 帧、每 512 帧打一行；峰值到店数与任意目的到店数都记
+    ///   （到店瞬间目的可能翻转——按 Shopping 数到店会漏，Any 口径兜底）；
+    /// - Ctrl+B 目标=店面建筑；Ctrl+N 目标=公司实体（备选手：若购物寻路要挂公司）。
     ///
-    /// 观测：注入时打库存基线，之后每 128 帧打库存+到店/在途数，4096 帧收尾出结论行。
+    /// 判定：
+    /// - 库存净减≥15 → 成交实锤，广告层按"真实购买"建；
+    /// - 峰值到店>0 但库存不动 → 打卡实锤，广告层降级纯舆情（照实记录）；
+    /// - 峰值到店=0 → 寻路/目标问题（换 Ctrl+N 变体再试）。
     /// spike 纪律：测试存档专用（注入会拽走市民）；Ctrl+字母组合（F9 撞车教训）。
     /// </summary>
     public partial class ShoppingSpikeSystem : GameSystemBase
     {
         private const int k_InjectCount = 30;
-        private const uint k_ObserveFrames = 4096;
+        private const uint k_ObserveFrames = 16384;
 
         private EntityQuery m_CompanyQuery = default!;
         private EntityQuery m_CitizenQuery = default!;
@@ -42,9 +52,12 @@ namespace CityLife.GameBridge
         private SimulationSystem m_Simulation = default!;
 
         private Entity m_Shop;          // 目标店面（建筑实体）
+        private Entity m_Target;        // 本轮注入的寻路目标（Ctrl+B=店面，Ctrl+N=公司）
         private Entity m_Company;       // 目标公司
         private Resource m_Resource;    // 公司主营资源（存货最多的非货币资源）
         private int m_BaselineStock = -1; // <0 = 未在观测
+        private int m_BaselineAny;      // 基线任意目的到店数（店面里常住/上班的人）
+        private int m_PeakArrivals;     // 峰值到店（Shopping 目的口径）
         private uint m_StartFrame;
         private uint m_LastKeyFrame;
         private uint m_Frame;
@@ -80,26 +93,25 @@ namespace CityLife.GameBridge
         protected override void OnUpdate()
         {
             var ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
-            if (ctrl && Input.GetKeyDown(KeyCode.B) && m_Frame - m_LastKeyFrame > 30)
-            {
-                m_LastKeyFrame = m_Frame;
-                StartSpike();
-            }
+            var debounced = m_Frame - m_LastKeyFrame > 30;
+            if (debounced && ctrl && Input.GetKeyDown(KeyCode.B)) { m_LastKeyFrame = m_Frame; StartSpike(targetCompany: false); }
+            if (debounced && ctrl && Input.GetKeyDown(KeyCode.N)) { m_LastKeyFrame = m_Frame; StartSpike(targetCompany: true); }
 
             if (m_BaselineStock >= 0)
             {
-                if (m_Frame % 128 == 0)
-                    Observe(final: false);
-                if (Now - m_StartFrame > k_ObserveFrames)
-                {
-                    Observe(final: true);
-                    m_BaselineStock = -1;
-                }
+                if (m_Frame % 512 == 0)
+                    Observe();
+                // 收尾：窗口到点，或波次走完（到店峰值出现过且在途/到店都归零）
+                var elapsed = Now - m_StartFrame;
+                if (elapsed > k_ObserveFrames)
+                    Finish("窗口到点");
+                else if (m_PeakArrivals > 0 && elapsed > 1024 && CountTransit() == 0)
+                    Finish("波次走完");
             }
             m_Frame++;
         }
 
-        private void StartSpike()
+        private void StartSpike(bool targetCompany)
         {
             var companies = m_CompanyQuery.ToEntityArray(Allocator.Temp);
             if (companies.Length == 0)
@@ -112,11 +124,13 @@ namespace CityLife.GameBridge
             companies.Dispose();
 
             m_Shop = EntityManager.GetComponentData<PropertyRenter>(m_Company).m_Property;
-            if (m_Shop == Entity.Null || !EntityManager.HasComponent<Game.Objects.Transform>(m_Shop))
+            if (m_Shop == Entity.Null || !EntityManager.HasComponent<Transform>(m_Shop))
             {
                 Mod.Log.Warn("[ShopSpike] 公司没有店面，换一座城试");
                 return;
             }
+            m_Target = targetCompany ? m_Company : m_Shop;
+            var shopPos = EntityManager.GetComponentData<Transform>(m_Shop).m_Position;
 
             // 主营资源 = 存货最多的非货币资源（与锚点系统同一判定）
             m_Resource = Resource.NoResource;
@@ -137,24 +151,32 @@ namespace CityLife.GameBridge
                 return;
             }
 
-            m_BaselineStock = GetStock();
-            m_StartFrame = Now;
-
-            // 注入 30 个购物行程：Purpose.Shopping + m_Resource=主营资源 + 配套三件套（同 Leisure 注入纪律）
+            // 就近取 30 人（按当前位置到店的距离²排序——治第一轮"全城徒步走不到"的无效实验）
             var citizens = m_CitizenQuery.ToEntityArray(Allocator.Temp);
+            var scored = new List<(float d, Entity e)>(citizens.Length);
+            foreach (var c in citizens)
+            {
+                if (!EntityManager.HasComponent<Transform>(c))
+                    continue;
+                var p = EntityManager.GetComponentData<Transform>(c).m_Position;
+                scored.Add((math.distancesq(p, shopPos), c));
+            }
+            citizens.Dispose();
+            scored.Sort((a, b) => a.d.CompareTo(b.d));
+
             var injected = 0;
-            foreach (var citizen in citizens)
+            foreach (var (_, citizen) in scored)
             {
                 if (injected >= k_InjectCount)
                     break;
                 EntityManager.GetBuffer<TripNeeded>(citizen).Add(new TripNeeded
                 {
-                    m_TargetAgent = m_Shop,
+                    m_TargetAgent = m_Target,
                     m_Purpose = Purpose.Shopping,
                     m_Resource = m_Resource,
                     m_Priority = 128,
                 });
-                var target = new Target { m_Target = m_Shop };
+                var target = new Target { m_Target = m_Target };
                 if (EntityManager.HasComponent<Target>(citizen))
                     EntityManager.SetComponentData(citizen, target);
                 else
@@ -169,13 +191,20 @@ namespace CityLife.GameBridge
                 EntityManager.RemoveComponent<PathElement>(citizen);
                 injected++;
             }
-            citizens.Dispose();
+
+            m_BaselineStock = GetStock();
+            m_BaselineAny = CountArrivalsAny();
+            m_PeakArrivals = 0;
+            m_StartFrame = Now;
 
             var shopName = "?";
             if (EntityManager.HasComponent<PrefabRef>(m_Shop)
                 && m_PrefabSystem.TryGetPrefab(EntityManager.GetComponentData<PrefabRef>(m_Shop).m_Prefab, out PrefabBase prefab))
                 shopName = prefab.name;
-            Mod.Log.Info($"[ShopSpike] 开测：{shopName} 主营={m_Resource} 基线库存={m_BaselineStock}，注入 {injected} 人");
+            var nearest = scored.Count > 0 ? math.sqrt(scored[0].d) : 0f;
+            var farthest = injected > 0 ? math.sqrt(scored[injected - 1].d) : 0f;
+            Mod.Log.Info($"[ShopSpike] 开测：{shopName} 主营={m_Resource} 基线库存={m_BaselineStock} 基线到店Any={m_BaselineAny}，"
+                         + $"就近注入 {injected} 人（距离 {nearest:F0}-{farthest:F0}m），目标={(targetCompany ? "公司" : "店面")}");
         }
 
         private int GetStock()
@@ -186,35 +215,71 @@ namespace CityLife.GameBridge
             return 0;
         }
 
-        private void Observe(bool final)
+        /// <summary>任意目的到店数（含住/工作在该店的人——用基线差分去噪）。</summary>
+        private int CountArrivalsAny()
         {
-            var stock = GetStock();
-            int arrivals = 0, onTheWay = 0;
+            var n = 0;
+            var arr = m_ArrivalQuery.ToEntityArray(Allocator.Temp);
+            foreach (var citizen in arr)
+                if (EntityManager.HasComponent<CurrentBuilding>(citizen)
+                    && EntityManager.GetComponentData<CurrentBuilding>(citizen).m_CurrentBuilding == m_Shop)
+                    n++;
+            arr.Dispose();
+            return n;
+        }
+
+        /// <summary>在途数（Shopping 目的且 Target=本轮目标）。</summary>
+        private int CountTransit()
+        {
+            var n = 0;
             var arr = m_ArrivalQuery.ToEntityArray(Allocator.Temp);
             foreach (var citizen in arr)
             {
                 if (!EntityManager.HasComponent<TravelPurpose>(citizen))
                     continue;
                 var tp = EntityManager.GetComponentData<TravelPurpose>(citizen);
-                if (tp.m_Purpose != Purpose.Shopping)
-                    continue;
-                if (EntityManager.HasComponent<CurrentBuilding>(citizen)
-                    && EntityManager.GetComponentData<CurrentBuilding>(citizen).m_CurrentBuilding == m_Shop)
-                    arrivals++;
-                else if (EntityManager.HasComponent<Target>(citizen)
-                         && EntityManager.GetComponentData<Target>(citizen).m_Target == m_Shop)
-                    onTheWay++;
+                if (tp.m_Purpose == Purpose.Shopping
+                    && EntityManager.HasComponent<Target>(citizen)
+                    && EntityManager.GetComponentData<Target>(citizen).m_Target == m_Target)
+                    n++;
             }
             arr.Dispose();
-            Mod.Log.Info($"[ShopSpike] t+{Now - m_StartFrame} 库存 {m_BaselineStock}→{stock}（Δ{stock - m_BaselineStock}）到店 {arrivals} 在途 {onTheWay}");
+            return n;
+        }
 
-            if (final)
+        private void Observe()
+        {
+            var stock = GetStock();
+            var anyNow = CountArrivalsAny();
+            var shopping = 0;
+            var arr = m_ArrivalQuery.ToEntityArray(Allocator.Temp);
+            foreach (var citizen in arr)
             {
-                var delta = stock - m_BaselineStock;
-                Mod.Log.Info(delta <= -k_InjectCount / 2
-                    ? $"[ShopSpike][结论] 库存净减 {-delta}：成交实锤——购物注入走真实购买，商家广告层按实质性建"
-                    : $"[ShopSpike][结论] 库存变化 {delta}：未达成交判据（需净减≥{k_InjectCount / 2}）——打卡实锤，广告层降级纯舆情");
+                if (EntityManager.HasComponent<TravelPurpose>(citizen)
+                    && EntityManager.GetComponentData<TravelPurpose>(citizen).m_Purpose == Purpose.Shopping
+                    && EntityManager.HasComponent<CurrentBuilding>(citizen)
+                    && EntityManager.GetComponentData<CurrentBuilding>(citizen).m_CurrentBuilding == m_Shop)
+                    shopping++;
             }
+            arr.Dispose();
+            m_PeakArrivals = Math.Max(m_PeakArrivals, shopping + Math.Max(0, anyNow - m_BaselineAny));
+            Mod.Log.Info($"[ShopSpike] t+{Now - m_StartFrame} 库存 {m_BaselineStock}→{stock}（Δ{stock - m_BaselineStock}）"
+                         + $" 到店AnyΔ{anyNow - m_BaselineAny} 在途 {CountTransit()}");
+        }
+
+        private void Finish(string why)
+        {
+            Observe();
+            var delta = GetStock() - m_BaselineStock;
+            string verdict;
+            if (delta <= -k_InjectCount / 2)
+                verdict = $"成交实锤——库存净减 {-delta}，购物注入走真实购买，商家广告层按实质性建";
+            else if (m_PeakArrivals > 0)
+                verdict = $"打卡实锤——峰值到店 {m_PeakArrivals} 但库存变化 {delta}（未达净减 {k_InjectCount / 2}），广告层降级纯舆情";
+            else
+                verdict = "没人到店——寻路/目标问题，换另一个键的变体（店面↔公司）再试";
+            Mod.Log.Info($"[ShopSpike][结论·{why}] {verdict}");
+            m_BaselineStock = -1;
         }
     }
 }

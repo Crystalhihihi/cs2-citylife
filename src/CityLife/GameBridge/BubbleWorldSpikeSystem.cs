@@ -26,6 +26,7 @@ namespace CityLife.GameBridge
         private OverlayRenderSystem m_Overlay = default!;
         private Game.UI.NameSystem m_NameSystem = default!;
         private CameraUpdateSystem m_CameraUpdate = default!;
+        private EntityQuery m_HumanQuery = default!;
         private Entity m_LabelEntity;
         private bool m_Active;
         private bool m_LoggedDraw;
@@ -42,6 +43,11 @@ namespace CityLife.GameBridge
             // 相机走游戏自己的 CameraUpdateSystem.activeCamera（BetterTransitView 源码同款）——
             // Camera.main 在部分相位为 null 且可能是代理；游戏系统的 activeCamera 才是权威
             m_CameraUpdate = World.GetOrCreateSystemManaged<CameraUpdateSystem>();
+            m_HumanQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Creatures.Human>(),
+                ComponentType.ReadOnly<Game.Objects.Transform>(),
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
         }
 
         public override int GetUpdateInterval(SystemUpdatePhase phase) => 1;
@@ -117,10 +123,11 @@ namespace CityLife.GameBridge
                 }
                 return;
             }
-            var camPos = cam.transform.position;
-            var fwd = cam.transform.forward;
-            var t = fwd.y < -0.001f ? camPos.y / -fwd.y : 100f;
-            var pos = (float3)(camPos + fwd * t + new Vector3(0, 10f, 0));
+
+            // 锚点 = 视线落点附近**真实市民**的头顶（2026-08-21 实锤：落点打在 y=0 平面+10m，
+            // 地形在 y≈80 的城市里=埋在地下——借用 creature 的真实 y，它们站地面上）
+            var focus = FocusGround(cam);
+            var pos = NearestHumanPos(focus);
 
             var buffer = m_Overlay.GetBuffer(out var deps);
             // 探针三件套：红圈（Move It 验证过的原语）+ 白平面底板 + 文字——分别落不同渲染列表，
@@ -139,6 +146,35 @@ namespace CityLife.GameBridge
             // 反射诊断：我们的内容到底进没进渲染列表（实例计数）+ 渲染闸状态，128 帧一行
             if (m_Frame % 128 == 0)
                 DiagnoseRenderLists();
+        }
+
+        /// <summary>视线落点（仅取 x/z 作搜索圆心；y 不可信——y=0 平面与真实地形高差可能上百米）。</summary>
+        private static float3 FocusGround(Camera cam)
+        {
+            var camPos = cam.transform.position;
+            var fwd = cam.transform.forward;
+            var t = fwd.y < -0.001f ? camPos.y / -fwd.y : 100f;
+            return (float3)(camPos + fwd * t);
+        }
+
+        /// <summary>离落点最近的 Human/Resident creature 的位置 +2.2m（借真实地面高度）。找不到回落点+10m。</summary>
+        private float3 NearestHumanPos(float3 focus)
+        {
+            var arr = m_HumanQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
+            var best = float.MaxValue;
+            var bestPos = focus + new float3(0, 10f, 0);
+            foreach (var e in arr)
+            {
+                var p = EntityManager.GetComponentData<Game.Objects.Transform>(e).m_Position;
+                var d = math.distancesq(new float2(p.x, p.z), new float2(focus.x, focus.z));
+                if (d < best)
+                {
+                    best = d;
+                    bestPos = p;
+                }
+            }
+            arr.Dispose();
+            return bestPos + new float3(0, 2.2f, 0);
         }
 
         /// <summary>反射诊断（写没写进渲染列表一判定）：OverlayRenderSystem 私有实例计数 + RenderingSystem.hideOverlay。</summary>

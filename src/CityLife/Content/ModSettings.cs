@@ -17,6 +17,10 @@ namespace CityLife.Content
     ///   "throttled" 折中（收起时降频保温：释放 1/4 速、仅池空才补炉）。
     /// - writeBackTier（string，默认 "normal"）：写回强度档（§6 红线）——
     ///   "mild" 体验档（注入规模 ×0.5）/"normal" 正常档（×1.0）/"crazy" 疯狂档（×2.0，确认卡带警示）。
+    /// - breakingNews（bool，默认 true）：突发事件报道总开关（快讯+热议；关=信息流不谈火灾车祸盗窃）。
+    /// - breakingHotHours（int，默认 12，钳 1-72）：热议档闸门（游戏小时）——
+    ///   每这么久最多一次"全城集中讨论某事件"；快讯帖不受此限（它有自己的分类限流）。
+    ///   2026-08-20 玩家定案：盗窃/车祸是高频事件，没这道闸信息流会全变成讨论事件。
     /// 如何扩展：加字段 = 这里加属性 + Load 加一行 + 消费处读属性。
     /// </summary>
     public static class ModSettings
@@ -26,6 +30,10 @@ namespace CityLife.Content
         public static string WriteBackTier { get; private set; } = "normal";
         /// <summary>信息流仓库上限（默认 100；超 500 的全量推送开始亏性能，钳 20-500）。</summary>
         public static int FeedMaxItems { get; private set; } = 100;
+        /// <summary>突发事件报道总开关（默认开）。</summary>
+        public static bool BreakingNews { get; private set; } = true;
+        /// <summary>热议档闸门：两次"全城集中讨论"的最小间隔（游戏小时，默认 12，钳 1-72）。</summary>
+        public static int BreakingHotHours { get; private set; } = 12;
 
         public static void Load(string cfgDir, Action<string> log)
         {
@@ -50,7 +58,13 @@ namespace CityLife.Content
                 var fm2 = JsonMini.GetInt(json, "feedMaxItems");
                 if (fm2 != null)
                     FeedMaxItems = System.Math.Clamp(fm2.Value, 20, 500);
-                log($"[Settings] t0Fallback={T0Fallback} feedMode={FeedMode} writeBackTier={WriteBackTier} feedMaxItems={FeedMaxItems}");
+                var bn = JsonMini.GetRaw(json, "breakingNews");
+                if (bn != null)
+                    BreakingNews = bn != "false";
+                var bh = JsonMini.GetInt(json, "breakingHotHours");
+                if (bh != null)
+                    BreakingHotHours = System.Math.Clamp(bh.Value, 1, 72);
+                log($"[Settings] t0Fallback={T0Fallback} feedMode={FeedMode} writeBackTier={WriteBackTier} feedMaxItems={FeedMaxItems} breakingNews={BreakingNews} breakingHotHours={BreakingHotHours}");
             }
             catch (Exception e)
             {

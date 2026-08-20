@@ -16,20 +16,23 @@ namespace CityLife.GameBridge
     /// 火灾 = <see cref="OnFire"/>（挂在燃烧中的建筑本体）；车祸/犯罪 = <see cref="AccidentSite"/> 的 m_Flags 位标志
     /// （TrafficAccident=8 / CrimeScene=4 / CrimeFinished=16）。
     ///
-    /// 命中做两件事（"大事没人谈论"的根治，2026-08-20）：
-    /// 1. 突发帖入信息流（带实体锚点，面板可"前往现场"）；
-    /// 2. 写 LiveContext.LastBreaking——导演的下一炉因此变热议串（市民集中议论、评论吵起来）。
-    ///    此前 LastBreaking 全代码库无任何写入方，热议炉从未触发过。
+    /// 频率两档分离（2026-08-20 玩家定案：盗窃/车祸在 CS2 是高频事件，全变讨论就淹了信息流）：
+    /// - 快讯档（每条都做）：目击模板帖（即时）+ LLM"城市快讯"媒体帖——按类限流
+    ///   （火灾 4h / 车祸 6h / 犯罪 8h，全局 1h，单位游戏小时）；
+    /// - 热议档（全城讨论）：写 LiveContext.LastBreaking 让下一炉变热议串——单独更严的闸门
+    ///   （settings.json breakingHotHours，默认 12 游戏小时一次）。大多数事件只发快讯不进全民讨论。
     ///
     /// 纪律：
     /// - EventJournal 监听保留但只打日志（分类学摸底：日常火灾/犯罪不入刊，实机长期空白，不作为话题源）；
-    /// - 去重按实体；限流分类 2048 帧 + 全局 512 帧，防连片火灾/事故刷屏；
-    /// - 只读不写；查询排除 Temp/Deleted。
+    /// - 去重按实体；只读不写；查询排除 Temp/Deleted；总开关 settings.json breakingNews（默认开）。
     /// </summary>
     public partial class EventNewsSystem : GameSystemBase
     {
-        private const uint k_KindCooldownFrames = 2048;  // 同类事件最小间隔
-        private const uint k_AnyCooldownFrames = 512;    // 全局最小间隔
+        // 快讯档限流（游戏小时）：高频事件也只闻其声不见其淹
+        private const int k_FireCooldownH = 4;
+        private const int k_AccidentCooldownH = 6;
+        private const int k_CrimeCooldownH = 8;
+        private const int k_AnyCooldownH = 1;
 
         private EventJournalSystem m_Journal = default!;
         private PrefabSystem m_PrefabSystem = default!;
@@ -39,12 +42,14 @@ namespace CityLife.GameBridge
         private EntityQuery m_AccidentQuery = default!;
         private int m_LastCount;
         private bool m_Initialized;
+        private bool m_ClockInitialized;
         private readonly HashSet<Entity> m_Reported = new();
         private readonly List<Entity> m_PruneScratch = new();
         private uint m_LastFireAt;
         private uint m_LastAccidentAt;
         private uint m_LastCrimeAt;
         private uint m_LastAnyAt;
+        private uint m_LastHotAt;   // 上一次放行进热议档的时刻
 
         protected override void OnCreate()
         {
@@ -71,12 +76,25 @@ namespace CityLife.GameBridge
         public override int GetUpdateInterval(SystemUpdatePhase phase) => 128;
 
         private uint Now => (uint)m_SimulationSystem.frameIndex;
+        private static uint TicksPerHour => (uint)System.Math.Max(1, TimeSystem.kTicksPerDay / 24);
 
         protected override void OnUpdate()
         {
+            if (!m_ClockInitialized)
+            {
+                // 各冷却起点拨到"很久以前"——新档/读档后第一条突发不用干等一个冷却周期
+                // （uint 回绕无所谓：模 2^32 差值比较仍成立）
+                var longAgo = Now - 72u * TicksPerHour;
+                m_LastFireAt = m_LastAccidentAt = m_LastCrimeAt = m_LastAnyAt = m_LastHotAt = longAgo;
+                m_ClockInitialized = true;
+            }
+
             PollJournal();   // 分类学日志（只记不发）
-            PollFires();
-            PollAccidents();
+            if (Content.ModSettings.BreakingNews)
+            {
+                PollFires();
+                PollAccidents();
+            }
             PruneReported();
         }
 
@@ -117,7 +135,7 @@ namespace CityLife.GameBridge
         // —— 火灾：OnFire 新实体（挂建筑本体，自带 Transform 定位）——
         private void PollFires()
         {
-            if (Now - m_LastFireAt < k_KindCooldownFrames || Now - m_LastAnyAt < k_AnyCooldownFrames)
+            if (!KindReady(m_LastFireAt, k_FireCooldownH) || !AnyReady)
                 return;
             var arr = m_FireQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
             foreach (var e in arr)
@@ -135,7 +153,7 @@ namespace CityLife.GameBridge
         // —— 车祸/犯罪：AccidentSite 新实体，m_Flags 位标志分类 ——
         private void PollAccidents()
         {
-            if (Now - m_LastAnyAt < k_AnyCooldownFrames)
+            if (!AnyReady)
                 return;
             var arr = m_AccidentQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
             foreach (var e in arr)
@@ -146,14 +164,14 @@ namespace CityLife.GameBridge
                 var isCrime = (site.m_Flags & AccidentSiteFlags.CrimeScene) != 0
                               && (site.m_Flags & AccidentSiteFlags.CrimeFinished) == 0; // 已结案的旧现场不报
                 var isTraffic = (site.m_Flags & AccidentSiteFlags.TrafficAccident) != 0;
-                if (isCrime && Now - m_LastCrimeAt >= k_KindCooldownFrames)
+                if (isCrime && KindReady(m_LastCrimeAt, k_CrimeCooldownH))
                 {
                     var dir = DirectionOfSite(e, site);
                     Report(e, "crime", $"{dir}有店铺遭窃", $"{dir}有店铺遭窃，警察已经到场，附近注意下可疑人员");
                     m_LastCrimeAt = Now;
                     break;
                 }
-                if (isTraffic && Now - m_LastAccidentAt >= k_KindCooldownFrames)
+                if (isTraffic && KindReady(m_LastAccidentAt, k_AccidentCooldownH))
                 {
                     var dir = DirectionOfSite(e, site);
                     Report(e, "accident", $"{dir}路口发生车祸", $"{dir}路口出车祸了，围了一堆人，路过绕一下");
@@ -163,6 +181,9 @@ namespace CityLife.GameBridge
             }
             arr.Dispose();
         }
+
+        private bool KindReady(uint lastAt, int cooldownH) => Now - lastAt >= (uint)cooldownH * TicksPerHour;
+        private bool AnyReady => Now - m_LastAnyAt >= TicksPerHour * (uint)k_AnyCooldownH;
 
         /// <summary>事故实体方位：自身没 Transform 则退到 m_Event 的，再没有就用"市区"兜底。</summary>
         private string DirectionOfSite(Entity siteEntity, AccidentSite site)
@@ -176,16 +197,16 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>
-        /// 命中上报：突发帖入信息流（带锚点）+ 写 LastBreaking（下一炉热议串的引信）
-        /// + 快讯炉（LLM 写"城市快讯"媒体快讯帖，requestId 带锚点实体，导演路由发帖）。
-        /// 目击模板帖是即时的，LLM 快讯帖有墙钟延迟——两层并存：先看到事，再看到报道。
+        /// 命中上报，两档分离：
+        /// 快讯档（每条都做）——目击模板帖（即时）+ LLM"城市快讯"媒体帖（requestId 带锚点，导演路由发帖）；
+        /// 热议档（闸门控制）——写 LiveContext.LastBreaking 让下一炉变热议串，
+        /// 间隔由 settings.json breakingHotHours 控制（默认 12h），防高频事件把信息流全变成讨论事件。
         /// </summary>
         private void Report(Entity e, string kind, string breaking, string postText)
         {
             m_Reported.Add(e);
             m_LastAnyAt = Now;
             Mod.Feed.Record(new Content.Post("现场直击", postText, Content.Topic.Breaking, "live"), e.Index, e.Version);
-            Content.LiveContext.LastBreaking = breaking;
             if (Mod.Gateway != null && !Llm.CliGateway.Mute)
             {
                 s_BreakingHead ??= Content.PromptBuilder.BuildBreakingHead(); // 拼一次缓存复用（缓存纪律）
@@ -193,7 +214,18 @@ namespace CityLife.GameBridge
                     Content.PromptBuilder.BuildBreakingPrompt(s_BreakingHead, breaking),
                     Llm.CliPriority.Normal, 120, $"breaking:{e.Index}:{e.Version}")); // 快讯宁缺毋滥，120s 过期
             }
-            Mod.Log.Info($"[News] 突发（{kind}）：{breaking}（{e.Index}:{e.Version}）");
+
+            // 热议档闸门：半个游戏日才准全城讨论一次（2026-08-20 玩家定案）
+            if (Now - m_LastHotAt >= (uint)Content.ModSettings.BreakingHotHours * TicksPerHour)
+            {
+                Content.LiveContext.LastBreaking = breaking;
+                m_LastHotAt = Now;
+                Mod.Log.Info($"[News] 突发（{kind}，进热议）：{breaking}（{e.Index}:{e.Version}）");
+            }
+            else
+            {
+                Mod.Log.Info($"[News] 突发（{kind}，仅快讯）：{breaking}（{e.Index}:{e.Version}）");
+            }
         }
 
         private static string? s_BreakingHead; // 快讯炉固定头（启动后首报时拼一次）

@@ -127,29 +127,31 @@ namespace CityLife.GameBridge
             }
 
             // TextMesh 只借网格（文本网格+Font 图集），不渲染本体。
-            // 踩坑（2026-08-20 NRE）：本环境 AddComponent<TextMesh> 不带 MeshFilter——必须显式先加
+            // 踩坑①（2026-08-20 NRE）：本环境 AddComponent<TextMesh> 不带 MeshFilter——必须显式先加；
+            // 踩坑②（2026-08-20 NRE）：text setter 会立即重建网格，font 还是默认 null 就炸——
+            // 必须先赋 font 再赋 text（顺序即语义）
             var tmGo = new GameObject("CityLifeBubbleTextGen");
             tmGo.hideFlags = HideFlags.HideAndDontSave;
             var tmf = tmGo.AddComponent<MeshFilter>();
             var tm = tmGo.AddComponent<TextMesh>();
-            tm.text = "吃了吗";
+            if (m_Font.material == null)
+            {
+                Mod.Log.Warn("[BubbleW] 字体材质为空（字体无效）");
+                Object.Destroy(tmGo);
+                return;
+            }
             tm.font = m_Font;
             tm.fontSize = 64;
+            tm.characterSize = 0.25f; // 世界尺寸（一格 0.25m）
             tm.anchor = TextAnchor.LowerCenter; // 以锚点（头顶）为底边中点
             tm.alignment = TextAlignment.Center;
-            tm.characterSize = 0.25f; // 世界尺寸（一格 0.25m）
+            tm.text = "吃了吗";
             m_TextGen = tmf;
 
             var shader = PickShader();
             if (shader == null)
             {
-                Mod.Log.Warn("[BubbleW] 无可用着色器（文本候选与 HDRP/Unlit 都没找到）");
-                Object.Destroy(tmGo);
-                return;
-            }
-            if (m_Font.material == null)
-            {
-                Mod.Log.Warn("[BubbleW] 字体材质为空（字体无效）");
+                Mod.Log.Warn("[BubbleW] 无可用着色器（HDRP/Unlit 与文本候选都没找到）");
                 Object.Destroy(tmGo);
                 return;
             }
@@ -171,13 +173,21 @@ namespace CityLife.GameBridge
             Mod.Log.Info($"[BubbleW] 单气泡已创建 @({pos.x:F0},{pos.y:F0},{pos.z:F0}) shader={shader.name} fontTex={m_Font.material.mainTexture?.GetType().Name}");
         }
 
-        /// <summary>着色器选择：游戏文本/SDF 候选优先（道路名同款），备选 HDRP/Unlit。</summary>
+        /// <summary>
+        /// 着色器选择（2026-08-20 枚举实锤后的优先级）：
+        /// HDRP/Unlit 首选（语义已知的 HDRP 原生，必渲染）；
+        /// 游戏世界名着色器（Shader Graphs/NetName、AreaName——道路名/区名同款）语义未知，留作研究线；
+        /// GUI/Text Shader、TextMeshPro/* 是内置管线，HDRP 下不渲染，不选。
+        /// </summary>
         private static Shader? PickShader()
         {
+            var hdrp = Shader.Find("HDRP/Unlit");
+            if (hdrp != null)
+                return hdrp;
             foreach (var s in Resources.FindObjectsOfTypeAll<Shader>())
-                if (s.name.Contains("Text") || s.name.Contains("SDF"))
+                if (s.name.Contains("NetName") || s.name.Contains("AreaName"))
                     return s;
-            return Shader.Find("HDRP/Unlit");
+            return null;
         }
 
         /// <summary>HDRP 透明设置（尽力而为版；透明正确性本就是 S1 判定项之一）。</summary>

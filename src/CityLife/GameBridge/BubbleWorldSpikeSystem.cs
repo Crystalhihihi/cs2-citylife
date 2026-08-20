@@ -1,5 +1,6 @@
 using Game;
 using Game.Rendering;
+using System.Reflection;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
@@ -29,6 +30,7 @@ namespace CityLife.GameBridge
         private bool m_Active;
         private bool m_LoggedDraw;
         private bool m_LoggedNoCam;
+        private uint m_DrawnSinceToggle;
         private uint m_Frame;
         private uint m_LastKeyFrame;
 
@@ -113,6 +115,40 @@ namespace CityLife.GameBridge
             {
                 m_LoggedDraw = true;
                 Mod.Log.Info($"[BubbleW] 首帧已画 @({pos.x:F0},{pos.y:F0},{pos.z:F0}) cam={cam.name}");
+            }
+
+            // 反射诊断：我们的内容到底进没进渲染列表（实例计数）+ 渲染闸状态，128 帧一行
+            if (m_Frame % 128 == 0)
+                DiagnoseRenderLists();
+        }
+
+        /// <summary>反射诊断（写没写进渲染列表一判定）：OverlayRenderSystem 私有实例计数 + RenderingSystem.hideOverlay。</summary>
+        private void DiagnoseRenderLists()
+        {
+            try
+            {
+                var t = typeof(OverlayRenderSystem);
+                const BindingFlags priv = BindingFlags.NonPublic | BindingFlags.Instance;
+                var textCount = (int)(t.GetField("m_TextInstanceCount", priv)?.GetValue(m_Overlay) ?? -1);
+                var absCount = (int)(t.GetField("m_AbsoluteInstanceCount", priv)?.GetValue(m_Overlay) ?? -1);
+                var customCounts = t.GetField("m_CustomMeshInstanceCount", priv)?.GetValue(m_Overlay) as int[];
+                var planeCount = customCounts != null && customCounts.Length > 2 ? customCounts[2] : -1;
+
+                var hideOverlay = "?";
+                var rendering = World.GetExistingSystemManaged<RenderingSystem>();
+                if (rendering != null)
+                {
+                    var rt = rendering.GetType();
+                    var pi = rt.GetProperty("hideOverlay") ?? rt.GetProperty("HideOverlay");
+                    var fi = pi == null ? rt.GetField("hideOverlay", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public) : null;
+                    var v = pi != null ? pi.GetValue(rendering) : fi?.GetValue(rendering);
+                    hideOverlay = v?.ToString() ?? "?";
+                }
+                Mod.Log.Info($"[BubbleW·诊断] 渲染列表：text={textCount} absolute={absCount} plane={planeCount}；hideOverlay={hideOverlay}");
+            }
+            catch (System.Exception e)
+            {
+                Mod.Log.Warn($"[BubbleW·诊断] 反射失败：{e.Message}");
             }
         }
     }

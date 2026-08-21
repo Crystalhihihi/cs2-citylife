@@ -313,6 +313,7 @@ M0-M2 为最小可玩闭环。业余节奏约 2-3 个月，配合 coding AI 可�
 | 39 | M5 v1 连续剧角色池（2026-08-20，连续性落地） | 剧组 4 人（真实市民名+固定人格卡=声音可辨认+故事线 4-7 集：找工作/开店/恋爱/搬家/学车/备考/健身/养娃），每炉末两席给角色，处境=故事线、前情=上集正文、完结季提示"大结局"、完结退休补新人。**不是完整四级成名体系**（L0-L2/星标/记忆链留 M5 正式版）；Crystalhihihi 仍走 Always 卡通道 |
 | 40 | 商家广告层 v1（2026-08-20，四轮 spike 后降级定案） | 购物注入/改道"制造真实购买"四轮实锤此路不通（无需求被无视/改道被 AI 重规划冲掉/缺口注入正确资源仍 0 执行；购买结算在生产/销售混杂下不可观测）——**不伪造行为系统内部购物动作**（铁律）。广告层=纯舆情+氛围：锚点信号（盈利差/空缺/盈利好）→ LLM 广告帖（真实店名+产出业态）→ 评论互动炉 → 打折带氛围排队（Leisure 通道，老年+300/近距+200/非老年远距-150）。**不承诺经济效果**；"店卖什么"改读 IndustrialProcessData.m_Output 产出声明（存货猜测混入投入品实锤） |
 | 41 | 气泡显隐随游戏 LOD（2026-08-20 玩家提点，M3 正式版硬约束） | 游戏渲染分级：缩放到一定程度不渲染人，临界点附近人很模糊。**气泡只能在人清晰可见的缩放档出现**（再放大到人能看清才挂）——显隐阈值对齐游戏的人形渲染 LOD 临界（具体阈值待 spike 实测标定；读法：镜头高度/FOV 或游戏 LOD 系统读数，实现时先探）。spike 阶段先全档显示测管线 |
+| 42 | 世界空间文字渲染定案（2026-08-21 实机+彻查，v1 DrawText 弃用） | **Buffer.DrawText 死缓实锤**：共享 TMP fontSize=200 烘焙+matrix scale=1 硬编码=区名级巨字；overlay 通道只按曲线/网格计数开门、文字不计数=悬停建筑才显示/俯仰角玄学（roadmod 反编译逐行实锤）。**v2 正路 = 自烘焙 TMP 网格 + beginContextRendering 自绘**（NodeController/AllSpeedLimits/RoadSpeedAdjuster 三家 mod 同款）：材质 clone OverlayConfigurationPrefab.m_TextMaterial（永不 Shader.Find）+CopyFontAtlasParameters+_FaceColor 上色；恒定屏占换算（2·dist·tan(fov/2)·px/屏高 夹 0.35-5m）。**铁律新增：借游戏共享 TMP 烘焙必须快照八项状态+finally 恢复**（ASL 血泪：残留污染全城路名/区名缓存——v1"窗口期改字号把字搞没"即此坑）。hideOverlay 不门控只记日志（正常游玩也可能 True）。贴图底板/边框候选=通知图标管线（Texture2DArray+Shader Graphs/NotificationIcon，TLE 先例，InstanceData 36B 布局已 dump） |
 
 
 ## 13. 角色层（v4 新增，拷问会后定案）

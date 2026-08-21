@@ -39,7 +39,8 @@ namespace CityLife.GameBridge
     ///   mainTexture 换自建 Texture2DArray（圆角底板，3 片=3 档宽高比，圆角按片烘焙防拉伸变形）；
     /// - 实例缓冲 = 游戏原生 struct NotificationIconBufferSystem.InstanceData（36B，布局勿改）；
     /// - 宽高比由网格承载（quad 半宽=aspect/2），m_Params.x=世界全高（米）——shader 语义反推值，
-    ///   偏差靠实机标定（首画日志有数值）；透明排序：底板队列 3050 < 文字 3800，底板恒在文字下。
+    ///   偏差靠实机标定（首画日志有数值）；透明排序：底板克隆自带队列 3700 < 文字 3800；
+    ///   **网格顶点绕向必须照抄游戏原版**（镜像绕向 billboard 后背对镜头被剔除——v2.2 教训）。
     ///
     /// 键位：Ctrl+9 开关；Ctrl+8 数量档（30/60/120）；Ctrl+7 底板开关。
     /// 扩展口（正式版待办）：①内容管道接入（信息层降级产物+共位小剧场）；②k_MaxDist 按
@@ -597,7 +598,9 @@ namespace CityLife.GameBridge
             return tex;
         }
 
-        /// <summary>底板 quad：宽高比由几何承载（shader 只给统一缩放），XY 平面、UV 0..1。</summary>
+        /// <summary>底板 quad：宽高比由几何承载（shader 只给统一缩放），XY 平面、UV 0..1。
+        /// 顶点顺序/绕向逐字照抄游戏原版 NotificationIconRenderSystem.GetMesh()（BL→TL→TR→BR，
+        /// 三角形 0,1,2/2,3,0）——镜像绕向 billboard 后背对镜头被背面剔除，画了个寂寞（v2.2 实锤）。</summary>
         private static Mesh BuildPlateMesh(float aspect)
         {
             var hx = aspect * 0.5f;
@@ -605,15 +608,15 @@ namespace CityLife.GameBridge
             {
                 vertices = new[]
                 {
-                    new Vector3(-hx, -0.5f, 0f), new Vector3(hx, -0.5f, 0f),
-                    new Vector3(hx, 0.5f, 0f), new Vector3(-hx, 0.5f, 0f),
+                    new Vector3(-hx, -0.5f, 0f), new Vector3(-hx, 0.5f, 0f),
+                    new Vector3(hx, 0.5f, 0f), new Vector3(hx, -0.5f, 0f),
                 },
                 uv = new[]
                 {
-                    new Vector2(0f, 0f), new Vector2(1f, 0f),
-                    new Vector2(1f, 1f), new Vector2(0f, 1f),
+                    new Vector2(0f, 0f), new Vector2(0f, 1f),
+                    new Vector2(1f, 1f), new Vector2(1f, 0f),
                 },
-                triangles = new[] { 0, 1, 2, 0, 2, 3 },
+                triangles = new[] { 0, 1, 2, 2, 3, 0 },
             };
             mesh.RecalculateBounds();
             return mesh;
@@ -639,8 +642,7 @@ namespace CityLife.GameBridge
                 {
                     m_PlateMaterial = new Material(cfg.m_Material)
                     {
-                        mainTexture = m_PlateTex,
-                        renderQueue = 3050, // 恒在文字（3800）之下
+                        mainTexture = m_PlateTex, // renderQueue 不动：克隆自带 3700，恰在文字（3800）之下
                     };
                     Mod.Log.Info("[BubbleW] 底板材质已克隆（IconConfigurationPrefab.m_Material + 自建 Texture2DArray）");
                 }

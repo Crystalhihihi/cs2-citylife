@@ -40,8 +40,8 @@ namespace CityLife.GameBridge
     public partial class BubbleWorldSpikeSystem : GameSystemBase
     {
         private const int k_MaxBubbles = 120;
-        private const float k_MaxDist = 800f;        // 单泡距镜头上限（采样/绘制两用）
-        private const float k_LodMaxFocusDist = 1000f; // 镜头到落点距离上限（宽放；终值实机标定）
+        private const float k_MaxDist = 800f;        // 单泡距镜头上限（采样/绘制两用）——同时就是 LOD 尺子：
+                                                     // 超出即人不可辨（§12 #41 的标定终值落在这个常量上）
         private const float k_TargetPixels = 26f;    // 文字目标屏占高（像素）
         private const float k_MinWorldH = 0.35f;     // 文字世界高下限（街景不至于糊脸上）
         private const float k_MaxWorldH = 5f;        // 上限（远看不成区名牌）
@@ -71,7 +71,6 @@ namespace CityLife.GameBridge
         private bool m_LoggedFirstBake;
         private bool m_LoggedFirstRender;
         private bool m_LastHideOverlay;
-        private float m_LastLodLog = -999f;
 
         /// <summary>一个被追踪的气泡：锚点实体 + 当前文案 + 独立生命周期。</summary>
         private struct TrackedBubble
@@ -317,15 +316,6 @@ namespace CityLife.GameBridge
         private static float HoldFor(int entityIndex, int textIdx)
             => 6f + ((entityIndex * 7919 + textIdx * 104729) % 900) / 100f;
 
-        /// <summary>视线落点（x/z 作搜索圆心；y 只作参照——真实高度借实体 Transform，地形 y 不可信）。</summary>
-        private static float3 FocusGround(Camera cam)
-        {
-            var camPos = cam.transform.position;
-            var fwd = cam.transform.forward;
-            var t = fwd.y < -0.001f ? camPos.y / -fwd.y : 100f;
-            return (float3)(camPos + fwd * t);
-        }
-
         private static Color KindColor(byte kind)
             => kind == 0 ? Color.white
              : kind == 1 ? new Color(0.8f, 0.9f, 1f)
@@ -507,29 +497,25 @@ namespace CityLife.GameBridge
                 if (cam.cameraType != CameraType.Game)
                     continue;
 
-                // LOD 闸（按镜头到落点距离，不按裸高度——俯仰角变化时高度不代表远近，实机踩坑）
-                var focus = FocusGround(cam);
-                var focusDist = math.distance(cam.transform.position, focus);
-                if (focusDist > k_LodMaxFocusDist)
-                {
-                    if (UnityEngine.Time.time - m_LastLodLog > 10f)
-                    {
-                        m_LastLodLog = UnityEngine.Time.time;
-                        Mod.Log.Info($"[BubbleW] LOD 拦截：落点距离 {focusDist:F0}m > {k_LodMaxFocusDist:F0}m（zoom={m_CameraUpdate.zoom:F1}）");
-                    }
-                    continue;
-                }
-
+                // 显隐尺 = 每泡到镜头距离（循环内 k_MaxDist 截断）。**不要再加落点距离闸**：
+                // 浅俯仰角时落点被甩到 y=0 平面几百米外，聚焦距虚高把全屏误杀（实机踩坑×2）。
                 var camPos = (float3)cam.transform.position;
                 var rot = Quaternion.LookRotation(cam.transform.forward, cam.transform.up);
                 var tanHalfFov = math.tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
                 foreach (var b in m_Bubbles)
                 {
-                    if (!EntityManager.Exists(b.Anchor) || !EntityManager.HasComponent<Transform>(b.Anchor))
+                    if (!EntityManager.Exists(b.Anchor))
                         continue;
                     if (!m_Cache.TryGetValue((b.Text, b.Kind), out var entry))
                         continue;
-                    var p = EntityManager.GetComponentData<Transform>(b.Anchor).m_Position;
+                    // 渲染帧读插值变换（游戏给镜头用的每帧平滑位）；模拟 Transform 是 tick 级——读它必卡
+                    float3 p;
+                    if (EntityManager.HasComponent<InterpolatedTransform>(b.Anchor))
+                        p = EntityManager.GetComponentData<InterpolatedTransform>(b.Anchor).m_Position;
+                    else if (EntityManager.HasComponent<Transform>(b.Anchor))
+                        p = EntityManager.GetComponentData<Transform>(b.Anchor).m_Position;
+                    else
+                        continue;
                     p.y += b.Kind == 0 ? 2.6f : b.Kind == 1 ? 2.8f : 12f; // 人头/车顶/楼顶（估值，正式版按包围盒）
                     var dist = math.distance(camPos, p);
                     if (dist > k_MaxDist)
@@ -549,7 +535,7 @@ namespace CityLife.GameBridge
                 if (!m_LoggedFirstRender)
                 {
                     m_LoggedFirstRender = true;
-                    Mod.Log.Info($"[BubbleW] 首帧自绘（cam={cam.name}，落点距离 {focusDist:F0}m，在场 {m_Bubbles.Count}）");
+                    Mod.Log.Info($"[BubbleW] 首帧自绘（cam={cam.name}，在场 {m_Bubbles.Count}）");
                 }
             }
         }

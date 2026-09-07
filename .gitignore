@@ -10,3 +10,4 @@ src/CityLife/UI/dist/
 
 # 本地实测输出（日志含 LLM 原始响应，不进库）
 logs/
+tools/GameDllDump/*.err

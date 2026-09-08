@@ -727,8 +727,11 @@ namespace CityLife.GameBridge
                     mat.SetTexture("_MainTex", m_PlateTexs[i]);
                     mat.SetColor("_FaceColor", new Color(0.04f, 0.05f, 0.09f, 1f));
                     mat.SetColor("_EmissionColor", Color.black); // 发光通道也压黑——四通道全指向深底（v3.3 焊死）
-                    if (i == 0) // 读回取证：颜色到底吃没吃进去（白板嫌疑排除用）
-                        Mod.Log.Info($"[BubbleW] 底板材质读回：_FaceColor={mat.GetColor("_FaceColor")} 顶点色=深色双写");
+                    if (i == 0) // 读回取证：颜色/贴图到底吃没吃进去
+                    {
+                        var t = mat.GetTexture("_MainTex");
+                        Mod.Log.Info($"[BubbleW] 底板材质读回：_FaceColor={mat.GetColor("_FaceColor")} _MainTex={(t == null ? "null" : $"{t.GetType().Name}({t.width}x{t.height})")} 顶点色=深色双写");
+                    }
                     m_PlateMats[i] = mat;
                 }
                 Mod.Log.Info("[BubbleW] 底板材质已构建（供体克隆 ×3 档 + SDF 贴图；uv2/绕向在 BuildEntryPlate 逐条目写对）");
@@ -868,12 +871,17 @@ namespace CityLife.GameBridge
                         }
                         else
                         {
-                            // 诊断 2×2 对剖：A=我方 bake 空间底板网格+供体原样材质；B=供体字形网格+
-                            // 供体克隆仅换 SDF 贴图，抬高 2 块高防叠。
+                            // 诊断对剖（v3.4 加 C 臂）：A=底板网格+供体原样材质；B=供体字形网格+供体克隆仅换
+                            // SDF 贴图（抬高 2 块高）；C=底板网格+供体克隆仅换 SDF 贴图（抬高 4 块高）——
+                            // A/B 早已分别显形，C 才是从没单验过的正式组合，一帧定位"网格×贴图"交互嫌疑。
                             Graphics.DrawMesh(entry.Plate, plateMatrix,
                                 m_DonorMat, 0, cam, 0, null, ShadowCastingMode.Off, false);
                             Graphics.DrawMesh(m_DonorMesh,
                                 Matrix4x4.TRS((Vector3)(p + platePushBack + new float3(0, worldH * 2f, 0)), rot, new Vector3(s, s, s))
+                                    * Matrix4x4.Translate(-entry.Center),
+                                m_BisectMats[entry.PlateBucket], 0, cam, 0, null, ShadowCastingMode.Off, false);
+                            Graphics.DrawMesh(entry.Plate,
+                                Matrix4x4.TRS((Vector3)(p + platePushBack + new float3(0, worldH * 4f, 0)), rot, new Vector3(s, s, s))
                                     * Matrix4x4.Translate(-entry.Center),
                                 m_BisectMats[entry.PlateBucket], 0, cam, 0, null, ShadowCastingMode.Off, false);
                         }

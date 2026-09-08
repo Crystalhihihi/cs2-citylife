@@ -52,11 +52,15 @@ namespace CityLife.GameBridge
     /// v2.9 二阶对剖判决（9/8 实机）：B 臂（供体克隆仅换贴图）**显形**——SDF 贴图无罪，
     ///   凶手在我方的参数覆写集（深底 alpha 0.62/描边/队列 3700 之一）。
     /// v3.0-v3.1 实机：诊断臂双双显形（我方 quad 好、SDF 贴图好），唯独正式底板组合不显。
-    /// v3.2 真凶定案：**缩放域失配**——该 shader 的 SDF 覆盖率按矩阵缩放换算滤波宽度，底板用
-    ///   plateH≈1-9 的大缩放（文字是 0.1 级）把滤波冲垮到 0.5 边界、被 _ALPHATEST_ON 整板裁剪。
-    ///   修法：底板网格烘进文字的 bake 坐标系（尺寸取包围盒+留白、锚点同 Center），绘制矩阵
-    ///   与文字完全同一个（含 Translate(-Center)）——同缩放域同锚点，滤波/对齐一起白送。
+    /// v3.2 实机（9/8）：底板显形且贴字——但**发白**：白字垫白板="遮罩"错觉。真凶=贴图 RGB 烘成白色，
+    ///   该 shader 的填充直接吃 tex.rgb（_FaceColor/顶点色都不背锅）。
+    /// v3.2 真凶定案（"画而不显"系列）：**缩放域失配**——该 shader 的 SDF 覆盖率按矩阵缩放换算滤波
+    ///   宽度，底板用 plateH≈1-9 的大缩放（文字是 0.1 级）把滤波冲垮到 0.5 边界、被 _ALPHATEST_ON
+    ///   整板裁剪。修法：底板网格烘进文字的 bake 坐标系（尺寸取包围盒+留白、锚点同 Center），
+    ///   绘制矩阵与文字完全同一个（含 Translate(-Center)）——同缩放域同锚点，滤波/对齐一起白送。
     ///   底板网格随文字缓存逐条建（4 顶点）；SDF 贴图仍 3 档宽高比选最近（只管圆角不变形）。
+    /// v3.3：SDF 贴图 RGB 改烘全黑（alpha 照旧距离场）+ 底板材质 _EmissionColor 压黑——
+    ///   tex.rgb / 发光 / _FaceColor / 顶点色 四条通道全部指向深底，焊死。
     /// v2.4 同版上的长文适配（沿用）：
     /// - 折行是执行层的活（铁律 #1，不依赖 TMP 折行对 CJK 的怪癖）：CJK 1 格/其余 0.5 格、
     ///   13 格/行、最多 4 行、溢出末字换"…"。内容层不限字数——话痨/沉默是人格，全文归信息流；
@@ -636,7 +640,7 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>圆角底板贴图（喂 TMP SDF shader）：alpha=有向距离场（0.5=边、内 1 外 0），
-        /// RGB 全白——填充色/描边色全走材质参数，贴图只供形状。</summary>
+        /// RGB 全黑——v3.3 实锤该 shader 填充直接吃 tex.rgb，白底会把面板洗白（"遮罩"错觉）。</summary>
         private static Texture2D BakePlateTexture(float aspect)
         {
             var w = k_PlateTexW;
@@ -658,7 +662,7 @@ namespace CityLife.GameBridge
                     var d = math.length(math.max(new float2(qx, qy), float2.zero))
                         + math.min(math.max(qx, qy), 0f) - radius;
                     var a = (byte)(math.saturate(0.5f - d / (2f * padWorld)) * 255f);
-                    px[y * w + x] = new Color32(255, 255, 255, a);
+                    px[y * w + x] = new Color32(0, 0, 0, a); // RGB 全黑（v3.3：填充吃 tex.rgb 实锤）
                 }
             }
             tex.SetPixels32(px);
@@ -722,6 +726,7 @@ namespace CityLife.GameBridge
                     var mat = new Material(donor);
                     mat.SetTexture("_MainTex", m_PlateTexs[i]);
                     mat.SetColor("_FaceColor", new Color(0.04f, 0.05f, 0.09f, 1f));
+                    mat.SetColor("_EmissionColor", Color.black); // 发光通道也压黑——四通道全指向深底（v3.3 焊死）
                     if (i == 0) // 读回取证：颜色到底吃没吃进去（白板嫌疑排除用）
                         Mod.Log.Info($"[BubbleW] 底板材质读回：_FaceColor={mat.GetColor("_FaceColor")} 顶点色=深色双写");
                     m_PlateMats[i] = mat;

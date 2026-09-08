@@ -44,9 +44,12 @@ namespace CityLife.GameBridge
     ///   再覆写 _MainTex/尺寸/颜色/队列——实机仍"画而不显"（9/8），材质参数排除。
     /// v2.6 绕向实读翻车自纠：供体首三角=0,1,2/2,3,0 手性为负，与我方 quad 原序**同序同手性**
     ///   ——绕向从来不是病根（且 v2.6 符号臂选反，反而改拧了）。绕向正式排除。
-    /// v2.7 头号活口=**贴图槽维度**：供体 _MainTex 若是 Texture2DArray，SetTexture(2D) 被静默弹回
-    ///   =底板全透明的完美解释。修法：先试 1 片数组→读回校验→被弹回退 2D，日志记录实走哪只胳膊
-    ///   +供体槽真实类型。绕向符号臂修正：手性为负配 0,1,2/2,3,0。
+    /// v2.7 贴图槽维度假设翻车（同日）：供体槽=Texture2D（数组假设死亡）；且 ReferenceEquals 读回
+    ///   只证明属性袋收了对象、证明不了 shader 声明维度——数组塞进 2D 槽画时必死，回退 2D。
+    ///   至此 uv2/绕向/参数全家桶/贴图维度全部排除，剩余变量=我方手搓 quad 网格 vs SDF 贴图本身。
+    /// v2.8：Ctrl+7 改三态（关/SDF 底板/诊断对照）。诊断臂每泡两针 2×2 对剖：
+    ///   A=我方 quad+供体原样材质（验网格/矩阵/通路），B=供体字形网格+我方 SDF 材质（验材质/贴图）。
+    ///   一帧判决哪条臂断，不再逐参数猜。
     /// v2.4 同版上的长文适配（沿用）：
     /// - 折行是执行层的活（铁律 #1，不依赖 TMP 折行对 CJK 的怪癖）：CJK 1 格/其余 0.5 格、
     ///   13 格/行、最多 4 行、溢出末字换"…"。内容层不限字数——话痨/沉默是人格，全文归信息流；
@@ -109,11 +112,12 @@ namespace CityLife.GameBridge
         private Vector2? m_GlyphUV2;                // 从游戏字形网格实采的 uv2（底板照抄，不猜）
 
         // 底板管线（TMP 同路：贴图/网格是程序化内容 OnCreate 即建；材质等文字基底+uv2 实采就位后克隆）
-        private bool m_PlateOn = true;
+        private int m_PlateMode = 1;                // 0=关 1=SDF 底板 2=诊断对照（Ctrl+7 三态轮转）
         private Texture2D[] m_PlateTexs = null!;
-        private Texture2DArray[] m_PlateTexArrs = null!; // 单片的数组版——供体 _MainTex 槽若是数组维度用它
         private Mesh[] m_PlateMeshes = null!;
         private Material[] m_PlateMats = null!;
+        private Mesh m_DonorMesh = null!;           // 诊断臂用：供体字形网格/材质（BuildPlateMaterials 捕获）
+        private Material m_DonorMat = null!;
         private bool m_PlateMaterialWarned;
         private bool m_LoggedFirstPlate;
 
@@ -196,8 +200,8 @@ namespace CityLife.GameBridge
             if (debounced && ctrl && Input.GetKeyDown(KeyCode.Alpha7))
             {
                 m_LastKeyFrame = m_Frame;
-                m_PlateOn = !m_PlateOn;
-                Mod.Log.Info($"[BubbleW] 底板 {(m_PlateOn ? "开" : "关")}");
+                m_PlateMode = (m_PlateMode + 1) % 3;
+                Mod.Log.Info($"[BubbleW] 底板模式 → {(m_PlateMode == 0 ? "关" : m_PlateMode == 1 ? "SDF 底板" : "诊断对照（2×2 对剖）")}");
             }
 
             // FPS 计：每 4 秒一行（开着才有意义）
@@ -243,7 +247,7 @@ namespace CityLife.GameBridge
                     if (!m_Cache.ContainsKey((b.Text, b.Kind)))
                         EnsureBaked(b.Text, b.Kind);
             // 底板材质等"文字基底+uv2 实采"双就位（同帧烘焙循环后必有 uv2）
-            if (m_PlateOn && m_PlateMats == null && m_BaseTextMaterial != null && m_GlyphUV2.HasValue)
+            if (m_PlateMode != 0 && m_PlateMats == null && m_BaseTextMaterial != null && m_GlyphUV2.HasValue)
                 BuildPlateMaterials();
 
             m_Frame++;
@@ -604,14 +608,10 @@ namespace CityLife.GameBridge
             try
             {
                 m_PlateTexs = new Texture2D[k_PlateAspects.Length];
-                m_PlateTexArrs = new Texture2DArray[k_PlateAspects.Length];
                 m_PlateMeshes = new Mesh[k_PlateAspects.Length];
                 for (int i = 0; i < k_PlateAspects.Length; i++)
                 {
                     m_PlateTexs[i] = BakePlateTexture(k_PlateAspects[i]);
-                    var arr = new Texture2DArray(k_PlateTexW, k_PlateTexH, 1, TextureFormat.ARGB32, true);
-                    Graphics.CopyTexture(m_PlateTexs[i], 0, arr, 0);
-                    m_PlateTexArrs[i] = arr;
                     m_PlateMeshes[i] = BuildPlateMesh(k_PlateAspects[i]);
                 }
             }
@@ -712,26 +712,15 @@ namespace CityLife.GameBridge
                     mesh.triangles = tris;
                 Mod.Log.Info($"[BubbleW] 绕向实读：供体首三角 {st[0]},{st[1]},{st[2]}/{st[3]},{st[4]},{st[5]} 手性={handedness:F1} → 底板接线 {(handedness < 0f ? "0,1,2/2,3,0" : "0,3,2/2,1,0")}");
 
-                var donorTex = donor.GetTexture("_MainTex"); // 供体槽真实类型（日志取证）
+                m_DonorMesh = donorMesh;
+                m_DonorMat = donor; // 诊断臂用原样供体（只读引用，不 clone，析构归缓存管）
+                Mod.Log.Info($"[BubbleW] 供体 _MainTex 槽类型={donor.GetTexture("_MainTex")?.GetType().Name ?? "null"}（v2.7 数组假设已死，回退 2D）");
                 m_PlateMats = new Material[k_PlateAspects.Length];
                 for (int i = 0; i < k_PlateAspects.Length; i++)
                 {
                     var mat = new Material(m_BaseTextMaterial);
                     mat.CopyPropertiesFromMaterial(donor);
-                    // 贴图槽自适应：槽若声明 Texture2DArray，SetTexture(2D) 会被维度不匹配静默弹回
-                    // （=底板全透明的头号活口）。先试单片数组，读回校验，被弹回退 2D。
-                    var arr = m_PlateTexArrs[i];
-                    mat.SetTexture("_MainTex", arr);
-                    var back = mat.GetTexture("_MainTex");
-                    if (!ReferenceEquals(back, arr))
-                    {
-                        mat.SetTexture("_MainTex", m_PlateTexs[i]);
-                        back = mat.GetTexture("_MainTex");
-                        if (i == 0)
-                            Mod.Log.Info($"[BubbleW] 贴图槽=2D（数组被弹回；供体槽类型={donorTex?.GetType().Name ?? "null"}，读回={(back == null ? "null" : back.GetType().Name)}）");
-                    }
-                    else if (i == 0)
-                        Mod.Log.Info($"[BubbleW] 贴图槽=Texture2DArray（供体槽类型={donorTex?.GetType().Name ?? "null"}）");
+                    mat.SetTexture("_MainTex", m_PlateTexs[i]);
                     mat.SetFloat("_TextureWidth", k_PlateTexW);
                     mat.SetFloat("_TextureHeight", k_PlateTexH);
                     mat.SetFloat("_GradientScale", k_PlatePadPx + 1f); // TMP 惯例=图集 padding+1
@@ -795,15 +784,13 @@ namespace CityLife.GameBridge
             if (m_PlateTexs != null)
                 foreach (var t in m_PlateTexs)
                     if (t != null) UnityEngine.Object.Destroy(t);
-            if (m_PlateTexArrs != null)
-                foreach (var t in m_PlateTexArrs)
-                    if (t != null) UnityEngine.Object.Destroy(t);
             if (m_PlateMeshes != null)
                 foreach (var m in m_PlateMeshes)
                     if (m != null) UnityEngine.Object.Destroy(m);
             if (m_PlateMats != null)
                 foreach (var m in m_PlateMats)
                     if (m != null) UnityEngine.Object.Destroy(m);
+            // 供体网格/材质是缓存资产的引用，不归这里销毁
         }
 
         // —— 绘制：SRP 回调自绘（billboard + 恒定屏占）。不再过 OverlayRenderSystem 通道，
@@ -823,8 +810,9 @@ namespace CityLife.GameBridge
                 return;
 
             // 数组非空+末元素非空：BuildPlateAssets 中途抛异常会留下半空数组（元素 null 会让 DrawMesh 每帧抛）
-            var drawPlate = m_PlateOn && m_PlateMats != null && m_PlateMeshes != null
-                && m_PlateMeshes[k_PlateAspects.Length - 1] != null && m_PlateMats[k_PlateAspects.Length - 1] != null;
+            var drawPlate = m_PlateMode != 0 && m_PlateMats != null && m_PlateMeshes != null
+                && m_PlateMeshes[k_PlateAspects.Length - 1] != null && m_PlateMats[k_PlateAspects.Length - 1] != null
+                && (m_PlateMode == 1 || m_DonorMat != null);
             foreach (var cam in cameras)
             {
                 if (cam.cameraType != CameraType.Game)
@@ -871,13 +859,27 @@ namespace CityLife.GameBridge
                         var bucket = k_PlateAspects.Length - 1;
                         for (int i = 0; i < k_PlateAspects.Length; i++)
                             if (k_PlateAspects[i] >= need) { bucket = i; break; }
-                        Graphics.DrawMesh(m_PlateMeshes[bucket],
-                            Matrix4x4.TRS((Vector3)(p + platePushBack), rot, new Vector3(plateH, plateH, plateH)),
-                            m_PlateMats[bucket], 0, cam, 0, null, ShadowCastingMode.Off, false);
+                        var plateMatrix = Matrix4x4.TRS((Vector3)(p + platePushBack), rot, new Vector3(plateH, plateH, plateH));
+                        if (m_PlateMode == 1)
+                        {
+                            Graphics.DrawMesh(m_PlateMeshes[bucket], plateMatrix,
+                                m_PlateMats[bucket], 0, cam, 0, null, ShadowCastingMode.Off, false);
+                        }
+                        else
+                        {
+                            // 诊断 2×2 对剖（v2.8）：A=我方 quad+供体原样材质（验网格/矩阵/通路）；
+                            // B=供体字形网格+我方 SDF 材质，抬高 2 块高防叠（验材质/贴图）。哪臂显形一刀定位。
+                            Graphics.DrawMesh(m_PlateMeshes[bucket], plateMatrix,
+                                m_DonorMat, 0, cam, 0, null, ShadowCastingMode.Off, false);
+                            Graphics.DrawMesh(m_DonorMesh,
+                                Matrix4x4.TRS((Vector3)(p + platePushBack + new float3(0, worldH * 2f, 0)), rot, new Vector3(s, s, s))
+                                    * Matrix4x4.Translate(-entry.Center),
+                                m_PlateMats[bucket], 0, cam, 0, null, ShadowCastingMode.Off, false);
+                        }
                         if (!m_LoggedFirstPlate)
                         {
                             m_LoggedFirstPlate = true;
-                            Mod.Log.Info($"[BubbleW] 底板首画（bucket={bucket} plateH={plateH:F2}m 文宽比={entry.Aspect:F1} 行={entry.Lines} TMP 同路）");
+                            Mod.Log.Info($"[BubbleW] 底板首画（模式={m_PlateMode} bucket={bucket} plateH={plateH:F2}m 文宽比={entry.Aspect:F1} 行={entry.Lines}）");
                         }
                     }
 

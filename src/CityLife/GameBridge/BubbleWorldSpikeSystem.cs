@@ -13,7 +13,7 @@ using Transform = Game.Objects.Transform;
 namespace CityLife.GameBridge
 {
     /// <summary>
-    /// M3 气泡层 v2.3（自烘焙 TMP 文字网格 + TMP 同路 SDF 底板，SRP 回调自绘）。
+    /// M3 气泡层 v2.4（自烘焙 TMP 文字网格 + TMP 同路 SDF 底板，SRP 回调自绘；执行层折行+按字计时）。
     ///
     /// v1（Buffer.DrawText）实机死因（2026-08-21 截图 + 反编译双实锤，勿复探）：
     /// - DrawText 无尺寸参：文字网格由 OverlayRenderSystem 全局共享 TMP 以 fontSize=200 懒烘焙、
@@ -34,10 +34,15 @@ namespace CityLife.GameBridge
     ///   m_Material + InstanceData 缓冲 + DrawMeshInstancedIndirect）的 m_Params/锚点语义是黑盒，
     ///   反推"世界全高米数"实测画出 plateH=9.26m 巨框、与文字错位；该 shader 语义逐版本漂移，
     ///   属版本敏感面，按铁律 #4 收缩。
-    /// v2.3 底板正路：**底板也走 TMP 文字管线**——材质 clone 同一文字基底、_MainTex 换自建
-    ///   圆角矩形 SDF 贴图（alpha=距离场 0.5=边）、绘制矩阵与文字同一套 TRS（billboard+恒定屏占）
-    ///   → 对齐/跟手/世界锁定天然成立，描边（气泡框）直接吃 TMP 描边参数。
-    ///   renderQueue 底板 3700 &lt; 文字 3800 保叠序；0.06m 压后防共面。
+    /// v2.3 底板路线：改走 TMP 文字同路（材质 clone 同一文字基底、_MainTex 换自建圆角矩形 SDF、
+    ///   矩阵与文字同一套 TRS）。实机判"画而不显"（9/8）：材质/绘制调用都发了我方 quad 却全透明，
+    ///   头号嫌疑=uv2 通道（TMP 在该通道携带 SDF 缩放信息，v2 开发期已实锤"不拷会糊"；我填了 (0,0)）。
+    /// v2.4：**uv2 不猜，实采**——烘焙文字时抄下游戏字形网格的 uv2 真实值，底板 quad 逐顶点照抄
+    ///   （首烘日志留证）；同版上长文适配：
+    /// - 折行是执行层的活（铁律 #1，不依赖 TMP 折行对 CJK 的怪癖）：CJK 1 格/其余 0.5 格、
+    ///   13 格/行、最多 4 行、溢出末字换"…"。内容层不限字数——话痨/沉默是人格，全文归信息流；
+    /// - 屏占按"行"恒定：块世界高 = 行高 × 行数，多行段落不会缩成蚂蚁；
+    /// - 驻留时长按字数缩放（4s 起每字 +0.28s，封顶 30s）——长文让人读得完。
     ///
     /// 键位：Ctrl+9 开关；Ctrl+8 数量档（30/60/120）；Ctrl+7 底板开关。
     /// 扩展口（正式版待办）：①内容管道接入（信息层降级产物+共位小剧场）；②k_MaxDist 按
@@ -48,16 +53,20 @@ namespace CityLife.GameBridge
         private const int k_MaxBubbles = 120;
         private const float k_MaxDist = 800f;        // 单泡距镜头上限（采样/绘制两用）——同时就是 LOD 尺子：
                                                      // 超出即人不可辨（§12 #41 的标定终值落在这个常量上）
-        private const float k_TargetPixels = 26f;    // 文字目标屏占高（像素）
-        private const float k_MinWorldH = 0.35f;     // 文字世界高下限（街景不至于糊脸上）
-        private const float k_MaxWorldH = 5f;        // 上限（远看不成区名牌）
+        private const float k_TargetPixels = 26f;    // 文字目标屏占高（像素/行——多行按行数叠）
+        private const float k_MinWorldH = 0.35f;     // 单行世界高下限（街景不至于糊脸上）
+        private const float k_MaxWorldH = 5f;        // 单行上限（远看不成区名牌）
         private const int k_CacheCap = 48;           // 文字网格缓存上限（LRU 逐出，防漏）
 
-        // 底板三档宽高比（S/M/L）；按文案宽高比就近取档，宁宽勿窄（宽了居中好看，窄了包不住字）
+        // 底板三档宽高比（S/M/L）；按折行后文案块宽高比就近取档，宁宽勿窄（宽了居中好看，窄了包不住字）
         private static readonly float[] k_PlateAspects = { 2.2f, 4f, 7.5f };
         private const int k_PlateTexW = 512;
         private const int k_PlateTexH = 128;
         private const int k_PlatePadPx = 24;         // SDF 过渡带像素（单边）；_GradientScale 由此换算
+
+        // 执行层排版：13 格/行（CJK 1 格、其余半格）、最多 4 行
+        private const float k_WrapCells = 13f;
+        private const int k_WrapMaxLines = 4;
 
         private OverlayRenderSystem m_Overlay = default!;
         private PrefabSystem m_PrefabSystem = default!;
@@ -88,8 +97,9 @@ namespace CityLife.GameBridge
         private bool m_LoggedFirstBake;
         private bool m_LoggedFirstRender;
         private bool m_LastHideOverlay;
+        private Vector2? m_GlyphUV2;                // 从游戏字形网格实采的 uv2（底板照抄，不猜）
 
-        // 底板管线（TMP 同路：贴图/网格是程序化内容 OnCreate 即建；材质等文字基底就位后克隆）
+        // 底板管线（TMP 同路：贴图/网格是程序化内容 OnCreate 即建；材质等文字基底+uv2 实采就位后克隆）
         private bool m_PlateOn = true;
         private Texture2D[] m_PlateTexs = null!;
         private Mesh[] m_PlateMeshes = null!;
@@ -114,6 +124,7 @@ namespace CityLife.GameBridge
             public Vector3 Center;  // 合并包围盒中心（绘制时平移抵消，让文字正中落在锚点上）
             public float Height;    // 合并包围盒高（缩放归一分母）
             public float Aspect;    // 合并包围盒宽/高（底板选档用）
+            public int Lines;       // 执行层折行后的行数（屏占/底板留白都按它算）
             public float LastUsed;
         }
 
@@ -221,7 +232,8 @@ namespace CityLife.GameBridge
                 foreach (var b in m_Bubbles)
                     if (!m_Cache.ContainsKey((b.Text, b.Kind)))
                         EnsureBaked(b.Text, b.Kind);
-            if (m_PlateOn && m_PlateMats == null && m_BaseTextMaterial != null)
+            // 底板材质等"文字基底+uv2 实采"双就位（同帧烘焙循环后必有 uv2）
+            if (m_PlateOn && m_PlateMats == null && m_BaseTextMaterial != null && m_GlyphUV2.HasValue)
                 BuildPlateMaterials();
 
             m_Frame++;
@@ -310,9 +322,9 @@ namespace CityLife.GameBridge
                     Anchor = scored[i].e,
                     Kind = kind,
                     TextIdx = 0,
-                    NextAt = now + HoldFor(scored[i].e.Index, 0),
                 };
                 SetBubbleText(ref b, 0);
+                b.NextAt = now + HoldFor(scored[i].e.Index, 0, b.Text.Length); // 时长依赖文案，须在 SetBubbleText 之后
                 m_Bubbles.Add(b);
             }
         }
@@ -325,7 +337,7 @@ namespace CityLife.GameBridge
             return false;
         }
 
-        // —— 生命周期：各气泡独立时钟（6-15s 错相，绝不同时切换）——
+        // —— 生命周期：各气泡独立时钟（按字数缩放 + 确定性错相，绝不同时切换）——
         private void TickLifecycle()
         {
             var now = UnityEngine.Time.time;
@@ -337,8 +349,8 @@ namespace CityLife.GameBridge
                 if (now >= b.NextAt)
                 {
                     b.TextIdx++;
-                    b.NextAt = now + HoldFor(b.Anchor.Index, b.TextIdx);
                     SetBubbleText(ref b, b.TextIdx);
+                    b.NextAt = now + HoldFor(b.Anchor.Index, b.TextIdx, b.Text.Length);
                     m_Bubbles[i] = b;
                 }
             }
@@ -355,9 +367,14 @@ namespace CityLife.GameBridge
                 EnsureBaked(b.Text, b.Kind);
         }
 
-        /// <summary>气泡驻留时长（6-15s，确定性错相：实体×集数散列——全屏绝不同时切换）。</summary>
-        private static float HoldFor(int entityIndex, int textIdx)
-            => 6f + ((entityIndex * 7919 + textIdx * 104729) % 900) / 100f;
+        /// <summary>气泡驻留时长：阅读时间 4s 起、每字 +0.28s、封顶 30s（话痨段落让人读完），
+        /// 再叠 0-4s 确定性抖动（实体×集数散列——全屏绝不同时切换）。</summary>
+        private static float HoldFor(int entityIndex, int textIdx, int textLen)
+        {
+            var read = 4f + textLen * 0.28f;
+            var jitter = ((entityIndex * 7919 + textIdx * 104729) % 400) / 100f;
+            return math.min(read + jitter, 30f);
+        }
 
         private static Color KindColor(byte kind)
             => kind == 0 ? Color.white
@@ -401,6 +418,45 @@ namespace CityLife.GameBridge
             }
         }
 
+        /// <summary>执行层排版（铁律 #1：排版是确定性活，不归 LLM 也不赌 TMP 的 CJK 折行）：
+        /// CJK 占 1 格、ASCII 等占半格，每行 ≤13 格，最多 4 行，溢出把末行末字换"…"。
+        /// 内容层不限字数（话痨/沉默是人格），气泡只承诺"排得下、读得完"，全文归信息流。</summary>
+        private static string WrapForBake(string text, out int lines)
+        {
+            var cur = new System.Text.StringBuilder(text.Length + 8);
+            var list = new List<string>(k_WrapMaxLines);
+            var cells = 0f;
+            var overflow = false;
+            foreach (var ch in text)
+            {
+                if (ch == '\r')
+                    continue;
+                if (ch == '\n') // 显式换行=强制满行
+                {
+                    list.Add(cur.ToString()); cur.Clear(); cells = 0f;
+                    if (list.Count == k_WrapMaxLines) { overflow = true; break; }
+                    continue;
+                }
+                var w = ch < 128 ? 0.5f : 1f;
+                if (cells + w > k_WrapCells)
+                {
+                    list.Add(cur.ToString()); cur.Clear(); cells = 0f;
+                    if (list.Count == k_WrapMaxLines) { overflow = true; break; }
+                }
+                cur.Append(ch);
+                cells += w;
+            }
+            if (!overflow && cur.Length > 0)
+                list.Add(cur.ToString());
+            if (overflow)
+            {
+                var last = list[k_WrapMaxLines - 1];
+                list[k_WrapMaxLines - 1] = last.Length > 1 ? last.Substring(0, last.Length - 1) + '…' : "…";
+            }
+            lines = Math.Max(1, list.Count);
+            return string.Join("\n", list);
+        }
+
         // —— 烘焙：借游戏共享 TMP 烘文字网格；八项状态快照+finally 恢复（污染全城标签的坑，勿拆）——
         private void EnsureBaked(string text, byte kind)
         {
@@ -425,14 +481,15 @@ namespace CityLife.GameBridge
             var oldWrap = tmp.enableWordWrapping;
             try
             {
-                tmp.enableWordWrapping = false;
+                var wrapped = WrapForBake(text, out var lines);
+                tmp.enableWordWrapping = false; // 折行已由执行层完成（'\n'），TMP 只管排
                 tmp.fontStyle = FontStyles.Normal;
                 tmp.characterSpacing = 0f;
                 tmp.alignment = TextAlignmentOptions.Center;
                 tmp.color = Color.white; // 颜色走材质 _FaceColor，顶点色不动
                 tmp.fontSize = 200f;     // 烘焙大字号保 SDF 边缘质量；世界尺寸绘制时归一（ASL 同款）
-                rt.sizeDelta = new Vector2(240f * text.Length + 400f, 400f); // 不折行保险
-                tmp.text = text;
+                rt.sizeDelta = new Vector2(240f * k_WrapCells + 400f, 300f * k_WrapMaxLines); // 单行最宽×最大行高，溢出保险
+                tmp.text = wrapped;
                 tmp.ForceMeshUpdate(true, true);
 
                 var info = tmp.textInfo;
@@ -445,6 +502,8 @@ namespace CityLife.GameBridge
                     if (mi.vertexCount == 0 || mi.mesh == null)
                         continue;
                     var src = mi.mesh;
+                    if (!m_GlyphUV2.HasValue && src.uv2 != null && src.uv2.Length >= 4)
+                        m_GlyphUV2 = src.uv2[0]; // 实采游戏字形的 uv2（底板 quad 照抄，不猜）
                     var mesh = new Mesh
                     {
                         vertices = src.vertices,
@@ -476,13 +535,14 @@ namespace CityLife.GameBridge
                 entry.Center = bounds.center;
                 entry.Height = math.max(bounds.size.y, 0.01f);
                 entry.Aspect = bounds.size.x / entry.Height;
+                entry.Lines = lines;
                 entry.LastUsed = UnityEngine.Time.time;
                 EvictIfNeeded();
                 m_Cache[key] = entry;
                 if (!m_LoggedFirstBake)
                 {
                     m_LoggedFirstBake = true;
-                    Mod.Log.Info($"[BubbleW] 首烘：'{text}' parts={entry.Parts.Count} 网格高={entry.Height:F1} 宽高比={entry.Aspect:F2}（fontSize=200 烘焙，绘制归一）");
+                    Mod.Log.Info($"[BubbleW] 首烘：'{text}' parts={entry.Parts.Count} 网格高={entry.Height:F1} 宽高比={entry.Aspect:F2} 行={entry.Lines} uv2={(m_GlyphUV2.HasValue ? m_GlyphUV2.Value.ToString() : "未采到")}（fontSize=200 烘焙，绘制归一）");
                 }
             }
             finally
@@ -578,8 +638,8 @@ namespace CityLife.GameBridge
             return tex;
         }
 
-        /// <summary>底板 quad：宽高比由几何承载（材质统一缩放），XY 平面、UV 0..1、顶点色白、
-        /// uv2=(0,0)（TMP 网格该通道是 bold/italic 标志位，中性值=0——与文字烘焙同 shader 的契约）。
+        /// <summary>底板 quad：宽高比由几何承载（材质统一缩放），XY 平面、UV 0..1、顶点色白。
+        /// uv2 先填 (0,0) 占位，材质构建时用游戏字形实采值覆写（v2.4：不猜，照抄）。
         /// 绕向沿用 v2.2.1 照抄游戏原版的序（BL→TL→TR→BR，0,1,2/2,3,0）——billboard 后以背面朝镜头，
         /// TMP shader Cull Off 本不挑绕向，保持原序无害。</summary>
         private static Mesh BuildPlateMesh(float aspect)
@@ -607,11 +667,16 @@ namespace CityLife.GameBridge
         }
 
         // —— 底板材质：clone 文字同款 TMP 基底（变换路径与文字 100% 一致=对齐天然成立；v2.2 通知图标
-        //    shader 路线的尺寸/锚点黑盒教训见类注释）。等文字基底就位后才建（基底懒取，主菜单没有单例）。——
+        //    shader 路线的尺寸/锚点黑盒教训见类注释）。等"文字基底+uv2 实采"双就位后才建。——
         private void BuildPlateMaterials()
         {
             try
             {
+                // uv2 实采值覆写到底板 quad（v2.3 填 (0,0) 被判"画而不显"的头号嫌疑）
+                var g = m_GlyphUV2!.Value;
+                foreach (var mesh in m_PlateMeshes)
+                    mesh.uv2 = new[] { g, g, g, g };
+
                 m_PlateMats = new Material[k_PlateAspects.Length];
                 for (int i = 0; i < k_PlateAspects.Length; i++)
                 {
@@ -619,7 +684,7 @@ namespace CityLife.GameBridge
                     mat.SetTexture("_MainTex", m_PlateTexs[i]);
                     mat.SetFloat("_TextureWidth", k_PlateTexW);
                     mat.SetFloat("_TextureHeight", k_PlateTexH);
-                    mat.SetFloat("_GradientScale", k_PlatePadPx * 2f); // SDF 量程=过渡带像素×2（TMP 惯例 padding+1 级）
+                    mat.SetFloat("_GradientScale", k_PlatePadPx + 1f); // TMP 惯例=图集 padding+1
                     mat.SetColor("_FaceColor", new Color(0.04f, 0.05f, 0.09f, 0.62f)); // 深底托字
                     mat.SetFloat("_OutlineWidth", 0.09f);
                     mat.SetColor("_OutlineColor", new Color(1f, 1f, 1f, 0.8f));        // 浅描边=气泡框
@@ -629,7 +694,7 @@ namespace CityLife.GameBridge
                     mat.renderQueue = 3700; // 文字 3800 之下——两个透明层的确定序
                     m_PlateMats[i] = mat;
                 }
-                Mod.Log.Info("[BubbleW] 底板材质已构建（TMP 基底克隆 ×3 档 + 自建 SDF 贴图）");
+                Mod.Log.Info($"[BubbleW] 底板材质已构建（TMP 基底克隆 ×3 档 + SDF 贴图，uv2 照抄字形 {g}）");
             }
             catch (Exception ex)
             {
@@ -703,17 +768,19 @@ namespace CityLife.GameBridge
                     if (dist > k_MaxDist)
                         continue;
 
-                    // 恒定屏占：世界高 = 2·dist·tan(fov/2)·目标像素/屏高，夹 [0.35, 5]m
-                    var worldH = math.clamp(2f * dist * tanHalfFov * k_TargetPixels / cam.pixelHeight,
+                    // 恒定屏占按"行"：单行世界高 = 2·dist·tan(fov/2)·目标像素/屏高，夹 [0.35, 5]m；
+                    // 块高 = 行高 × 行数——话痨段落按行数长高，不会缩成蚂蚁
+                    var lineH = math.clamp(2f * dist * tanHalfFov * k_TargetPixels / cam.pixelHeight,
                         k_MinWorldH, k_MaxWorldH);
+                    var worldH = lineH * entry.Lines;
                     var s = worldH / entry.Height;
                     var matrix = Matrix4x4.TRS((Vector3)p, rot, new Vector3(s, s, s))
                         * Matrix4x4.Translate(-entry.Center);
 
                     if (drawPlate)
                     {
-                        // 底板选档：宁宽勿窄。需求比 = 文案宽高比 ÷ 底板高倍率 × 横向余量
-                        var plateH = worldH * 1.7f;
+                        // 底板高 = 块高 + 上下各 0.35 行留白；选档宁宽勿窄
+                        var plateH = worldH * (1f + 0.7f / entry.Lines);
                         var need = entry.Aspect * worldH / plateH * 1.08f;
                         var bucket = k_PlateAspects.Length - 1;
                         for (int i = 0; i < k_PlateAspects.Length; i++)
@@ -724,7 +791,7 @@ namespace CityLife.GameBridge
                         if (!m_LoggedFirstPlate)
                         {
                             m_LoggedFirstPlate = true;
-                            Mod.Log.Info($"[BubbleW] 底板首画（bucket={bucket} plateH={plateH:F2}m 文宽比={entry.Aspect:F1} TMP 同路）");
+                            Mod.Log.Info($"[BubbleW] 底板首画（bucket={bucket} plateH={plateH:F2}m 文宽比={entry.Aspect:F1} 行={entry.Lines} TMP 同路）");
                         }
                     }
 

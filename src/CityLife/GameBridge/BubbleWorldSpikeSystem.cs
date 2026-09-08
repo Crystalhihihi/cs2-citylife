@@ -41,7 +41,11 @@ namespace CityLife.GameBridge
     ///   真凶收敛到材质参数：文字走的是 CopyFontAtlasParameters 灌的"图集参数全家桶"
     ///   （_GradientScale/_ScaleRatioA/B/关键字……），底板只 clone 基底 + SetTexture——漏了桶。
     /// v2.5：底板材质先 CopyPropertiesFromMaterial（活文字材质做供体，全家桶一个不落），
-    ///   再覆写 _MainTex/尺寸/颜色/队列；同版把文字材质 shader 全属性清单打进日志（若仍是鬼，照单抓药）。
+    ///   再覆写 _MainTex/尺寸/颜色/队列——实机仍"画而不显"（9/8），材质参数排除。
+    /// v2.6 真凶=**绕向**（材质清单实锤：该 shader _CullMode=Back/_DoubleSidedEnable=0，挑绕向）：
+    ///   TMP 字形能显=其绕向与我方 quad 相反。v2.2.1"照抄游戏原版绕向"救活的是 shader 内自建
+    ///   billboard 的图标 shader（轴向约定不同），照抄它反而坑了 CPU billboard 路径。
+    ///   修法不猜：运行时实读供体字形首个 quad 的顶点+三角序算手性，底板按同手性接线（日志留证）。
     /// v2.4 同版上的长文适配（沿用）：
     /// - 折行是执行层的活（铁律 #1，不依赖 TMP 折行对 CJK 的怪癖）：CJK 1 格/其余 0.5 格、
     ///   13 格/行、最多 4 行、溢出末字换"…"。内容层不限字数——话痨/沉默是人格，全文归信息流；
@@ -677,16 +681,30 @@ namespace CityLife.GameBridge
         {
             try
             {
+                Mesh donorMesh = null;
                 Material donor = null;
                 foreach (var kv in m_Cache)
-                    if (kv.Value.Parts.Count > 0) { donor = kv.Value.Parts[0].mat; break; }
-                if (donor == null)
+                    if (kv.Value.Parts.Count > 0) { donor = kv.Value.Parts[0].mat; donorMesh = kv.Value.Parts[0].mesh; break; }
+                if (donor == null || donorMesh == null)
                     return; // 还没有烘焙产物做供体，下一帧再试（静默重试，不刷日志）
 
                 // uv2 实采值覆写到底板 quad
                 var g = m_GlyphUV2!.Value;
                 foreach (var mesh in m_PlateMeshes)
                     mesh.uv2 = new[] { g, g, g, g };
+
+                // 绕向实读供体字形手性（不猜）：供体首三角形在 XY 平面的叉积符号=正面朝向；
+                // 底板 quad 顶点序固定 BL/TL/TR/BR，按同符号选接线。Cull=Back 的 shader 就认这个。
+                var sv = donorMesh.vertices;
+                var st = donorMesh.triangles;
+                var a = sv[st[0]];
+                var b2 = sv[st[1]];
+                var c = sv[st[2]];
+                var handedness = (b2.x - a.x) * (c.y - a.y) - (b2.y - a.y) * (c.x - a.x); // >0=逆时针
+                var tris = handedness > 0f ? new[] { 0, 1, 2, 2, 3, 0 } : new[] { 0, 3, 2, 2, 1, 0 };
+                foreach (var mesh in m_PlateMeshes)
+                    mesh.triangles = tris;
+                Mod.Log.Info($"[BubbleW] 绕向实读：供体首三角 {st[0]},{st[1]},{st[2]}/{st[3]},{st[4]},{st[5]} 手性={handedness:F1} → 底板接线 {(handedness > 0f ? "0,1,2/2,3,0" : "0,3,2/2,1,0")}");
 
                 m_PlateMats = new Material[k_PlateAspects.Length];
                 for (int i = 0; i < k_PlateAspects.Length; i++)

@@ -13,7 +13,7 @@ using Transform = Game.Objects.Transform;
 namespace CityLife.GameBridge
 {
     /// <summary>
-    /// M3 气泡层 v2.4（自烘焙 TMP 文字网格 + TMP 同路 SDF 底板，SRP 回调自绘；执行层折行+按字计时）。
+    /// M3 气泡层 v2.5（自烘焙 TMP 文字网格 + TMP 同路 SDF 底板，SRP 回调自绘；执行层折行+按字计时）。
     ///
     /// v1（Buffer.DrawText）实机死因（2026-08-21 截图 + 反编译双实锤，勿复探）：
     /// - DrawText 无尺寸参：文字网格由 OverlayRenderSystem 全局共享 TMP 以 fontSize=200 懒烘焙、
@@ -37,8 +37,12 @@ namespace CityLife.GameBridge
     /// v2.3 底板路线：改走 TMP 文字同路（材质 clone 同一文字基底、_MainTex 换自建圆角矩形 SDF、
     ///   矩阵与文字同一套 TRS）。实机判"画而不显"（9/8）：材质/绘制调用都发了我方 quad 却全透明，
     ///   头号嫌疑=uv2 通道（TMP 在该通道携带 SDF 缩放信息，v2 开发期已实锤"不拷会糊"；我填了 (0,0)）。
-    /// v2.4：**uv2 不猜，实采**——烘焙文字时抄下游戏字形网格的 uv2 真实值，底板 quad 逐顶点照抄
-    ///   （首烘日志留证）；同版上长文适配：
+    /// v2.4：uv2 实采（游戏字形=（0, 0.22)，底板照抄）——实机仍"画而不显"（9/8），uv2 排除。
+    ///   真凶收敛到材质参数：文字走的是 CopyFontAtlasParameters 灌的"图集参数全家桶"
+    ///   （_GradientScale/_ScaleRatioA/B/关键字……），底板只 clone 基底 + SetTexture——漏了桶。
+    /// v2.5：底板材质先 CopyPropertiesFromMaterial（活文字材质做供体，全家桶一个不落），
+    ///   再覆写 _MainTex/尺寸/颜色/队列；同版把文字材质 shader 全属性清单打进日志（若仍是鬼，照单抓药）。
+    /// v2.4 同版上的长文适配（沿用）：
     /// - 折行是执行层的活（铁律 #1，不依赖 TMP 折行对 CJK 的怪癖）：CJK 1 格/其余 0.5 格、
     ///   13 格/行、最多 4 行、溢出末字换"…"。内容层不限字数——话痨/沉默是人格，全文归信息流；
     /// - 屏占按"行"恒定：块世界高 = 行高 × 行数，多行段落不会缩成蚂蚁；
@@ -666,13 +670,20 @@ namespace CityLife.GameBridge
             return mesh;
         }
 
-        // —— 底板材质：clone 文字同款 TMP 基底（变换路径与文字 100% 一致=对齐天然成立；v2.2 通知图标
-        //    shader 路线的尺寸/锚点黑盒教训见类注释）。等"文字基底+uv2 实采"双就位后才建。——
+        // —— 底板材质：clone 文字同款 TMP 基底 + CopyPropertiesFromMaterial 活文字材质（图集参数全家桶
+        //    ——缩放比/GradientScale/关键字——一个不落；v2.4 只 clone 基底被判"画而不显"，漏的桶在这）。
+        //    再覆写 _MainTex=自建 SDF 贴图 + 颜色/队列。等"文字基底+uv2 实采+至少一段烘焙（供体）"就位才建。——
         private void BuildPlateMaterials()
         {
             try
             {
-                // uv2 实采值覆写到底板 quad（v2.3 填 (0,0) 被判"画而不显"的头号嫌疑）
+                Material donor = null;
+                foreach (var kv in m_Cache)
+                    if (kv.Value.Parts.Count > 0) { donor = kv.Value.Parts[0].mat; break; }
+                if (donor == null)
+                    return; // 还没有烘焙产物做供体，下一帧再试（静默重试，不刷日志）
+
+                // uv2 实采值覆写到底板 quad
                 var g = m_GlyphUV2!.Value;
                 foreach (var mesh in m_PlateMeshes)
                     mesh.uv2 = new[] { g, g, g, g };
@@ -681,6 +692,7 @@ namespace CityLife.GameBridge
                 for (int i = 0; i < k_PlateAspects.Length; i++)
                 {
                     var mat = new Material(m_BaseTextMaterial);
+                    mat.CopyPropertiesFromMaterial(donor);
                     mat.SetTexture("_MainTex", m_PlateTexs[i]);
                     mat.SetFloat("_TextureWidth", k_PlateTexW);
                     mat.SetFloat("_TextureHeight", k_PlateTexH);
@@ -694,7 +706,8 @@ namespace CityLife.GameBridge
                     mat.renderQueue = 3700; // 文字 3800 之下——两个透明层的确定序
                     m_PlateMats[i] = mat;
                 }
-                Mod.Log.Info($"[BubbleW] 底板材质已构建（TMP 基底克隆 ×3 档 + SDF 贴图，uv2 照抄字形 {g}）");
+                Mod.Log.Info($"[BubbleW] 底板材质已构建（供体全家桶 ×3 档 + SDF 贴图，uv2 照抄字形 {g}）");
+                LogShaderProperties(donor);
             }
             catch (Exception ex)
             {
@@ -704,6 +717,38 @@ namespace CityLife.GameBridge
                     m_PlateMaterialWarned = true;
                     Mod.Log.Warn($"[BubbleW] 底板材质构建异常：{ex.Message}");
                 }
+            }
+        }
+
+        /// <summary>判决日志：文字材质 shader 的全属性清单（名字:类型=值）+ 启用关键字。
+        /// 底板若仍是鬼，下一版照这张单抓药——不再猜。</summary>
+        private void LogShaderProperties(Material sample)
+        {
+            try
+            {
+                var sh = sample.shader;
+                var sb = new System.Text.StringBuilder(512);
+                for (int i = 0; i < sh.GetPropertyCount(); i++)
+                {
+                    var name = sh.GetPropertyName(i);
+                    var type = sh.GetPropertyType(i);
+                    sb.Append(name).Append(':').Append(type);
+                    if (type == UnityEngine.Rendering.ShaderPropertyType.Texture)
+                    {
+                        var t = sample.GetTexture(name);
+                        sb.Append('=').Append(t == null ? "null" : $"{t.name}({t.width}x{t.height})");
+                    }
+                    else if (type == UnityEngine.Rendering.ShaderPropertyType.Float
+                        || type == UnityEngine.Rendering.ShaderPropertyType.Range)
+                        sb.Append('=').Append(sample.GetFloat(name).ToString("F2"));
+                    sb.Append(' ');
+                }
+                sb.Append("| keywords: ").Append(string.Join(",", sample.shaderKeywords));
+                Mod.Log.Info($"[BubbleW] 文字材质清单（{sh.name}）：{sb}");
+            }
+            catch (Exception ex)
+            {
+                Mod.Log.Warn($"[BubbleW] 材质清单日志异常：{ex.Message}");
             }
         }
 

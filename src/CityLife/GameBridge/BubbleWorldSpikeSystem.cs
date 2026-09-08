@@ -51,8 +51,10 @@ namespace CityLife.GameBridge
     ///   B 臂（供体字形+我方 SDF 材质）不显=我方材质/贴图坏。
     /// v2.9 二阶对剖判决（9/8 实机）：B 臂（供体克隆仅换贴图）**显形**——SDF 贴图无罪，
     ///   凶手在我方的参数覆写集（深底 alpha 0.62/描边/队列 3700 之一）。
-    /// v3.0 fix-forward 最小覆写：供体克隆 + 换贴图 + 不透明深底（alpha=1.0 绕开 _ALPHATEST_ON
-    ///   裁剪嫌疑）；队列保持供体 3800——底板远 0.06m，HDRP 透明深度排序天然压字下，不另设队列。
+    /// v3.0 实机（9/8）：板子显形了，但**发白且压到文字上面**（白板啃字）。两个修法：
+    ///   ①颜色双写——_FaceColor 与 quad 顶点色都写深色（该 shader graph 的填充色若走顶点色通道，
+    ///     白顶点就盖掉 _FaceColor；face×vertex / 仅 vertex / 仅 face 三种解释下都保深色）；
+    ///   ②压后 0.06m→0.4m——同队列靠 HDRP 透明深度排序分胜负，远距离深度精度下 6cm 不够，0.4m 够且视差不可见。
     /// v2.4 同版上的长文适配（沿用）：
     /// - 折行是执行层的活（铁律 #1，不依赖 TMP 折行对 CJK 的怪癖）：CJK 1 格/其余 0.5 格、
     ///   13 格/行、最多 4 行、溢出末字换"…"。内容层不限字数——话痨/沉默是人格，全文归信息流；
@@ -656,14 +658,15 @@ namespace CityLife.GameBridge
             return tex;
         }
 
-        /// <summary>底板 quad：宽高比由几何承载（材质统一缩放），XY 平面、UV 0..1、顶点色白。
+        /// <summary>底板 quad：宽高比由几何承载（材质统一缩放），XY 平面、UV 0..1。
+        /// 顶点色=深底（v3.1：该 shader 填充色若走顶点色通道，白顶点会盖掉 _FaceColor——双写保险）。
         /// uv2 先填 (0,0) 占位，材质构建时用游戏字形实采值覆写（v2.4：不猜，照抄）。
         /// 绕向沿用 v2.2.1 照抄游戏原版的序（BL→TL→TR→BR，0,1,2/2,3,0）——billboard 后以背面朝镜头，
         /// TMP shader Cull Off 本不挑绕向，保持原序无害。</summary>
         private static Mesh BuildPlateMesh(float aspect)
         {
             var hx = aspect * 0.5f;
-            var white = new Color32(255, 255, 255, 255);
+            var dark = new Color32(10, 13, 23, 255); // 与 _FaceColor(0.04,0.05,0.09) 同色相
             var mesh = new Mesh
             {
                 vertices = new[]
@@ -677,7 +680,7 @@ namespace CityLife.GameBridge
                     new Vector2(1f, 1f), new Vector2(1f, 0f),
                 },
                 uv2 = new[] { Vector2.zero, Vector2.zero, Vector2.zero, Vector2.zero },
-                colors32 = new[] { white, white, white, white },
+                colors32 = new[] { dark, dark, dark, dark },
                 triangles = new[] { 0, 1, 2, 2, 3, 0 },
             };
             mesh.RecalculateBounds();
@@ -728,6 +731,8 @@ namespace CityLife.GameBridge
                     var mat = new Material(donor);
                     mat.SetTexture("_MainTex", m_PlateTexs[i]);
                     mat.SetColor("_FaceColor", new Color(0.04f, 0.05f, 0.09f, 1f));
+                    if (i == 0) // 读回取证：颜色到底吃没吃进去（白板嫌疑排除用）
+                        Mod.Log.Info($"[BubbleW] 底板材质读回：_FaceColor={mat.GetColor("_FaceColor")} 顶点色=深色双写");
                     m_PlateMats[i] = mat;
                 }
                 Mod.Log.Info($"[BubbleW] 底板材质已构建（供体全家桶 ×3 档 + SDF 贴图，uv2 照抄字形 {g}）");
@@ -828,7 +833,7 @@ namespace CityLife.GameBridge
                 var camPos = (float3)cam.transform.position;
                 var rot = Quaternion.LookRotation(cam.transform.forward, cam.transform.up);
                 var tanHalfFov = math.tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
-                var platePushBack = (float3)(cam.transform.forward * 0.06f); // 底板压到文字后面防共面
+                var platePushBack = (float3)(cam.transform.forward * 0.4f); // 底板压到文字后面；0.4m：远距离深度精度下同队列排序才分得开（6cm 不够——v3.0 白板啃字实锤）
 
                 foreach (var b in m_Bubbles)
                 {

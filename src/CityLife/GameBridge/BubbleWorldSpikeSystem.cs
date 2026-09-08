@@ -49,8 +49,10 @@ namespace CityLife.GameBridge
     ///   至此 uv2/绕向/参数全家桶/贴图维度全部排除，剩余变量=我方手搓 quad 网格 vs SDF 贴图本身。
     /// v2.8 对剖判决（9/8 实机）：A 臂（我方 quad+供体原样材质）显形=网格/矩阵/通路全好；
     ///   B 臂（供体字形+我方 SDF 材质）不显=我方材质/贴图坏。
-    /// v2.9 二阶对剖：B 臂换"供体克隆仅换 _MainTex"（我方的颜色/描边/队列覆写全撤）——
-    ///   显=凶手是我方参数覆写（下一版逐个放回定位）；不显=凶手是 SDF 贴图本身（转方块字形路线）。
+    /// v2.9 二阶对剖判决（9/8 实机）：B 臂（供体克隆仅换贴图）**显形**——SDF 贴图无罪，
+    ///   凶手在我方的参数覆写集（深底 alpha 0.62/描边/队列 3700 之一）。
+    /// v3.0 fix-forward 最小覆写：供体克隆 + 换贴图 + 不透明深底（alpha=1.0 绕开 _ALPHATEST_ON
+    ///   裁剪嫌疑）；队列保持供体 3800——底板远 0.06m，HDRP 透明深度排序天然压字下，不另设队列。
     /// v2.4 同版上的长文适配（沿用）：
     /// - 折行是执行层的活（铁律 #1，不依赖 TMP 折行对 CJK 的怪癖）：CJK 1 格/其余 0.5 格、
     ///   13 格/行、最多 4 行、溢出末字换"…"。内容层不限字数——话痨/沉默是人格，全文归信息流；
@@ -720,19 +722,12 @@ namespace CityLife.GameBridge
                 m_PlateMats = new Material[k_PlateAspects.Length];
                 for (int i = 0; i < k_PlateAspects.Length; i++)
                 {
-                    var mat = new Material(m_BaseTextMaterial);
-                    mat.CopyPropertiesFromMaterial(donor);
+                    // v3.0 最小覆写（v2.9 对剖判决：供体克隆仅换贴图=显形，凶手在覆写集里）：
+                    // 只换贴图 + 不透明深底（alpha=1.0 绕开 _ALPHATEST_ON 的裁剪嫌疑）；
+                    // 队列保持供体 3800——底板比文字远 0.06m，HDRP 透明按深度排序天然压底。
+                    var mat = new Material(donor);
                     mat.SetTexture("_MainTex", m_PlateTexs[i]);
-                    mat.SetFloat("_TextureWidth", k_PlateTexW);
-                    mat.SetFloat("_TextureHeight", k_PlateTexH);
-                    mat.SetFloat("_GradientScale", k_PlatePadPx + 1f); // TMP 惯例=图集 padding+1
-                    mat.SetColor("_FaceColor", new Color(0.04f, 0.05f, 0.09f, 0.62f)); // 深底托字
-                    mat.SetFloat("_OutlineWidth", 0.09f);
-                    mat.SetColor("_OutlineColor", new Color(1f, 1f, 1f, 0.8f));        // 浅描边=气泡框
-                    mat.SetFloat("_UnderlayDilate", 0.1f);
-                    mat.SetFloat("_UnderlaySoftness", 0.6f);
-                    mat.SetColor("_UnderlayColor", new Color(0f, 0f, 0f, 0.3f));
-                    mat.renderQueue = 3700; // 文字 3800 之下——两个透明层的确定序
+                    mat.SetColor("_FaceColor", new Color(0.04f, 0.05f, 0.09f, 1f));
                     m_PlateMats[i] = mat;
                 }
                 Mod.Log.Info($"[BubbleW] 底板材质已构建（供体全家桶 ×3 档 + SDF 贴图，uv2 照抄字形 {g}）");

@@ -47,9 +47,10 @@ namespace CityLife.GameBridge
     /// v2.7 贴图槽维度假设翻车（同日）：供体槽=Texture2D（数组假设死亡）；且 ReferenceEquals 读回
     ///   只证明属性袋收了对象、证明不了 shader 声明维度——数组塞进 2D 槽画时必死，回退 2D。
     ///   至此 uv2/绕向/参数全家桶/贴图维度全部排除，剩余变量=我方手搓 quad 网格 vs SDF 贴图本身。
-    /// v2.8：Ctrl+7 改三态（关/SDF 底板/诊断对照）。诊断臂每泡两针 2×2 对剖：
-    ///   A=我方 quad+供体原样材质（验网格/矩阵/通路），B=供体字形网格+我方 SDF 材质（验材质/贴图）。
-    ///   一帧判决哪条臂断，不再逐参数猜。
+    /// v2.8 对剖判决（9/8 实机）：A 臂（我方 quad+供体原样材质）显形=网格/矩阵/通路全好；
+    ///   B 臂（供体字形+我方 SDF 材质）不显=我方材质/贴图坏。
+    /// v2.9 二阶对剖：B 臂换"供体克隆仅换 _MainTex"（我方的颜色/描边/队列覆写全撤）——
+    ///   显=凶手是我方参数覆写（下一版逐个放回定位）；不显=凶手是 SDF 贴图本身（转方块字形路线）。
     /// v2.4 同版上的长文适配（沿用）：
     /// - 折行是执行层的活（铁律 #1，不依赖 TMP 折行对 CJK 的怪癖）：CJK 1 格/其余 0.5 格、
     ///   13 格/行、最多 4 行、溢出末字换"…"。内容层不限字数——话痨/沉默是人格，全文归信息流；
@@ -118,6 +119,7 @@ namespace CityLife.GameBridge
         private Material[] m_PlateMats = null!;
         private Mesh m_DonorMesh = null!;           // 诊断臂用：供体字形网格/材质（BuildPlateMaterials 捕获）
         private Material m_DonorMat = null!;
+        private Material[] m_BisectMats = null!;    // 诊断 B 臂：供体克隆仅换 _MainTex（我方的覆写全撤）
         private bool m_PlateMaterialWarned;
         private bool m_LoggedFirstPlate;
 
@@ -734,6 +736,13 @@ namespace CityLife.GameBridge
                     m_PlateMats[i] = mat;
                 }
                 Mod.Log.Info($"[BubbleW] 底板材质已构建（供体全家桶 ×3 档 + SDF 贴图，uv2 照抄字形 {g}）");
+                // 诊断 B 臂材质：供体克隆仅换贴图（与我方覆写全隔离——v2.9 二阶对剖用）
+                m_BisectMats = new Material[k_PlateAspects.Length];
+                for (int i = 0; i < k_PlateAspects.Length; i++)
+                {
+                    m_BisectMats[i] = new Material(donor);
+                    m_BisectMats[i].SetTexture("_MainTex", m_PlateTexs[i]);
+                }
                 LogShaderProperties(donor);
             }
             catch (Exception ex)
@@ -789,6 +798,9 @@ namespace CityLife.GameBridge
                     if (m != null) UnityEngine.Object.Destroy(m);
             if (m_PlateMats != null)
                 foreach (var m in m_PlateMats)
+                    if (m != null) UnityEngine.Object.Destroy(m);
+            if (m_BisectMats != null)
+                foreach (var m in m_BisectMats)
                     if (m != null) UnityEngine.Object.Destroy(m);
             // 供体网格/材质是缓存资产的引用，不归这里销毁
         }
@@ -867,14 +879,15 @@ namespace CityLife.GameBridge
                         }
                         else
                         {
-                            // 诊断 2×2 对剖（v2.8）：A=我方 quad+供体原样材质（验网格/矩阵/通路）；
-                            // B=供体字形网格+我方 SDF 材质，抬高 2 块高防叠（验材质/贴图）。哪臂显形一刀定位。
+                            // 诊断 2×2 对剖（v2.9 二阶）：A=我方 quad+供体原样材质（验网格/矩阵/通路）；
+                            // B=供体字形网格+【供体克隆仅换 SDF 贴图】，抬高 2 块高防叠——
+                            // B 显=凶手是我方参数覆写；B 不显=凶手是 SDF 贴图本身。
                             Graphics.DrawMesh(m_PlateMeshes[bucket], plateMatrix,
                                 m_DonorMat, 0, cam, 0, null, ShadowCastingMode.Off, false);
                             Graphics.DrawMesh(m_DonorMesh,
                                 Matrix4x4.TRS((Vector3)(p + platePushBack + new float3(0, worldH * 2f, 0)), rot, new Vector3(s, s, s))
                                     * Matrix4x4.Translate(-entry.Center),
-                                m_PlateMats[bucket], 0, cam, 0, null, ShadowCastingMode.Off, false);
+                                m_BisectMats[bucket], 0, cam, 0, null, ShadowCastingMode.Off, false);
                         }
                         if (!m_LoggedFirstPlate)
                         {

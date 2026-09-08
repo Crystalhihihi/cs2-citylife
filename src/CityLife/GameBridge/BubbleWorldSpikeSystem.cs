@@ -42,10 +42,11 @@ namespace CityLife.GameBridge
     ///   （_GradientScale/_ScaleRatioA/B/关键字……），底板只 clone 基底 + SetTexture——漏了桶。
     /// v2.5：底板材质先 CopyPropertiesFromMaterial（活文字材质做供体，全家桶一个不落），
     ///   再覆写 _MainTex/尺寸/颜色/队列——实机仍"画而不显"（9/8），材质参数排除。
-    /// v2.6 真凶=**绕向**（材质清单实锤：该 shader _CullMode=Back/_DoubleSidedEnable=0，挑绕向）：
-    ///   TMP 字形能显=其绕向与我方 quad 相反。v2.2.1"照抄游戏原版绕向"救活的是 shader 内自建
-    ///   billboard 的图标 shader（轴向约定不同），照抄它反而坑了 CPU billboard 路径。
-    ///   修法不猜：运行时实读供体字形首个 quad 的顶点+三角序算手性，底板按同手性接线（日志留证）。
+    /// v2.6 绕向实读翻车自纠：供体首三角=0,1,2/2,3,0 手性为负，与我方 quad 原序**同序同手性**
+    ///   ——绕向从来不是病根（且 v2.6 符号臂选反，反而改拧了）。绕向正式排除。
+    /// v2.7 头号活口=**贴图槽维度**：供体 _MainTex 若是 Texture2DArray，SetTexture(2D) 被静默弹回
+    ///   =底板全透明的完美解释。修法：先试 1 片数组→读回校验→被弹回退 2D，日志记录实走哪只胳膊
+    ///   +供体槽真实类型。绕向符号臂修正：手性为负配 0,1,2/2,3,0。
     /// v2.4 同版上的长文适配（沿用）：
     /// - 折行是执行层的活（铁律 #1，不依赖 TMP 折行对 CJK 的怪癖）：CJK 1 格/其余 0.5 格、
     ///   13 格/行、最多 4 行、溢出末字换"…"。内容层不限字数——话痨/沉默是人格，全文归信息流；
@@ -110,6 +111,7 @@ namespace CityLife.GameBridge
         // 底板管线（TMP 同路：贴图/网格是程序化内容 OnCreate 即建；材质等文字基底+uv2 实采就位后克隆）
         private bool m_PlateOn = true;
         private Texture2D[] m_PlateTexs = null!;
+        private Texture2DArray[] m_PlateTexArrs = null!; // 单片的数组版——供体 _MainTex 槽若是数组维度用它
         private Mesh[] m_PlateMeshes = null!;
         private Material[] m_PlateMats = null!;
         private bool m_PlateMaterialWarned;
@@ -602,10 +604,14 @@ namespace CityLife.GameBridge
             try
             {
                 m_PlateTexs = new Texture2D[k_PlateAspects.Length];
+                m_PlateTexArrs = new Texture2DArray[k_PlateAspects.Length];
                 m_PlateMeshes = new Mesh[k_PlateAspects.Length];
                 for (int i = 0; i < k_PlateAspects.Length; i++)
                 {
                     m_PlateTexs[i] = BakePlateTexture(k_PlateAspects[i]);
+                    var arr = new Texture2DArray(k_PlateTexW, k_PlateTexH, 1, TextureFormat.ARGB32, true);
+                    Graphics.CopyTexture(m_PlateTexs[i], 0, arr, 0);
+                    m_PlateTexArrs[i] = arr;
                     m_PlateMeshes[i] = BuildPlateMesh(k_PlateAspects[i]);
                 }
             }
@@ -693,25 +699,39 @@ namespace CityLife.GameBridge
                 foreach (var mesh in m_PlateMeshes)
                     mesh.uv2 = new[] { g, g, g, g };
 
-                // 绕向实读供体字形手性（不猜）：供体首三角形在 XY 平面的叉积符号=正面朝向；
-                // 底板 quad 顶点序固定 BL/TL/TR/BR，按同符号选接线。Cull=Back 的 shader 就认这个。
+                // 绕向实读供体手性（不猜）。注意符号臂映射：我方顶点序 BL/TL/TR/BR 下，
+                // 0,1,2/2,3,0 算出来手性为负——供体为负就配它（v2.6 曾把臂选反，改拧了一次）。
                 var sv = donorMesh.vertices;
                 var st = donorMesh.triangles;
                 var a = sv[st[0]];
                 var b2 = sv[st[1]];
                 var c = sv[st[2]];
                 var handedness = (b2.x - a.x) * (c.y - a.y) - (b2.y - a.y) * (c.x - a.x); // >0=逆时针
-                var tris = handedness > 0f ? new[] { 0, 1, 2, 2, 3, 0 } : new[] { 0, 3, 2, 2, 1, 0 };
+                var tris = handedness < 0f ? new[] { 0, 1, 2, 2, 3, 0 } : new[] { 0, 3, 2, 2, 1, 0 };
                 foreach (var mesh in m_PlateMeshes)
                     mesh.triangles = tris;
-                Mod.Log.Info($"[BubbleW] 绕向实读：供体首三角 {st[0]},{st[1]},{st[2]}/{st[3]},{st[4]},{st[5]} 手性={handedness:F1} → 底板接线 {(handedness > 0f ? "0,1,2/2,3,0" : "0,3,2/2,1,0")}");
+                Mod.Log.Info($"[BubbleW] 绕向实读：供体首三角 {st[0]},{st[1]},{st[2]}/{st[3]},{st[4]},{st[5]} 手性={handedness:F1} → 底板接线 {(handedness < 0f ? "0,1,2/2,3,0" : "0,3,2/2,1,0")}");
 
+                var donorTex = donor.GetTexture("_MainTex"); // 供体槽真实类型（日志取证）
                 m_PlateMats = new Material[k_PlateAspects.Length];
                 for (int i = 0; i < k_PlateAspects.Length; i++)
                 {
                     var mat = new Material(m_BaseTextMaterial);
                     mat.CopyPropertiesFromMaterial(donor);
-                    mat.SetTexture("_MainTex", m_PlateTexs[i]);
+                    // 贴图槽自适应：槽若声明 Texture2DArray，SetTexture(2D) 会被维度不匹配静默弹回
+                    // （=底板全透明的头号活口）。先试单片数组，读回校验，被弹回退 2D。
+                    var arr = m_PlateTexArrs[i];
+                    mat.SetTexture("_MainTex", arr);
+                    var back = mat.GetTexture("_MainTex");
+                    if (!ReferenceEquals(back, arr))
+                    {
+                        mat.SetTexture("_MainTex", m_PlateTexs[i]);
+                        back = mat.GetTexture("_MainTex");
+                        if (i == 0)
+                            Mod.Log.Info($"[BubbleW] 贴图槽=2D（数组被弹回；供体槽类型={donorTex?.GetType().Name ?? "null"}，读回={(back == null ? "null" : back.GetType().Name)}）");
+                    }
+                    else if (i == 0)
+                        Mod.Log.Info($"[BubbleW] 贴图槽=Texture2DArray（供体槽类型={donorTex?.GetType().Name ?? "null"}）");
                     mat.SetFloat("_TextureWidth", k_PlateTexW);
                     mat.SetFloat("_TextureHeight", k_PlateTexH);
                     mat.SetFloat("_GradientScale", k_PlatePadPx + 1f); // TMP 惯例=图集 padding+1
@@ -774,6 +794,9 @@ namespace CityLife.GameBridge
         {
             if (m_PlateTexs != null)
                 foreach (var t in m_PlateTexs)
+                    if (t != null) UnityEngine.Object.Destroy(t);
+            if (m_PlateTexArrs != null)
+                foreach (var t in m_PlateTexArrs)
                     if (t != null) UnityEngine.Object.Destroy(t);
             if (m_PlateMeshes != null)
                 foreach (var m in m_PlateMeshes)

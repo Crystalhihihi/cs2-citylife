@@ -62,15 +62,17 @@ namespace CityLife.GameBridge
     /// v3.4 实机（9/8）：C 臂（我方底板网格×我方 SDF 贴图×零覆写）**显形**——组合无罪；
     ///   对照 v3.2（+颜色覆写=发白）/v3.3（+压发光=透明）确认：**一切材质颜色覆写都是干扰项**，
     ///   该 shader 填充色直接吃 tex.rgb。
-    /// v3.5 定案：颜色烘进贴图（RGB=深底+浅边，alpha=距离场），材质=供体克隆仅换 _MainTex、
-    ///   零覆写——就是 C 臂那条已被实机证明显形的路。顶点色回白（中性，不抢戏）。
+    /// v3.5 实机：底板显形定稿（形状/贴字/叠序全对）——但呈供体 _FaceColor 的奶油色。
+    ///   四版数据定 shader 颜色代数：tex.rgb 被无视；_EmissionColor 压纯黑=整体消失（亮度门）；
+    ///   填充色调跟 _FaceColor 走。单通道都不单独说了算 → 加运行时试色键 Ctrl+6 循环四套方案，
+    ///   一轮实机选出深底，不再一版一色撞大运。
     /// v2.4 同版上的长文适配（沿用）：
     /// - 折行是执行层的活（铁律 #1，不依赖 TMP 折行对 CJK 的怪癖）：CJK 1 格/其余 0.5 格、
     ///   13 格/行、最多 4 行、溢出末字换"…"。内容层不限字数——话痨/沉默是人格，全文归信息流；
     /// - 屏占按"行"恒定：块世界高 = 行高 × 行数，多行段落不会缩成蚂蚁；
     /// - 驻留时长按字数缩放（4s 起每字 +0.28s，封顶 30s）——长文让人读得完。
     ///
-    /// 键位：Ctrl+9 开关；Ctrl+8 数量档（30/60/120）；Ctrl+7 底板开关。
+    /// 键位：Ctrl+9 开关；Ctrl+8 数量档（30/60/120）；Ctrl+7 底板三态；Ctrl+6 底板试色（四套循环）。
     /// 扩展口（正式版待办）：①内容管道接入（信息层降级产物+共位小剧场）；②k_MaxDist 按
     ///   "人清晰可见"实机标定（§12 #41）；③密度/重叠治理（同屏上限+防叠）。
     /// </summary>
@@ -128,8 +130,47 @@ namespace CityLife.GameBridge
         // 底板管线（TMP 同路：SDF 贴图 OnCreate 即建；材质等文字基底+供体就位后克隆；
         // 底板网格逐文字条目烘进各自 bake 坐标系——见 BuildEntryPlate）
         private int m_PlateMode = 1;                // 0=关 1=SDF 底板 2=诊断对照（Ctrl+7 三态轮转）
+        private int m_PlateTint;                    // 配色方案索引（Ctrl+6 循环，运行时试色——shader 颜色黑盒的实机标定）
         private Texture2D[] m_PlateTexs = null!;
         private Material[] m_PlateMats = null!;
+        private Color m_DonorFace;                  // 供体原值（试色方案 C/D 用）
+        private Color m_DonorEmission;
+
+        // 底板试色方案（该 shader 的颜色代数是黑盒：tex.rgb 被无视、发光压纯黑=整体消失、色调跟
+        // _FaceColor 走但亮度跟发光走——v3.2-v3.5 逐版实锤。四套候选一轮实机选定，选完砍到只剩一套）
+        private static readonly string[] k_PlateTintLabels =
+            { "A 深底+中灰发光", "B 白面+深 Navy 发光", "C 深底+供体发光", "D 零覆写（对照组）" };
+
+        /// <summary>把当前试色方案刷到三档底板材质上（负数哨兵没有，供体原值建材质时捕获）。</summary>
+        private void ApplyPlateTint()
+        {
+            if (m_PlateMats == null)
+                return;
+            foreach (var mat in m_PlateMats)
+            {
+                if (mat == null)
+                    continue;
+                switch (m_PlateTint)
+                {
+                    case 0:
+                        mat.SetColor("_FaceColor", new Color(0.04f, 0.05f, 0.09f, 1f));
+                        mat.SetColor("_EmissionColor", new Color(0.30f, 0.32f, 0.38f, 1f));
+                        break;
+                    case 1:
+                        mat.SetColor("_FaceColor", Color.white);
+                        mat.SetColor("_EmissionColor", new Color(0.02f, 0.03f, 0.05f, 1f));
+                        break;
+                    case 2:
+                        mat.SetColor("_FaceColor", new Color(0.04f, 0.05f, 0.09f, 1f));
+                        mat.SetColor("_EmissionColor", m_DonorEmission);
+                        break;
+                    default: // D 零覆写：供体原值
+                        mat.SetColor("_FaceColor", m_DonorFace);
+                        mat.SetColor("_EmissionColor", m_DonorEmission);
+                        break;
+                }
+            }
+        }
         private Mesh m_DonorMesh = null!;           // 诊断臂用：供体字形网格/材质（BuildPlateMaterials 捕获）
         private Material m_DonorMat = null!;
         private bool m_PlateMaterialWarned;
@@ -218,6 +259,13 @@ namespace CityLife.GameBridge
                 m_LastKeyFrame = m_Frame;
                 m_PlateMode = (m_PlateMode + 1) % 3;
                 Mod.Log.Info($"[BubbleW] 底板模式 → {(m_PlateMode == 0 ? "关" : m_PlateMode == 1 ? "SDF 底板" : "诊断对照（2×2 对剖）")}");
+            }
+            if (debounced && ctrl && Input.GetKeyDown(KeyCode.Alpha6))
+            {
+                m_LastKeyFrame = m_Frame;
+                m_PlateTint = (m_PlateTint + 1) % k_PlateTintLabels.Length;
+                ApplyPlateTint();
+                Mod.Log.Info($"[BubbleW] 底板配色 → {k_PlateTintLabels[m_PlateTint]}");
             }
 
             // FPS 计：每 4 秒一行（开着才有意义）
@@ -723,7 +771,9 @@ namespace CityLife.GameBridge
 
                 m_DonorMesh = donorMesh;
                 m_DonorMat = donor; // 诊断臂用原样供体（只读引用，不 clone，析构归缓存管）
-                Mod.Log.Info($"[BubbleW] 供体 _MainTex 槽类型={donor.GetTexture("_MainTex")?.GetType().Name ?? "null"}（v2.7 数组假设已死，回退 2D）");
+                m_DonorFace = donor.GetColor("_FaceColor");
+                m_DonorEmission = donor.GetColor("_EmissionColor");
+                Mod.Log.Info($"[BubbleW] 供体 _MainTex 槽={donor.GetTexture("_MainTex")?.GetType().Name ?? "null"} _FaceColor={m_DonorFace} _EmissionColor={m_DonorEmission}");
                 m_PlateMats = new Material[k_PlateAspects.Length];
                 for (int i = 0; i < k_PlateAspects.Length; i++)
                 {
@@ -739,7 +789,8 @@ namespace CityLife.GameBridge
                     }
                     m_PlateMats[i] = mat;
                 }
-                Mod.Log.Info("[BubbleW] 底板材质已构建（供体克隆仅换贴图 ×3 档，零覆写）");
+                Mod.Log.Info("[BubbleW] 底板材质已构建（供体克隆仅换贴图 ×3 档）");
+                ApplyPlateTint(); // 建完即刷当前配色（默认方案 A）
                 LogShaderProperties(donor);
             }
             catch (Exception ex)

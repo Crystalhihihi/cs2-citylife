@@ -4,6 +4,7 @@ using Game;
 using Game.Prefabs;
 using Game.Rendering;
 using TMPro;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Entities;
 using Unity.Mathematics;
 using UnityEngine;
@@ -13,66 +14,33 @@ using Transform = Game.Objects.Transform;
 namespace CityLife.GameBridge
 {
     /// <summary>
-    /// M3 气泡层 v2.5（自烘焙 TMP 文字网格 + TMP 同路 SDF 底板，SRP 回调自绘；执行层折行+按字计时）。
+    /// M3 气泡层 v4.0（自烘焙 TMP 文字网格 + 通知图标管线底板，SRP 回调自绘；执行层折行+按字计时）。
     ///
-    /// v1（Buffer.DrawText）实机死因（2026-08-21 截图 + 反编译双实锤，勿复探）：
-    /// - DrawText 无尺寸参：文字网格由 OverlayRenderSystem 全局共享 TMP 以 fontSize=200 懒烘焙、
-    ///   绘制 matrix scale=1 硬编码 → 出来就是"区名牌"级巨字（roadmod 反编译逐行实锤）；
-    /// - overlay 通道按曲线/网格计数开门、文字不计数 → 不悬停建筑通道不开 → "悬停才显示/俯仰角玄学"；
-    /// - 共享 TMP 状态污染会扩散全城标签（ASL 实锤）——借烘焙必须快照八项状态 finally 恢复（本版沿用）。
+    /// 文字管线定案（勿复探）：
+    /// - v1（Buffer.DrawText）判死：共享 TMP fontSize=200 懒烘焙+scale=1 硬编码=巨字；overlay 通道
+    ///   文字不计数不开门="悬停才显示/俯仰角玄学"（2026-08-21 截图+反编译双实锤）。
+    /// - v2 正路：烘焙借 GetTextMesh()（**快照八项状态+finally 恢复**，污染全城标签的坑勿拆），
+    ///   材质 clone OverlayConfigurationPrefab.m_TextMaterial + CopyFontAtlasParameters，
+    ///   绘制 beginContextRendering + Graphics.DrawMesh。v2.1 实机验证：跟随/视角全解。
+    /// - 跟随读 InterpolatedTransform（模拟 Transform 是 tick 级，读它必卡）；显隐尺=到镜头距离
+    ///   （k_MaxDist，勿再加落点距离闸——浅俯仰角误杀全屏）；hideOverlay 只记日志不门控。
     ///
-    /// v2 管线定案（2026-08-21 实机"有字"确认）：烘焙借 GetTextMesh()（快照八项+finally），
-    /// 材质 clone OverlayConfigurationPrefab.m_TextMaterial + CopyFontAtlasParameters，
-    /// 绘制走 beginContextRendering + Graphics.DrawMesh。v2.1 实机验证：跟随/视角问题全解。
+    /// 底板长征全记录（勿复探）：
+    /// - v2.2 通知图标管线：能画、深底白边观感对，但尺寸/锚点黑盒（plateH=9.26m 巨框错位），当时判死。
+    /// - v2.3-v3.6 TMP 文字同路 SDF 底板：八版排除法走完（uv2/绕向/全家桶/贴图维度/贴图内容/网格/
+    ///   缩放域失配修复/试色四套）——v3.5 起显形成功，但 WaterSourceName 是自发光标签 shader：
+    ///   _EmissionColor=白是亮度地板（供体实采值 (1,1,1,1)），深色底板永远出不来，试色只剩
+    ///   "透明/白"两态（2026-09-08 实机）。TMP 路线**观感**判死。
+    /// - v4.0 定案：回归通知图标管线（观感已被 v2.2 实机证明），尺寸/锚点不反推，运行时标定键
+    ///   实机选定：Ctrl+5 尺寸倍率、Ctrl+6 Y 下沉系数（抵消图标 shader 的图钉式抬高——v2.2 截图里
+    ///   文字贴底板下缘实锤锚点在下）。TLE 先例契约：mesh ±1 quad + m_Params.x=2
+    ///   （Cities2-TrafficLightsEnhancement/Systems/Overlay/RenderSystem.cs，AddIcon 原文）。
     ///
-    /// v2.1 修复链（实机逐条实锤，勿复探）：
-    /// - 跟随读 InterpolatedTransform（渲染插值位）；模拟 Transform 是 tick 级，读它必卡（实锤）；
-    /// - 显隐尺 = 每泡到镜头距离（k_MaxDist）；**不要再加落点距离闸**——浅俯仰角落点甩飞误杀全屏；
-    /// - hideOverlay：不压不设，只记状态跳变日志（正常游玩也可能为 True，跟它门控=自杀）。
+    /// 长文适配（沿用）：执行层折行（CJK 1 格/其余半格、13 格/行、≤4 行、溢出收"…"——排版是确定性
+    ///   的活，不归 LLM）；内容不限字数（话痨/沉默是人格，全文归信息流）；屏占按行恒定；驻留按字数。
     ///
-    /// v2.2 底板判死（2026-09-07 实机截图实锤，勿回头）：通知图标管线（clone IconConfigurationPrefab.
-    ///   m_Material + InstanceData 缓冲 + DrawMeshInstancedIndirect）的 m_Params/锚点语义是黑盒，
-    ///   反推"世界全高米数"实测画出 plateH=9.26m 巨框、与文字错位；该 shader 语义逐版本漂移，
-    ///   属版本敏感面，按铁律 #4 收缩。
-    /// v2.3 底板路线：改走 TMP 文字同路（材质 clone 同一文字基底、_MainTex 换自建圆角矩形 SDF、
-    ///   矩阵与文字同一套 TRS）。实机判"画而不显"（9/8）：材质/绘制调用都发了我方 quad 却全透明，
-    ///   头号嫌疑=uv2 通道（TMP 在该通道携带 SDF 缩放信息，v2 开发期已实锤"不拷会糊"；我填了 (0,0)）。
-    /// v2.4：uv2 实采（游戏字形=（0, 0.22)，底板照抄）——实机仍"画而不显"（9/8），uv2 排除。
-    ///   真凶收敛到材质参数：文字走的是 CopyFontAtlasParameters 灌的"图集参数全家桶"
-    ///   （_GradientScale/_ScaleRatioA/B/关键字……），底板只 clone 基底 + SetTexture——漏了桶。
-    /// v2.5：底板材质先 CopyPropertiesFromMaterial（活文字材质做供体，全家桶一个不落），
-    ///   再覆写 _MainTex/尺寸/颜色/队列——实机仍"画而不显"（9/8），材质参数排除。
-    /// v2.6 绕向实读翻车自纠：供体首三角=0,1,2/2,3,0 手性为负，与我方 quad 原序**同序同手性**
-    ///   ——绕向从来不是病根（且 v2.6 符号臂选反，反而改拧了）。绕向正式排除。
-    /// v2.7 贴图槽维度假设翻车（同日）：供体槽=Texture2D（数组假设死亡）；且 ReferenceEquals 读回
-    ///   只证明属性袋收了对象、证明不了 shader 声明维度——数组塞进 2D 槽画时必死，回退 2D。
-    ///   至此 uv2/绕向/参数全家桶/贴图维度全部排除，剩余变量=我方手搓 quad 网格 vs SDF 贴图本身。
-    /// v2.8 对剖判决（9/8 实机）：A 臂（我方 quad+供体原样材质）显形=网格/矩阵/通路全好；
-    ///   B 臂（供体字形+我方 SDF 材质）不显=我方材质/贴图坏。
-    /// v2.9 二阶对剖判决（9/8 实机）：B 臂（供体克隆仅换贴图）**显形**——SDF 贴图无罪，
-    ///   凶手在我方的参数覆写集（深底 alpha 0.62/描边/队列 3700 之一）。
-    /// v3.0-v3.1 实机：诊断臂双双显形（我方 quad 好、SDF 贴图好），唯独正式底板组合不显。
-    /// v3.2 实机（9/8）：底板显形且贴字——但**发白**：白字垫白板="遮罩"错觉。真凶=贴图 RGB 烘成白色，
-    ///   该 shader 的填充直接吃 tex.rgb（_FaceColor/顶点色都不背锅）。
-    /// v3.2 真凶定案（"画而不显"系列）：**缩放域失配**——该 shader 的 SDF 覆盖率按矩阵缩放换算滤波
-    ///   宽度，底板用 plateH≈1-9 的大缩放（文字是 0.1 级）把滤波冲垮到 0.5 边界、被 _ALPHATEST_ON
-    ///   整板裁剪。修法：底板网格烘进文字的 bake 坐标系（尺寸取包围盒+留白、锚点同 Center），
-    ///   绘制矩阵与文字完全同一个（含 Translate(-Center)）——同缩放域同锚点，滤波/对齐一起白送。
-    ///   底板网格随文字缓存逐条建（4 顶点）；SDF 贴图仍 3 档宽高比选最近（只管圆角不变形）。
-    /// v3.4 实机（9/8）：C 臂（我方底板网格×我方 SDF 贴图×零覆写）**显形**——组合无罪；
-    ///   对照 v3.2（+颜色覆写=发白）/v3.3（+压发光=透明）确认：**一切材质颜色覆写都是干扰项**，
-    ///   该 shader 填充色直接吃 tex.rgb。
-    /// v3.5 实机：底板显形定稿（形状/贴字/叠序全对）——但呈供体 _FaceColor 的奶油色。
-    ///   四版数据定 shader 颜色代数：tex.rgb 被无视；_EmissionColor 压纯黑=整体消失（亮度门）；
-    ///   填充色调跟 _FaceColor 走。单通道都不单独说了算 → 加运行时试色键 Ctrl+6 循环四套方案，
-    ///   一轮实机选出深底，不再一版一色撞大运。
-    /// v2.4 同版上的长文适配（沿用）：
-    /// - 折行是执行层的活（铁律 #1，不依赖 TMP 折行对 CJK 的怪癖）：CJK 1 格/其余 0.5 格、
-    ///   13 格/行、最多 4 行、溢出末字换"…"。内容层不限字数——话痨/沉默是人格，全文归信息流；
-    /// - 屏占按"行"恒定：块世界高 = 行高 × 行数，多行段落不会缩成蚂蚁；
-    /// - 驻留时长按字数缩放（4s 起每字 +0.28s，封顶 30s）——长文让人读得完。
-    ///
-    /// 键位：Ctrl+9 开关；Ctrl+8 数量档（30/60/120）；Ctrl+7 底板三态；Ctrl+6 底板试色（四套循环）。
+    /// 键位：Ctrl+9 开关；Ctrl+8 数量档（30/60/120）；Ctrl+7 底板开关；
+    ///       Ctrl+5 底板尺寸档；Ctrl+6 底板 Y 补偿档（标定完砍键）。
     /// 扩展口（正式版待办）：①内容管道接入（信息层降级产物+共位小剧场）；②k_MaxDist 按
     ///   "人清晰可见"实机标定（§12 #41）；③密度/重叠治理（同屏上限+防叠）。
     /// </summary>
@@ -86,11 +54,14 @@ namespace CityLife.GameBridge
         private const float k_MaxWorldH = 5f;        // 单行上限（远看不成区名牌）
         private const int k_CacheCap = 48;           // 文字网格缓存上限（LRU 逐出，防漏）
 
-        // 底板三档宽高比（S/M/L）；按折行后文案块宽高比就近取档，宁宽勿窄（宽了居中好看，窄了包不住字）
+        // 底板三档宽高比（S/M/L）；按文案宽高比就近取档，宁宽勿窄（宽了居中好看，窄了包不住字）
         private static readonly float[] k_PlateAspects = { 2.2f, 4f, 7.5f };
         private const int k_PlateTexW = 512;
         private const int k_PlateTexH = 128;
-        private const int k_PlatePadPx = 24;         // SDF 过渡带像素（单边，烘焙贴图用）
+
+        // 底板标定档（图标 shader 尺寸/锚点黑盒的实机标定——v4.0 定案后砍到只剩一档常量）
+        private static readonly float[] k_SizeRatios = { 1.5f, 1.7f, 2.0f, 2.3f };   // 底板高 = 文字块高 × 档（Ctrl+5）
+        private static readonly float[] k_YDrops = { 0f, 0.35f, 0.5f, 0.7f, 1.0f };  // 底板下移 = 底板高 × 档（Ctrl+6）
 
         // 执行层排版：13 格/行（CJK 1 格、其余半格）、最多 4 行
         private const float k_WrapCells = 13f;
@@ -103,6 +74,7 @@ namespace CityLife.GameBridge
         private EntityQuery m_CarQuery = default!;
         private EntityQuery m_BuildingQuery = default!;
         private EntityQuery m_ConfigQuery = default!;
+        private EntityQuery m_IconConfigQuery = default!;
 
         private bool m_Active;
         private int m_Level = 2;                    // 0=30 1=60 2=120
@@ -125,56 +97,22 @@ namespace CityLife.GameBridge
         private bool m_LoggedFirstBake;
         private bool m_LoggedFirstRender;
         private bool m_LastHideOverlay;
-        private Vector2? m_GlyphUV2;                // 从游戏字形网格实采的 uv2（底板照抄，不猜）
 
-        // 底板管线（TMP 同路：SDF 贴图 OnCreate 即建；材质等文字基底+供体就位后克隆；
-        // 底板网格逐文字条目烘进各自 bake 坐标系——见 BuildEntryPlate）
-        private int m_PlateMode = 1;                // 0=关 1=SDF 底板 2=诊断对照（Ctrl+7 三态轮转）
-        private int m_PlateTint;                    // 配色方案索引（Ctrl+6 循环，运行时试色——shader 颜色黑盒的实机标定）
-        private Texture2D[] m_PlateTexs = null!;
-        private Material[] m_PlateMats = null!;
-        private Color m_DonorFace;                  // 供体原值（试色方案 C/D 用）
-        private Color m_DonorEmission;
-
-        // 底板试色方案（该 shader 的颜色代数是黑盒：tex.rgb 被无视、发光压纯黑=整体消失、色调跟
-        // _FaceColor 走但亮度跟发光走——v3.2-v3.5 逐版实锤。四套候选一轮实机选定，选完砍到只剩一套）
-        private static readonly string[] k_PlateTintLabels =
-            { "A 深底+中灰发光", "B 白面+深 Navy 发光", "C 深底+供体发光", "D 零覆写（对照组）" };
-
-        /// <summary>把当前试色方案刷到三档底板材质上（负数哨兵没有，供体原值建材质时捕获）。</summary>
-        private void ApplyPlateTint()
-        {
-            if (m_PlateMats == null)
-                return;
-            foreach (var mat in m_PlateMats)
-            {
-                if (mat == null)
-                    continue;
-                switch (m_PlateTint)
-                {
-                    case 0:
-                        mat.SetColor("_FaceColor", new Color(0.04f, 0.05f, 0.09f, 1f));
-                        mat.SetColor("_EmissionColor", new Color(0.30f, 0.32f, 0.38f, 1f));
-                        break;
-                    case 1:
-                        mat.SetColor("_FaceColor", Color.white);
-                        mat.SetColor("_EmissionColor", new Color(0.02f, 0.03f, 0.05f, 1f));
-                        break;
-                    case 2:
-                        mat.SetColor("_FaceColor", new Color(0.04f, 0.05f, 0.09f, 1f));
-                        mat.SetColor("_EmissionColor", m_DonorEmission);
-                        break;
-                    default: // D 零覆写：供体原值
-                        mat.SetColor("_FaceColor", m_DonorFace);
-                        mat.SetColor("_EmissionColor", m_DonorEmission);
-                        break;
-                }
-            }
-        }
-        private Mesh m_DonorMesh = null!;           // 诊断臂用：供体字形网格/材质（BuildPlateMaterials 捕获）
-        private Material m_DonorMat = null!;
+        // 底板管线（通知图标管线：贴图/网格/缓冲是程序化内容 OnCreate 即建；材质懒取游戏图标材质）
+        private bool m_PlateOn = true;
+        private Material m_PlateMaterial = null!;
         private bool m_PlateMaterialWarned;
+        private Texture2DArray m_PlateTex = null!;
+        private Mesh[] m_PlateMeshes = null!;
+        private ComputeBuffer[] m_PlateInstBuf = null!;
+        private ComputeBuffer m_PlateArgs = null!;
+        private readonly uint[] m_ArgsArray = new uint[5];
+        private readonly List<NotificationIconBufferSystem.InstanceData>[] m_PlateData
+            = { new(), new(), new() };
+        private int m_InstanceBufferID;
         private bool m_LoggedFirstPlate;
+        private int m_SizeRatioIdx = 1;             // k_SizeRatios 索引（Ctrl+5）
+        private int m_YDropIdx = 2;                 // k_YDrops 索引（Ctrl+6；默认 0.5=图钉抬高对半补）
 
         /// <summary>一个被追踪的气泡：锚点实体 + 当前文案 + 独立生命周期。</summary>
         private struct TrackedBubble
@@ -192,10 +130,8 @@ namespace CityLife.GameBridge
             public readonly List<(Mesh mesh, Material mat)> Parts = new();
             public Vector3 Center;  // 合并包围盒中心（绘制时平移抵消，让文字正中落在锚点上）
             public float Height;    // 合并包围盒高（缩放归一分母）
-            public float Aspect;    // 合并包围盒宽/高
-            public int Lines;       // 执行层折行后的行数（屏占/底板留白都按它算）
-            public Mesh Plate;      // 底板网格：烘在本条目的 bake 坐标系里（v3.2 定案，与文字同矩阵）
-            public int PlateBucket; // 底板贴图档（宽高比就近——只管圆角不变形）
+            public float Aspect;    // 合并包围盒宽/高（底板选档用）
+            public int Lines;       // 执行层折行后的行数（屏占按行叠）
             public float LastUsed;
         }
 
@@ -233,6 +169,8 @@ namespace CityLife.GameBridge
                 ComponentType.Exclude<Game.Common.Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
             m_ConfigQuery = GetEntityQuery(ComponentType.ReadOnly<OverlayConfigurationData>());
+            m_IconConfigQuery = GetEntityQuery(ComponentType.ReadOnly<IconConfigurationData>());
+            m_InstanceBufferID = Shader.PropertyToID("instanceBuffer"); // shader 侧结构化缓冲名（TLE 实锤）
             BuildPlateAssets();
             RenderPipelineManager.beginContextRendering += OnRender;
         }
@@ -257,15 +195,20 @@ namespace CityLife.GameBridge
             if (debounced && ctrl && Input.GetKeyDown(KeyCode.Alpha7))
             {
                 m_LastKeyFrame = m_Frame;
-                m_PlateMode = (m_PlateMode + 1) % 3;
-                Mod.Log.Info($"[BubbleW] 底板模式 → {(m_PlateMode == 0 ? "关" : m_PlateMode == 1 ? "SDF 底板" : "诊断对照（2×2 对剖）")}");
+                m_PlateOn = !m_PlateOn;
+                Mod.Log.Info($"[BubbleW] 底板 {(m_PlateOn ? "开" : "关")}");
+            }
+            if (debounced && ctrl && Input.GetKeyDown(KeyCode.Alpha5))
+            {
+                m_LastKeyFrame = m_Frame;
+                m_SizeRatioIdx = (m_SizeRatioIdx + 1) % k_SizeRatios.Length;
+                Mod.Log.Info($"[BubbleW] 底板尺寸档 → ×{k_SizeRatios[m_SizeRatioIdx]}");
             }
             if (debounced && ctrl && Input.GetKeyDown(KeyCode.Alpha6))
             {
                 m_LastKeyFrame = m_Frame;
-                m_PlateTint = (m_PlateTint + 1) % k_PlateTintLabels.Length;
-                ApplyPlateTint();
-                Mod.Log.Info($"[BubbleW] 底板配色 → {k_PlateTintLabels[m_PlateTint]}");
+                m_YDropIdx = (m_YDropIdx + 1) % k_YDrops.Length;
+                Mod.Log.Info($"[BubbleW] 底板 Y 补偿档 → ×{k_YDrops[m_YDropIdx]}");
             }
 
             // FPS 计：每 4 秒一行（开着才有意义）
@@ -310,9 +253,8 @@ namespace CityLife.GameBridge
                 foreach (var b in m_Bubbles)
                     if (!m_Cache.ContainsKey((b.Text, b.Kind)))
                         EnsureBaked(b.Text, b.Kind);
-            // 底板材质等"文字基底+uv2 实采"双就位（同帧烘焙循环后必有 uv2）
-            if (m_PlateMode != 0 && m_PlateMats == null && m_BaseTextMaterial != null && m_GlyphUV2.HasValue)
-                BuildPlateMaterials();
+            if (m_PlateOn && m_PlateMaterial == null)
+                TryInitPlateMaterial();
 
             m_Frame++;
         }
@@ -580,8 +522,6 @@ namespace CityLife.GameBridge
                     if (mi.vertexCount == 0 || mi.mesh == null)
                         continue;
                     var src = mi.mesh;
-                    if (!m_GlyphUV2.HasValue && src.uv2 != null && src.uv2.Length >= 4)
-                        m_GlyphUV2 = src.uv2[0]; // 实采游戏字形的 uv2（底板 quad 照抄，不猜）
                     var mesh = new Mesh
                     {
                         vertices = src.vertices,
@@ -614,20 +554,13 @@ namespace CityLife.GameBridge
                 entry.Height = math.max(bounds.size.y, 0.01f);
                 entry.Aspect = bounds.size.x / entry.Height;
                 entry.Lines = lines;
-                // 底板烘进同一条目的 bake 坐标系（v3.2：与文字同矩阵同缩放域，SDF 滤波不再失配）
-                entry.Plate = BuildEntryPlate(bounds, m_GlyphUV2 ?? Vector2.zero);
-                var plateAspect = (bounds.size.x + entry.Height * 0.7f) / (entry.Height * 1.7f);
-                entry.PlateBucket = 0;
-                for (int i = 1; i < k_PlateAspects.Length; i++)
-                    if (math.abs(k_PlateAspects[i] - plateAspect) < math.abs(k_PlateAspects[entry.PlateBucket] - plateAspect))
-                        entry.PlateBucket = i;
                 entry.LastUsed = UnityEngine.Time.time;
                 EvictIfNeeded();
                 m_Cache[key] = entry;
                 if (!m_LoggedFirstBake)
                 {
                     m_LoggedFirstBake = true;
-                    Mod.Log.Info($"[BubbleW] 首烘：'{text}' parts={entry.Parts.Count} 网格高={entry.Height:F1} 宽高比={entry.Aspect:F2} 行={entry.Lines} uv2={(m_GlyphUV2.HasValue ? m_GlyphUV2.Value.ToString() : "未采到")}（fontSize=200 烘焙，绘制归一）");
+                    Mod.Log.Info($"[BubbleW] 首烘：'{text}' parts={entry.Parts.Count} 网格高={entry.Height:F1} 宽高比={entry.Aspect:F2} 行={entry.Lines}（fontSize=200 烘焙，绘制归一）");
                 }
             }
             finally
@@ -670,18 +603,26 @@ namespace CityLife.GameBridge
                 if (mat != null) UnityEngine.Object.Destroy(mat);
             }
             entry.Parts.Clear();
-            if (entry.Plate != null) { UnityEngine.Object.Destroy(entry.Plate); entry.Plate = null; }
         }
 
-        // —— 底板资产：圆角矩形 SDF 贴图（3 档宽高比各一片，圆角按档烘焙防拉伸变形）。
-        //    底板网格不在此建——v3.2 起逐文字条目烘进各自 bake 坐标系（BuildEntryPlate）。——
+        // —— 底板资产：程序化圆角贴图（3 档宽高比各一片，圆角按档烘焙防拉伸变形）+ quad 网格。
+        //    纯 CPU 内容，不碰游戏单例，OnCreate 就能建。——
         private void BuildPlateAssets()
         {
             try
             {
-                m_PlateTexs = new Texture2D[k_PlateAspects.Length];
+                m_PlateTex = new Texture2DArray(k_PlateTexW, k_PlateTexH, k_PlateAspects.Length,
+                    TextureFormat.ARGB32, true);
+                m_PlateMeshes = new Mesh[k_PlateAspects.Length];
                 for (int i = 0; i < k_PlateAspects.Length; i++)
-                    m_PlateTexs[i] = BakePlateTexture(k_PlateAspects[i]);
+                {
+                    var t = BakePlateTexture(k_PlateAspects[i]);
+                    Graphics.CopyTexture(t, 0, m_PlateTex, i); // 源带完整 mip 链，拷贝随链走
+                    UnityEngine.Object.Destroy(t);
+                    m_PlateMeshes[i] = BuildPlateMesh(k_PlateAspects[i]);
+                }
+                m_PlateArgs = new ComputeBuffer(1, 5 * sizeof(uint), ComputeBufferType.IndirectArguments);
+                m_PlateInstBuf = new ComputeBuffer[k_PlateAspects.Length];
             }
             catch (Exception ex)
             {
@@ -689,20 +630,19 @@ namespace CityLife.GameBridge
             }
         }
 
-        /// <summary>圆角底板贴图（喂 TMP SDF shader）：alpha=有向距离场（0.5=边、内 1 外 0）；
-        /// RGB=成品颜色：内部深底、边缘浅色勾边——v3.4 实锤该 shader 填充色直接吃 tex.rgb，
-        /// 一切材质侧颜色覆写（_FaceColor/顶点色/发光）全是干扰项，零覆写才显形。</summary>
+        /// <summary>圆角底板贴图：世界单位域（高 1、宽=aspect）上算圆角矩形 SDF，逐像素填成品色
+        /// （图标 shader 是普通采样管线，贴图就是最终颜色——v2.2 实机观感已证明）。</summary>
         private static Texture2D BakePlateTexture(float aspect)
         {
             var w = k_PlateTexW;
             var h = k_PlateTexH;
             var tex = new Texture2D(w, h, TextureFormat.ARGB32, true);
             var px = new Color32[w * h];
-            const float radius = 0.20f;                        // 圆角半径（世界单位，高=1）
-            const float rimWorld = 0.035f;                     // 勾边宽（世界单位）
-            var padWorld = k_PlatePadPx / (float)k_PlateTexH;  // SDF 过渡带（世界单位）：以边为中心内外各一程
-            var fill = new Color32(10, 13, 23, 255);           // 深底
-            var rim = new Color32(215, 220, 230, 255);         // 浅边=气泡框
+            var fill = new Color(0.04f, 0.05f, 0.09f, 0.66f);   // 深底（文字主要靠描边，底只负责托住）
+            var border = new Color(1f, 1f, 1f, 0.85f);           // 中性白边（类型色由文字承担）
+            const float radius = 0.17f;   // 圆角半径（世界单位，高=1）
+            const float bw = 0.045f;      // 边框宽
+            const float aa = 0.012f;      // 边缘抗锯齿过渡带宽
             float hx = aspect * 0.5f;
             for (int y = 0; y < h; y++)
             {
@@ -715,9 +655,10 @@ namespace CityLife.GameBridge
                     var qy = math.abs(v) - (0.5f - radius);
                     var d = math.length(math.max(new float2(qx, qy), float2.zero))
                         + math.min(math.max(qx, qy), 0f) - radius;
-                    var a = (byte)(math.saturate(0.5f - d / (2f * padWorld)) * 255f);
-                    px[y * w + x] = d > -rimWorld ? rim : fill;
-                    px[y * w + x].a = a;
+                    var cover = math.saturate(0.5f - d / aa); // 外边缘 AA
+                    var c = d < -bw ? fill : border;
+                    c.a *= cover;
+                    px[y * w + x] = c;
                 }
             }
             tex.SetPixels32(px);
@@ -725,126 +666,81 @@ namespace CityLife.GameBridge
             return tex;
         }
 
-        /// <summary>底板网格烘进文字的 bake 坐标系（v3.2 定案）：尺寸=文字包围盒+四边各 35% 字高留白，
-        /// UV 0..1 铺 SDF 贴图，顶点色白（中性）——v3.4 实锤填充色直接吃贴图 RGB，顶点色不抢戏。
-        /// uv2 照抄游戏字形实采值；顶点序 BL→TL→TR→BR、三角 0,1,2/2,3,0——与供体字形同序同手性（实锤）。
-        /// 绘制时直接复用文字矩阵（含 Translate(-Center)）——同缩放域同锚点，对齐/滤波都白送。</summary>
-        private static Mesh BuildEntryPlate(Bounds b, Vector2 glyphUV2)
+        /// <summary>底板 quad：宽高比由几何承载（shader 只给统一缩放），XY 平面、UV 0..1。
+        /// 顶点顺序/绕向逐字照抄游戏原版 NotificationIconRenderSystem.GetMesh()（BL→TL→TR→BR，
+        /// 三角形 0,1,2/2,3,0）——镜像绕向 billboard 后背对镜头被背面剔除，画了个寂寞（v2.2 实锤）。</summary>
+        private static Mesh BuildPlateMesh(float aspect)
         {
-            var pad = b.size.y * 0.35f; // 四边留白：35% 字高
-            var x0 = b.min.x - pad; var x1 = b.max.x + pad;
-            var y0 = b.min.y - pad; var y1 = b.max.y + pad;
-            var white = new Color32(255, 255, 255, 255); // 中性——颜色全在贴图里（v3.5）
+            var hx = aspect * 0.5f;
             var mesh = new Mesh
             {
                 vertices = new[]
                 {
-                    new Vector3(x0, y0, 0f), new Vector3(x0, y1, 0f),
-                    new Vector3(x1, y1, 0f), new Vector3(x1, y0, 0f),
+                    new Vector3(-hx, -0.5f, 0f), new Vector3(-hx, 0.5f, 0f),
+                    new Vector3(hx, 0.5f, 0f), new Vector3(hx, -0.5f, 0f),
                 },
                 uv = new[]
                 {
                     new Vector2(0f, 0f), new Vector2(0f, 1f),
                     new Vector2(1f, 1f), new Vector2(1f, 0f),
                 },
-                uv2 = new[] { glyphUV2, glyphUV2, glyphUV2, glyphUV2 },
-                colors32 = new[] { white, white, white, white },
                 triangles = new[] { 0, 1, 2, 2, 3, 0 },
             };
             mesh.RecalculateBounds();
             return mesh;
         }
 
-        // —— 底板材质：clone 文字同款 TMP 基底 + CopyPropertiesFromMaterial 活文字材质（图集参数全家桶
-        //    ——缩放比/GradientScale/关键字——一个不落；v2.4 只 clone 基底被判"画而不显"，漏的桶在这）。
-        //    再覆写 _MainTex=自建 SDF 贴图 + 颜色/队列。等"文字基底+uv2 实采+至少一段烘焙（供体）"就位才建。——
-        private void BuildPlateMaterials()
+        // —— 底板材质：clone 游戏通知图标材质（TLE 同款契约）——
+        private void TryInitPlateMaterial()
         {
             try
             {
-                Mesh donorMesh = null;
-                Material donor = null;
-                foreach (var kv in m_Cache)
-                    if (kv.Value.Parts.Count > 0) { donor = kv.Value.Parts[0].mat; donorMesh = kv.Value.Parts[0].mesh; break; }
-                if (donor == null || donorMesh == null)
-                    return; // 还没有烘焙产物做供体，下一帧再试（静默重试，不刷日志）
-
-                m_DonorMesh = donorMesh;
-                m_DonorMat = donor; // 诊断臂用原样供体（只读引用，不 clone，析构归缓存管）
-                m_DonorFace = donor.GetColor("_FaceColor");
-                m_DonorEmission = donor.GetColor("_EmissionColor");
-                Mod.Log.Info($"[BubbleW] 供体 _MainTex 槽={donor.GetTexture("_MainTex")?.GetType().Name ?? "null"} _FaceColor={m_DonorFace} _EmissionColor={m_DonorEmission}");
-                m_PlateMats = new Material[k_PlateAspects.Length];
-                for (int i = 0; i < k_PlateAspects.Length; i++)
+                if (m_IconConfigQuery.IsEmptyIgnoreFilter)
                 {
-                    // v3.5 定案：供体克隆仅换贴图，零覆写（v3.4 实锤颜色覆写全是干扰项，
-                    // 填充色直接吃 tex.rgb——成品颜色已烘进贴图）。队列 3800 随供体，
-                    // 底板远 0.4m 由 HDRP 透明深度排序压底。
-                    var mat = new Material(donor);
-                    mat.SetTexture("_MainTex", m_PlateTexs[i]);
-                    if (i == 0) // 读回取证：贴图到底吃没吃进去
+                    if (!m_PlateMaterialWarned)
                     {
-                        var t = mat.GetTexture("_MainTex");
-                        Mod.Log.Info($"[BubbleW] 底板材质读回：_MainTex={(t == null ? "null" : $"{t.GetType().Name}({t.width}x{t.height})")}（零覆写定案）");
+                        m_PlateMaterialWarned = true;
+                        Mod.Log.Warn("[BubbleW] IconConfigurationData 单例未就绪（主菜单？），底板材质待重试");
                     }
-                    m_PlateMats[i] = mat;
+                    return;
                 }
-                Mod.Log.Info("[BubbleW] 底板材质已构建（供体克隆仅换贴图 ×3 档）");
-                ApplyPlateTint(); // 建完即刷当前配色（默认方案 A）
-                LogShaderProperties(donor);
+                var e = m_IconConfigQuery.GetSingletonEntity();
+                if (m_PrefabSystem.TryGetPrefab(e, out PrefabBase pb) && pb is IconConfigurationPrefab cfg
+                    && cfg.m_Material != null)
+                {
+                    m_PlateMaterial = new Material(cfg.m_Material)
+                    {
+                        mainTexture = m_PlateTex, // renderQueue 不动：克隆自带 3700，恰在文字（3800）之下
+                    };
+                    Mod.Log.Info("[BubbleW] 底板材质已克隆（IconConfigurationPrefab.m_Material + 自建 Texture2DArray）");
+                }
+                else if (!m_PlateMaterialWarned)
+                {
+                    m_PlateMaterialWarned = true;
+                    Mod.Log.Warn("[BubbleW] IconConfigurationPrefab.m_Material 取不到，底板材质待重试");
+                }
             }
             catch (Exception ex)
             {
-                m_PlateMats = null!;
                 if (!m_PlateMaterialWarned)
                 {
                     m_PlateMaterialWarned = true;
-                    Mod.Log.Warn($"[BubbleW] 底板材质构建异常：{ex.Message}");
+                    Mod.Log.Warn($"[BubbleW] 取底板材质异常：{ex.Message}");
                 }
-            }
-        }
-
-        /// <summary>判决日志：文字材质 shader 的全属性清单（名字:类型=值）+ 启用关键字。
-        /// 底板若仍是鬼，下一版照这张单抓药——不再猜。</summary>
-        private void LogShaderProperties(Material sample)
-        {
-            try
-            {
-                var sh = sample.shader;
-                var sb = new System.Text.StringBuilder(512);
-                for (int i = 0; i < sh.GetPropertyCount(); i++)
-                {
-                    var name = sh.GetPropertyName(i);
-                    var type = sh.GetPropertyType(i);
-                    sb.Append(name).Append(':').Append(type);
-                    if (type == UnityEngine.Rendering.ShaderPropertyType.Texture)
-                    {
-                        var t = sample.GetTexture(name);
-                        sb.Append('=').Append(t == null ? "null" : $"{t.name}({t.width}x{t.height})");
-                    }
-                    else if (type == UnityEngine.Rendering.ShaderPropertyType.Float
-                        || type == UnityEngine.Rendering.ShaderPropertyType.Range)
-                        sb.Append('=').Append(sample.GetFloat(name).ToString("F2"));
-                    sb.Append(' ');
-                }
-                sb.Append("| keywords: ").Append(string.Join(",", sample.shaderKeywords));
-                Mod.Log.Info($"[BubbleW] 文字材质清单（{sh.name}）：{sb}");
-            }
-            catch (Exception ex)
-            {
-                Mod.Log.Warn($"[BubbleW] 材质清单日志异常：{ex.Message}");
             }
         }
 
         private void DestroyPlateAssets()
         {
-            if (m_PlateTexs != null)
-                foreach (var t in m_PlateTexs)
-                    if (t != null) UnityEngine.Object.Destroy(t);
-            if (m_PlateMats != null)
-                foreach (var m in m_PlateMats)
+            if (m_PlateTex != null) UnityEngine.Object.Destroy(m_PlateTex);
+            if (m_PlateMeshes != null)
+                foreach (var m in m_PlateMeshes)
                     if (m != null) UnityEngine.Object.Destroy(m);
-            // 供体网格/材质是缓存资产的引用，不归这里销毁；逐条目底板网格归 DestroyEntry 管
+            if (m_PlateMaterial != null) UnityEngine.Object.Destroy(m_PlateMaterial);
+            if (m_PlateArgs != null) { m_PlateArgs.Release(); m_PlateArgs = null; }
+            if (m_PlateInstBuf != null)
+                foreach (var b in m_PlateInstBuf)
+                    b?.Release();
         }
 
         // —— 绘制：SRP 回调自绘（billboard + 恒定屏占）。不再过 OverlayRenderSystem 通道，
@@ -863,10 +759,9 @@ namespace CityLife.GameBridge
             if (!m_Active || m_Bubbles.Count == 0)
                 return;
 
-            // 材质数组非空+末元素非空：BuildPlateMaterials 中途抛异常会留下半空数组（null 元素会让 DrawMesh 每帧抛）
-            var drawPlate = m_PlateMode != 0 && m_PlateMats != null
-                && m_PlateMats[k_PlateAspects.Length - 1] != null
-                && (m_PlateMode == 1 || m_DonorMat != null);
+            // 数组非空+末元素非空：BuildPlateAssets 中途抛异常会留下半空数组
+            var drawPlate = m_PlateOn && m_PlateMaterial != null && m_PlateArgs != null
+                && m_PlateMeshes != null && m_PlateMeshes[k_PlateAspects.Length - 1] != null;
             foreach (var cam in cameras)
             {
                 if (cam.cameraType != CameraType.Game)
@@ -875,7 +770,9 @@ namespace CityLife.GameBridge
                 var camPos = (float3)cam.transform.position;
                 var rot = Quaternion.LookRotation(cam.transform.forward, cam.transform.up);
                 var tanHalfFov = math.tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
-                var platePushBack = (float3)(cam.transform.forward * 0.4f); // 底板压到文字后面；0.4m：远距离深度精度下同队列排序才分得开（6cm 不够——v3.0 白板啃字实锤）
+                if (drawPlate)
+                    foreach (var list in m_PlateData)
+                        list.Clear();
 
                 foreach (var b in m_Bubbles)
                 {
@@ -904,48 +801,84 @@ namespace CityLife.GameBridge
                     var s = worldH / entry.Height;
                     var matrix = Matrix4x4.TRS((Vector3)p, rot, new Vector3(s, s, s))
                         * Matrix4x4.Translate(-entry.Center);
-
-                    if (drawPlate && entry.Plate != null)
-                    {
-                        // 底板网格在条目 bake 坐标系里——矩阵与文字完全同一个（v3.2 缩放域定案）
-                        var plateMatrix = Matrix4x4.TRS((Vector3)(p + platePushBack), rot, new Vector3(s, s, s))
-                            * Matrix4x4.Translate(-entry.Center);
-                        if (m_PlateMode == 1)
-                        {
-                            Graphics.DrawMesh(entry.Plate, plateMatrix,
-                                m_PlateMats[entry.PlateBucket], 0, cam, 0, null, ShadowCastingMode.Off, false);
-                        }
-                        else
-                        {
-                            // 诊断对剖：A=底板网格+供体原样材质（图集汤）；B=供体字形网格+底板材质
-                            // （抬高 2 块高）；C=底板网格+底板材质（抬高 4 块高，与模式 1 同料）。
-                            Graphics.DrawMesh(entry.Plate, plateMatrix,
-                                m_DonorMat, 0, cam, 0, null, ShadowCastingMode.Off, false);
-                            Graphics.DrawMesh(m_DonorMesh,
-                                Matrix4x4.TRS((Vector3)(p + platePushBack + new float3(0, worldH * 2f, 0)), rot, new Vector3(s, s, s))
-                                    * Matrix4x4.Translate(-entry.Center),
-                                m_PlateMats[entry.PlateBucket], 0, cam, 0, null, ShadowCastingMode.Off, false);
-                            Graphics.DrawMesh(entry.Plate,
-                                Matrix4x4.TRS((Vector3)(p + platePushBack + new float3(0, worldH * 4f, 0)), rot, new Vector3(s, s, s))
-                                    * Matrix4x4.Translate(-entry.Center),
-                                m_PlateMats[entry.PlateBucket], 0, cam, 0, null, ShadowCastingMode.Off, false);
-                        }
-                        if (!m_LoggedFirstPlate)
-                        {
-                            m_LoggedFirstPlate = true;
-                            Mod.Log.Info($"[BubbleW] 底板首画（模式={m_PlateMode} bucket={entry.PlateBucket} 底板网格=bake 空间 文宽比={entry.Aspect:F1} 行={entry.Lines}）");
-                        }
-                    }
-
                     foreach (var (mesh, mat) in entry.Parts)
                         Graphics.DrawMesh(mesh, matrix, mat, 0, cam, 0, null, ShadowCastingMode.Off, false);
                     entry.LastUsed = UnityEngine.Time.time;
+
+                    if (drawPlate)
+                    {
+                        // 底板高 = 文字块高 × 尺寸档；Y 下沉抵消图标 shader 图钉式抬高（Ctrl+6 标定）
+                        var plateH = worldH * k_SizeRatios[m_SizeRatioIdx];
+                        // 选档宁宽勿窄：需求比 = 文案宽高比 ÷ 底板高倍率 × 横向余量
+                        var need = entry.Aspect * worldH / plateH * 1.08f;
+                        var bucket = k_PlateAspects.Length - 1;
+                        for (int i = 0; i < k_PlateAspects.Length; i++)
+                            if (k_PlateAspects[i] >= need) { bucket = i; break; }
+                        m_PlateData[bucket].Add(new NotificationIconBufferSystem.InstanceData
+                        {
+                            m_Position = p - new float3(0f, plateH * k_YDrops[m_YDropIdx], 0f),
+                            m_Params = new float4(plateH, 0f, 1f, 1f), // (全高米数, 不脉动, 不透明, 开)
+                            m_Icon = bucket,
+                            m_Distance = dist,
+                        });
+                    }
                 }
+
+                if (drawPlate)
+                    DrawPlates(cam);
 
                 if (!m_LoggedFirstRender)
                 {
                     m_LoggedFirstRender = true;
                     Mod.Log.Info($"[BubbleW] 首帧自绘（cam={cam.name}，在场 {m_Bubbles.Count}）");
+                }
+            }
+        }
+
+        // —— 底板绘制：每档一次 instanced draw（远→近排序，透明叠序才对）——
+        private void DrawPlates(Camera cam)
+        {
+            var stride = UnsafeUtility.SizeOf<NotificationIconBufferSystem.InstanceData>();
+            for (int bucket = 0; bucket < k_PlateAspects.Length; bucket++)
+            {
+                var list = m_PlateData[bucket];
+                if (list.Count == 0)
+                    continue;
+                list.Sort((a, b) => b.m_Distance.CompareTo(a.m_Distance)); // 远→近
+
+                var buf = m_PlateInstBuf[bucket];
+                if (buf == null || buf.count < list.Count)
+                {
+                    buf?.Release();
+                    var cap = 64;
+                    while (cap < list.Count) cap *= 2;
+                    buf = new ComputeBuffer(cap, stride, ComputeBufferType.Default, ComputeBufferMode.Dynamic);
+                    m_PlateInstBuf[bucket] = buf;
+                }
+                buf.SetData(list, 0, 0, list.Count);
+                m_PlateMaterial.SetBuffer(m_InstanceBufferID, buf);
+
+                var mesh = m_PlateMeshes[bucket];
+                m_ArgsArray[0] = mesh.GetIndexCount(0);
+                m_ArgsArray[1] = (uint)list.Count;
+                m_ArgsArray[2] = mesh.GetIndexStart(0);
+                m_ArgsArray[3] = mesh.GetBaseVertex(0);
+                m_ArgsArray[4] = 0;
+                m_PlateArgs.SetData(m_ArgsArray);
+
+                // bounds 包住本档所有实例（唯一的剔除机制，半径余量按最大底板算）
+                var bounds = new Bounds((Vector3)list[0].m_Position, Vector3.zero);
+                foreach (var inst in list)
+                    bounds.Encapsulate((Vector3)inst.m_Position);
+                bounds.Expand(40f);
+
+                Graphics.DrawMeshInstancedIndirect(mesh, 0, m_PlateMaterial, bounds, m_PlateArgs,
+                    0, null, ShadowCastingMode.Off, false, 0, cam);
+
+                if (!m_LoggedFirstPlate)
+                {
+                    m_LoggedFirstPlate = true;
+                    Mod.Log.Info($"[BubbleW] 底板首画（bucket={bucket} N={list.Count} plateH={list[0].m_Params.x:F2}m 尺寸档×{k_SizeRatios[m_SizeRatioIdx]} Y补×{k_YDrops[m_YDropIdx]} 图标管线）");
                 }
             }
         }

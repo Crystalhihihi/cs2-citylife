@@ -59,8 +59,11 @@ namespace CityLife.GameBridge
     ///   整板裁剪。修法：底板网格烘进文字的 bake 坐标系（尺寸取包围盒+留白、锚点同 Center），
     ///   绘制矩阵与文字完全同一个（含 Translate(-Center)）——同缩放域同锚点，滤波/对齐一起白送。
     ///   底板网格随文字缓存逐条建（4 顶点）；SDF 贴图仍 3 档宽高比选最近（只管圆角不变形）。
-    /// v3.3：SDF 贴图 RGB 改烘全黑（alpha 照旧距离场）+ 底板材质 _EmissionColor 压黑——
-    ///   tex.rgb / 发光 / _FaceColor / 顶点色 四条通道全部指向深底，焊死。
+    /// v3.4 实机（9/8）：C 臂（我方底板网格×我方 SDF 贴图×零覆写）**显形**——组合无罪；
+    ///   对照 v3.2（+颜色覆写=发白）/v3.3（+压发光=透明）确认：**一切材质颜色覆写都是干扰项**，
+    ///   该 shader 填充色直接吃 tex.rgb。
+    /// v3.5 定案：颜色烘进贴图（RGB=深底+浅边，alpha=距离场），材质=供体克隆仅换 _MainTex、
+    ///   零覆写——就是 C 臂那条已被实机证明显形的路。顶点色回白（中性，不抢戏）。
     /// v2.4 同版上的长文适配（沿用）：
     /// - 折行是执行层的活（铁律 #1，不依赖 TMP 折行对 CJK 的怪癖）：CJK 1 格/其余 0.5 格、
     ///   13 格/行、最多 4 行、溢出末字换"…"。内容层不限字数——话痨/沉默是人格，全文归信息流；
@@ -129,7 +132,6 @@ namespace CityLife.GameBridge
         private Material[] m_PlateMats = null!;
         private Mesh m_DonorMesh = null!;           // 诊断臂用：供体字形网格/材质（BuildPlateMaterials 捕获）
         private Material m_DonorMat = null!;
-        private Material[] m_BisectMats = null!;    // 诊断 B 臂：供体克隆仅换 _MainTex（我方的覆写全撤）
         private bool m_PlateMaterialWarned;
         private bool m_LoggedFirstPlate;
 
@@ -639,8 +641,9 @@ namespace CityLife.GameBridge
             }
         }
 
-        /// <summary>圆角底板贴图（喂 TMP SDF shader）：alpha=有向距离场（0.5=边、内 1 外 0），
-        /// RGB 全黑——v3.3 实锤该 shader 填充直接吃 tex.rgb，白底会把面板洗白（"遮罩"错觉）。</summary>
+        /// <summary>圆角底板贴图（喂 TMP SDF shader）：alpha=有向距离场（0.5=边、内 1 外 0）；
+        /// RGB=成品颜色：内部深底、边缘浅色勾边——v3.4 实锤该 shader 填充色直接吃 tex.rgb，
+        /// 一切材质侧颜色覆写（_FaceColor/顶点色/发光）全是干扰项，零覆写才显形。</summary>
         private static Texture2D BakePlateTexture(float aspect)
         {
             var w = k_PlateTexW;
@@ -648,7 +651,10 @@ namespace CityLife.GameBridge
             var tex = new Texture2D(w, h, TextureFormat.ARGB32, true);
             var px = new Color32[w * h];
             const float radius = 0.20f;                        // 圆角半径（世界单位，高=1）
+            const float rimWorld = 0.035f;                     // 勾边宽（世界单位）
             var padWorld = k_PlatePadPx / (float)k_PlateTexH;  // SDF 过渡带（世界单位）：以边为中心内外各一程
+            var fill = new Color32(10, 13, 23, 255);           // 深底
+            var rim = new Color32(215, 220, 230, 255);         // 浅边=气泡框
             float hx = aspect * 0.5f;
             for (int y = 0; y < h; y++)
             {
@@ -662,7 +668,8 @@ namespace CityLife.GameBridge
                     var d = math.length(math.max(new float2(qx, qy), float2.zero))
                         + math.min(math.max(qx, qy), 0f) - radius;
                     var a = (byte)(math.saturate(0.5f - d / (2f * padWorld)) * 255f);
-                    px[y * w + x] = new Color32(0, 0, 0, a); // RGB 全黑（v3.3：填充吃 tex.rgb 实锤）
+                    px[y * w + x] = d > -rimWorld ? rim : fill;
+                    px[y * w + x].a = a;
                 }
             }
             tex.SetPixels32(px);
@@ -671,7 +678,7 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>底板网格烘进文字的 bake 坐标系（v3.2 定案）：尺寸=文字包围盒+四边各 35% 字高留白，
-        /// UV 0..1 铺 SDF 贴图，顶点色深底（该 shader 填充色可能走顶点色通道，双写保险）。
+        /// UV 0..1 铺 SDF 贴图，顶点色白（中性）——v3.4 实锤填充色直接吃贴图 RGB，顶点色不抢戏。
         /// uv2 照抄游戏字形实采值；顶点序 BL→TL→TR→BR、三角 0,1,2/2,3,0——与供体字形同序同手性（实锤）。
         /// 绘制时直接复用文字矩阵（含 Translate(-Center)）——同缩放域同锚点，对齐/滤波都白送。</summary>
         private static Mesh BuildEntryPlate(Bounds b, Vector2 glyphUV2)
@@ -679,7 +686,7 @@ namespace CityLife.GameBridge
             var pad = b.size.y * 0.35f; // 四边留白：35% 字高
             var x0 = b.min.x - pad; var x1 = b.max.x + pad;
             var y0 = b.min.y - pad; var y1 = b.max.y + pad;
-            var dark = new Color32(10, 13, 23, 255); // 与 _FaceColor(0.04,0.05,0.09) 同色相
+            var white = new Color32(255, 255, 255, 255); // 中性——颜色全在贴图里（v3.5）
             var mesh = new Mesh
             {
                 vertices = new[]
@@ -693,7 +700,7 @@ namespace CityLife.GameBridge
                     new Vector2(1f, 1f), new Vector2(1f, 0f),
                 },
                 uv2 = new[] { glyphUV2, glyphUV2, glyphUV2, glyphUV2 },
-                colors32 = new[] { dark, dark, dark, dark },
+                colors32 = new[] { white, white, white, white },
                 triangles = new[] { 0, 1, 2, 2, 3, 0 },
             };
             mesh.RecalculateBounds();
@@ -720,28 +727,19 @@ namespace CityLife.GameBridge
                 m_PlateMats = new Material[k_PlateAspects.Length];
                 for (int i = 0; i < k_PlateAspects.Length; i++)
                 {
-                    // v3.0 最小覆写（v2.9 对剖判决：供体克隆仅换贴图=显形，凶手在覆写集里）：
-                    // 只换贴图 + 不透明深底（alpha=1.0 绕开 _ALPHATEST_ON 的裁剪嫌疑）；
-                    // 队列保持供体 3800——底板比文字远 0.06m，HDRP 透明按深度排序天然压底。
+                    // v3.5 定案：供体克隆仅换贴图，零覆写（v3.4 实锤颜色覆写全是干扰项，
+                    // 填充色直接吃 tex.rgb——成品颜色已烘进贴图）。队列 3800 随供体，
+                    // 底板远 0.4m 由 HDRP 透明深度排序压底。
                     var mat = new Material(donor);
                     mat.SetTexture("_MainTex", m_PlateTexs[i]);
-                    mat.SetColor("_FaceColor", new Color(0.04f, 0.05f, 0.09f, 1f));
-                    mat.SetColor("_EmissionColor", Color.black); // 发光通道也压黑——四通道全指向深底（v3.3 焊死）
-                    if (i == 0) // 读回取证：颜色/贴图到底吃没吃进去
+                    if (i == 0) // 读回取证：贴图到底吃没吃进去
                     {
                         var t = mat.GetTexture("_MainTex");
-                        Mod.Log.Info($"[BubbleW] 底板材质读回：_FaceColor={mat.GetColor("_FaceColor")} _MainTex={(t == null ? "null" : $"{t.GetType().Name}({t.width}x{t.height})")} 顶点色=深色双写");
+                        Mod.Log.Info($"[BubbleW] 底板材质读回：_MainTex={(t == null ? "null" : $"{t.GetType().Name}({t.width}x{t.height})")}（零覆写定案）");
                     }
                     m_PlateMats[i] = mat;
                 }
-                Mod.Log.Info("[BubbleW] 底板材质已构建（供体克隆 ×3 档 + SDF 贴图；uv2/绕向在 BuildEntryPlate 逐条目写对）");
-                // 诊断 B 臂材质：供体克隆仅换贴图（与我方覆写全隔离——v2.9 二阶对剖用）
-                m_BisectMats = new Material[k_PlateAspects.Length];
-                for (int i = 0; i < k_PlateAspects.Length; i++)
-                {
-                    m_BisectMats[i] = new Material(donor);
-                    m_BisectMats[i].SetTexture("_MainTex", m_PlateTexs[i]);
-                }
+                Mod.Log.Info("[BubbleW] 底板材质已构建（供体克隆仅换贴图 ×3 档，零覆写）");
                 LogShaderProperties(donor);
             }
             catch (Exception ex)
@@ -794,9 +792,6 @@ namespace CityLife.GameBridge
                     if (t != null) UnityEngine.Object.Destroy(t);
             if (m_PlateMats != null)
                 foreach (var m in m_PlateMats)
-                    if (m != null) UnityEngine.Object.Destroy(m);
-            if (m_BisectMats != null)
-                foreach (var m in m_BisectMats)
                     if (m != null) UnityEngine.Object.Destroy(m);
             // 供体网格/材质是缓存资产的引用，不归这里销毁；逐条目底板网格归 DestroyEntry 管
         }
@@ -871,19 +866,18 @@ namespace CityLife.GameBridge
                         }
                         else
                         {
-                            // 诊断对剖（v3.4 加 C 臂）：A=底板网格+供体原样材质；B=供体字形网格+供体克隆仅换
-                            // SDF 贴图（抬高 2 块高）；C=底板网格+供体克隆仅换 SDF 贴图（抬高 4 块高）——
-                            // A/B 早已分别显形，C 才是从没单验过的正式组合，一帧定位"网格×贴图"交互嫌疑。
+                            // 诊断对剖：A=底板网格+供体原样材质（图集汤）；B=供体字形网格+底板材质
+                            // （抬高 2 块高）；C=底板网格+底板材质（抬高 4 块高，与模式 1 同料）。
                             Graphics.DrawMesh(entry.Plate, plateMatrix,
                                 m_DonorMat, 0, cam, 0, null, ShadowCastingMode.Off, false);
                             Graphics.DrawMesh(m_DonorMesh,
                                 Matrix4x4.TRS((Vector3)(p + platePushBack + new float3(0, worldH * 2f, 0)), rot, new Vector3(s, s, s))
                                     * Matrix4x4.Translate(-entry.Center),
-                                m_BisectMats[entry.PlateBucket], 0, cam, 0, null, ShadowCastingMode.Off, false);
+                                m_PlateMats[entry.PlateBucket], 0, cam, 0, null, ShadowCastingMode.Off, false);
                             Graphics.DrawMesh(entry.Plate,
                                 Matrix4x4.TRS((Vector3)(p + platePushBack + new float3(0, worldH * 4f, 0)), rot, new Vector3(s, s, s))
                                     * Matrix4x4.Translate(-entry.Center),
-                                m_BisectMats[entry.PlateBucket], 0, cam, 0, null, ShadowCastingMode.Off, false);
+                                m_PlateMats[entry.PlateBucket], 0, cam, 0, null, ShadowCastingMode.Off, false);
                         }
                         if (!m_LoggedFirstPlate)
                         {

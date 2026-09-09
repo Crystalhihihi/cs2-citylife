@@ -14,7 +14,7 @@ using Transform = Game.Objects.Transform;
 namespace CityLife.GameBridge
 {
     /// <summary>
-    /// M3 气泡层 v4.5（自烘焙 TMP 文字网格 + 通知图标管线底板，SRP 回调自绘；执行层折行+按字计时）。
+    /// M3 气泡层 v5.0（自烘焙 TMP 文字网格 + 通知图标管线底板，SRP 回调自绘；执行层折行+按字计时）。
     ///
     /// 文字管线定案（勿复探）：
     /// - v1（Buffer.DrawText）判死：共享 TMP fontSize=200 懒烘焙+scale=1 硬编码=巨字；overlay 通道
@@ -66,7 +66,12 @@ namespace CityLife.GameBridge
     ///   各配设置页开关 BubbleAutoHideBuildTool/BubbleAutoHidePhotoMode（默认开、即时生效），
     ///   判定在 OnUpdate 算好存字段、OnRender 只读字段；hideOverlay 禁用（v4.2 实机正常游玩也 True）。
     ///   跳变打一行 INFO（防抖，只在变化时打）。
-    /// 扩展口（正式版待办）：内容管道接入（信息层降级产物+共位小剧场）。
+    /// 文案源（v5.0，S5 接闲聊炉片段池，§12 #48）：换文案时优先从 BubbleChatterSystem.Snippets 取
+    ///   （懒解析判空——主菜单世界系统可能不存在），锚点→场合 人=Walk/车=Vehicle/楼=Indoor
+    ///   （PickFor 自带 Any 兜底语义，场合是优先级不是命门），salt=锚点.Index+换文案次数
+    ///   （沿用旧轮换语义：同泡连换两条不重样），同帧片段去重（m_UsedThisFrame，帧尾清）；
+    ///   占位文案池自 v5.0 降级为池空兜底（开局炉未出时气泡仍有话）。
+    /// 扩展口（正式版待办）：共位小剧场（多泡剧本，§12 #48）、按 BornCycle 新鲜度衰减取泡。
     /// </summary>
     public partial class BubbleWorldSpikeSystem : GameSystemBase
     {
@@ -156,6 +161,13 @@ namespace CityLife.GameBridge
         private bool m_HiddenByBuildTool;
         private bool m_HiddenByPhotoMode;
 
+        // 闲聊炉片段池（v5.0，S5，§12 #48）：气泡文案主源。系统句柄懒解析判空（主菜单世界可能
+        // 不存在）；取泡只发生在换文案时刻（低频），OnRender 渲染热路径零查询
+        private BubbleChatterSystem m_Chatter = default!;
+        private bool m_LoggedSnippetPool;  // "片段池接通" INFO 只打一次
+        private bool m_LoggedPoolEmpty;    // "池空回退" INFO 只打一次（防每帧刷）
+        private readonly HashSet<string> m_UsedThisFrame = new(); // 本帧已用片段（同帧去重，帧尾清）
+
         // 底板管线（通知图标管线：贴图/网格/缓冲是程序化内容 OnCreate 即建；材质懒取游戏图标材质）
         private bool m_PlateOn = true;
         private Material[] m_PlateMaterials = null!;    // 每档一份 clone：共享一份材质轮换绑缓冲，
@@ -209,7 +221,8 @@ namespace CityLife.GameBridge
             public float LastUsed;
         }
 
-        // 占位文案池（正式版换内容管道；按类型分池：公园/住宅已分，载具类型全分待正式版）
+        // 占位文案池（v5.0 起身份降级：从文案主源降为闲聊炉片段池的池空兜底——炉未出货/系统未就绪时
+        // 气泡仍有话；按类型分池：公园/住宅已分，载具类型全分待正式版）
         private static readonly string[] k_Texts =
             { "……", "吃了吗", "今天这公交又晚点了，离谱", "风好大", "快走要迟到了", "这店排队也太长了", "听说东区新开了家店" };
         private static readonly string[] k_CarTexts =
@@ -322,6 +335,9 @@ namespace CityLife.GameBridge
             if (m_PlateOn && (m_PlateMaterials == null || m_PlateMaterials[0] == null))
                 TryInitPlateMaterial();
 
+            // 本帧已用片段集合帧尾清（S5 同帧去重；取泡只发生在上方 Resample/TickLifecycle，
+            // 早退分支在它们之前 return，集合恒为空，无需清）
+            m_UsedThisFrame.Clear();
             m_Frame++;
         }
 
@@ -485,15 +501,71 @@ namespace CityLife.GameBridge
             }
         }
 
+        /// <summary>换文案唯一入口（采样建组/生命周期轮换都走这）：优先闲聊炉片段池（v5.0 主源），
+        /// 取不到回退占位文案池（池空兜底——开局炉未出时气泡仍有话）。</summary>
         private void SetBubbleText(ref TrackedBubble b, int textIdx)
         {
-            var pool = b.Kind == 0 ? k_Texts
-                : b.Kind == 1 ? k_CarTexts
-                : EntityManager.HasComponent<Game.Buildings.AttractivenessProvider>(b.Anchor) ? k_ParkTexts
-                : k_BuildingTexts;
-            b.Text = pool[(b.Anchor.Index + textIdx) % pool.Length];
+            if (!TryPickSnippet(b, textIdx, out var text))
+            {
+                // 池空兜底（占位文案池）：锚点+次数取模轮换（旧语义，确定性错开；公园锚点有专池）
+                var pool = b.Kind == 0 ? k_Texts
+                    : b.Kind == 1 ? k_CarTexts
+                    : EntityManager.HasComponent<Game.Buildings.AttractivenessProvider>(b.Anchor) ? k_ParkTexts
+                    : k_BuildingTexts;
+                text = pool[(b.Anchor.Index + textIdx) % pool.Length];
+            }
+            b.Text = text;
             if (m_BaseTextMaterial != null)
                 EnsureBaked(b.Text, b.Kind);
+        }
+
+        /// <summary>锚点类型→气泡场合（§12 #48）：人锚点采的是路上行人=Walk，车=Vehicle，楼=Indoor。
+        /// 拿不准不靠猜——PickFor 候选自带 Any 兜底（exact ∪ Any），场合是优先级不是命门。</summary>
+        private static Content.BubbleOccasion OccasionFor(byte kind)
+            => kind == 0 ? Content.BubbleOccasion.Walk
+             : kind == 1 ? Content.BubbleOccasion.Vehicle
+             : Content.BubbleOccasion.Indoor;
+
+        /// <summary>从闲聊炉片段池取一条（v5.0 文案主源，§12 #48）。系统句柄懒解析判空
+        /// （主菜单世界可能不存在，判空前绝不碰池）；salt=锚点.Index+换文案次数（沿用旧轮换语义——
+        /// 同泡连换两条 salt 递增，池深>1 时必不重样）；同帧去重：本帧已用片段按 salt+k 顺探下一条
+        /// （确定性），连探 8 次全占用才接受重复（池够深时一次即中，顺探是极端保险）。
+        /// 池空/系统未就绪/该场合无候选返回 false（调用方回退占位池）。</summary>
+        private bool TryPickSnippet(TrackedBubble b, int textIdx, out string text)
+        {
+            text = "";
+            if (m_Chatter == null)
+                m_Chatter = World.GetExistingSystemManaged<BubbleChatterSystem>();
+            if (m_Chatter == null || m_Chatter.Snippets.Count == 0)
+            {
+                // 池空回退日志只打一次（开局炉未出是常态，别每帧刷）；主菜单期系统不存在不记
+                if (m_Chatter != null && !m_LoggedPoolEmpty)
+                {
+                    m_LoggedPoolEmpty = true;
+                    Mod.Log.Info("[BubbleW] 片段池为空（闲聊炉未出货），回退占位文案池");
+                }
+                return false;
+            }
+            var pool = m_Chatter.Snippets;
+            var occasion = OccasionFor(b.Kind);
+            var salt = (uint)(b.Anchor.Index + textIdx);
+            for (uint k = 0; k < 8; k++)
+            {
+                var picked = pool.PickFor(occasion, salt + k);
+                if (picked == null)
+                    return false; // 该场合连 Any 候选都没有（理论到不了，纯防御）
+                if (k < 7 && m_UsedThisFrame.Contains(picked.Text))
+                    continue; // 本帧已被别的气泡用，顺探下一条
+                m_UsedThisFrame.Add(picked.Text);
+                text = picked.Text;
+                if (!m_LoggedSnippetPool)
+                {
+                    m_LoggedSnippetPool = true;
+                    Mod.Log.Info($"[BubbleW] 片段池接通，池存 {pool.Count} 条");
+                }
+                return true;
+            }
+            return false; // 理论到不了，纯防御
         }
 
         /// <summary>气泡驻留时长：阅读时间 4s 起、每字 +0.28s、封顶 30s（话痨段落让人读完），

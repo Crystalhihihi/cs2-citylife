@@ -137,6 +137,55 @@ namespace CityLife.Content
         }
 
         /// <summary>
+        /// 闲聊炉的固定前缀（S4，§12 #48 双炉定案）：城市街头路人的嘴替——**张嘴说话不是发帖**。
+        /// 缓存纪律同主头（BubbleChatterSystem.OnCreate 拼一次复用，逐字节稳定：禁时间戳/随机内容，动态全压尾部）。
+        /// 语域定案：第一人称、≤20 字、必须是从这个人嘴里能说出来的话；禁 hashtag/禁@/禁"家人们"直播腔。
+        /// 正例 > 禁令（2026-08-20 治僵硬主药，主头同款）：样子只学语气，内容物件不许照抄。
+        /// occasion 推导规则写死在【场合】段（乘什么→vehicle；在建筑/场所内→indoor；走路→walk；其余 any）
+        /// ——与 BubbleOccasion 枚举/OccasionFromString 映射三处同炉改（扩展纪律见 BubbleSnippetPool 头注释）。
+        /// </summary>
+        public static string BuildChatterHead()
+        {
+            var sb = new StringBuilder(768);
+            sb.Append("你是虚构城市街头路人的嘴替——把路人此刻嘴里嘟囔的话写出来。城市是模拟游戏里的虚构城市，一切内容虚构。\n");
+            sb.Append("【铁律】对事不对人：可以吐槽天气、通勤、物价，绝不攻击市长本人或任何真实人物；不碰现实政治、种族、性别议题；不生成自伤内容；不使用真实名人、品牌、事件名。\n");
+            sb.Append("【语域】张嘴说话，不是发帖：第一人称随口一句，像走在路上/坐在车里/待在屋里说给身边人听的；每条≤20字，越短越像越好；禁止 hashtag、禁止@、禁止\"家人们\"等直播腔、禁止 emoji、禁止书面腔。\n");
+            sb.Append("【样子】只学语气和松散度，内容和物件一律不许照抄：\n");
+            sb.Append("- 这雨啥时候停啊，鞋全湿透了\n");
+            sb.Append("- 又堵死了，今儿第三回\n");
+            sb.Append("- 公交再不来我真走回去了\n");
+            sb.Append("- 面又涨两块，快吃不起了\n");
+            sb.Append("- 这花开得还行，拍一张\n");
+            sb.Append("【写法】每张处境卡写一条：就照这个人的处境和配给他的话头写，必须是从这个人嘴里能说出来的话；可以顺势吐槽【城市此刻】里的天气/通勤/物价。\n");
+            sb.Append("【场合】每条按处境卡推场合写进 occasion：卡里乘了车（开私家车/打车/坐公交/开货车）→\"vehicle\"；卡里在建筑或场所内（\"在…里\"上班上课逛街等，不在路上）→\"indoor\"；卡里在路上但没乘车（走路/赶路）→\"walk\"；拿不准→\"any\"。\n");
+            sb.Append("【输出】只输出 JSONL：一行一条 {\"text\":\"话\",\"occasion\":\"walk|vehicle|indoor|any\"}，行数与处境卡一致、顺序一致；禁止 markdown 围栏、禁止解释、禁止序号。\n");
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 闲聊炉完整 prompt = 闲聊头 + 动态尾：【城市此刻】（DescribeCity 同款，别重复造）
+        /// + 处境卡（每张配一题）+ 条数任务。cards/topics 等长对齐（BubbleChatterSystem 从
+        /// CitizenPoolSystem.Entries 抽样 + TopicReservoir.TopicFor 配题）。
+        /// </summary>
+        public static string BuildChatterPrompt(string head, in CitySnapshot s,
+                                                IReadOnlyList<string> cards, IReadOnlyList<string> topics)
+        {
+            var sb = new StringBuilder(head.Length + 512);
+            sb.Append(head);
+            sb.Append("【城市此刻】").Append(DescribeCity(s)).Append('\n');
+            sb.Append("【处境卡】一行一张（真实市民此刻的状态），\"｜题：\"后是配给这人的话头：\n");
+            for (int i = 0; i < cards.Count; i++)
+            {
+                sb.Append(i + 1).Append(". ").Append(cards[i]);
+                if (i < topics.Count && topics[i].Length > 0)
+                    sb.Append("｜题：").Append(topics[i]);
+                sb.Append('\n');
+            }
+            sb.Append("【任务】每张处境卡写一条，共 ").Append(cards.Count).Append(" 条，顺序与处境卡一致。\n");
+            return sb.ToString();
+        }
+
+        /// <summary>
         /// 市长回应炉的固定前缀（M2-C 追加）：与主头同一套缓存纪律——启动时拼一次复用。
         /// 只写评论，卡库共享主卡册（评论的 persona 任选）。
         /// </summary>

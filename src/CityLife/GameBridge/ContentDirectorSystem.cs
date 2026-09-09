@@ -60,6 +60,9 @@ namespace CityLife.GameBridge
         /// <summary>市长回应炉的固定 prompt 头（OnCreate 时拼好；CityLifeUISystem 发炉时取用）。</summary>
         public static string? ReplyHead;
 
+        /// <summary>Daily 话题库（S4 闲聊炉配题也抽这里——同一货架别重复造；主线程只读）。</summary>
+        public Content.TopicReservoir Topics => m_Topics;
+
         protected override void OnCreate()
         {
             base.OnCreate();
@@ -139,6 +142,12 @@ namespace CityLife.GameBridge
                 if (r.RequestId != null && r.RequestId.StartsWith("topic:"))
                 {
                     HandleTopicForgeResult(r);
+                    continue;
+                }
+                // 闲聊炉（S4）走专线路由：气泡片段入 BubbleSnippetPool，不占常规批次位
+                if (r.RequestId != null && r.RequestId.StartsWith("chatter:"))
+                {
+                    World.GetOrCreateSystemManaged<BubbleChatterSystem>().OnChatterResult(r);
                     continue;
                 }
 

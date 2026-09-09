@@ -105,6 +105,10 @@ namespace CityLife
             // 市民语境池（作者署名+处境：每个作者是一个真实市民的当下——"创造条件，不做限制"）
             updateSystem.UpdateAt<GameBridge.CitizenPoolSystem>(SystemUpdatePhase.GameSimulation);
 
+            // 闲聊炉（S4，§12 #48）：3-5 游戏分钟一炉产气泡片段入 BubbleSnippetPool
+            // （展示零 token；S5 才接气泡世界层，本系统只备池）
+            updateSystem.UpdateAt<GameBridge.BubbleChatterSystem>(SystemUpdatePhase.GameSimulation);
+
             // M4 写回层：活动链状态机（意图解析 → 确认 → 扣款 → 注入 → 数人 → 结算 → 恢复）
             updateSystem.UpdateAt<GameBridge.EventChainSystem>(SystemUpdatePhase.GameSimulation);
 

@@ -6,7 +6,7 @@ using Unity.Mathematics;
 
 namespace CityLife.GameBridge
 {
-    /// <summary>一条真实市民语境：显示名 + 此刻状态（"失业中，在家呆着"）。内容导演按席位分配给模型当写作处境。</summary>
+    /// <summary>一条真实市民语境：显示名 + 处境卡（"手头紧的上班族，坐公交下班回家路上（去住宅区）"）。内容导演按席位分配给模型当写作处境。结构保持 {Name, Context} 不变，消费处零改动。</summary>
     public readonly struct CitizenContext
     {
         public readonly string Name;
@@ -20,14 +20,28 @@ namespace CityLife.GameBridge
     }
 
     /// <summary>
-    /// 市民语境池（读侧）：每 2048 帧从城市真实市民采样一批"名字+此刻状态"，
+    /// 市民语境池（读侧）：每 2048 帧从城市真实市民采样一批"名字+处境卡"，
     /// 供内容导演按席位分配——"创造条件，不做限制"（2026-08-20 玩家定案，狼人杀经验：
     /// 写死 10 项处境轮换是罐头，每个作者是一个真实市民的当下才是活水）。
     ///
-    /// 信号全部字段级实锤（GameDllDump）：
+    /// 处境卡（§12 #48：处境矩阵是内容管道 v2 的轴心，人为主、场景为调料，执行层组装零 LLM）=
+    /// 是谁（身份+家境）+ 在哪/在干嘛 + 乘什么 + 去哪，仍是一句自然语言短句（≤25 字为佳）。
+    /// 时间/天气/季节是全局量，归信息流炉【城市此刻】，不进处境卡；起点建筑 v1 不反查。
+    ///
+    /// 信号全部字段级实锤（GameDllDump + docs/spikes/2026-09-09-situation-matrix-fields.md，勿复探）：
     /// 年龄=Citizen.m_State 的 AgeBit1/2（→CitizenAge）；性别=Male 位；游客/无家可归=对应位；
-    /// 在干嘛=TravelPurpose.m_Purpose（Purpose 枚举全量实锤）；工作=Worker.m_Workplace（Null=失业）；
-    /// 家境=HouseholdMember→Household.m_Resources（仅极端值才提，阈值待 [Pool·校准] 日志校准）。
+    /// 工作=Worker.m_Workplace（Null=失业）；家境=HouseholdMember→Household.m_Resources（仅极端值才提，阈值待 [Pool·校准] 日志校准）；
+    /// 在干嘛=TravelPurpose.m_Purpose（Purpose 枚举全量实锤；m_Data 是 int 不是目标实体，spike §2 证伪）。
+    /// 处境矩阵 v1 新增信号（全部直读模拟数据，读不到就省略该维度——绝不编造）：
+    /// 乘什么=CurrentTransport.m_CurrentTransport → 必须先判 Game.Vehicles.Vehicle（步行时指向行人 agent、
+    ///   无 Vehicle 组件，spike §3 必须前置），再按 PersonalCar/Taxi/PublicTransport/DeliveryTruck 分类；分类失败=省略；
+    /// 在室内=CurrentBuilding.m_CurrentBuilding（在建筑内才挂、离开即移除，与"在路上"互斥，spike §1）——
+    ///   值可能是外部连接等非建筑实体，消费前须 HasComponent&lt;Game.Buildings.Building&gt; 兜底；
+    /// 去哪=Game.Common.Target.m_Target（行程终点，行程结束即移除，spike §2）——目标是租户实体（公司/住户）时
+    ///   经 Game.Buildings.PropertyRenter.m_Property 映射到房产建筑（spike §2，TripNeededSystem decomp 行 145-150）；
+    /// 建筑类型=Game.Buildings 的 Residential/Commercial/Industrial/OfficeProperty 四组件（互斥挂其一）
+    ///   + Game.Prefabs.SignatureBuildingData（景点/地标，实体侧空标记）+ School/Hospital 服务组件
+    ///   + AttractivenessProvider（公园，CityChangeSystem 同款实锤）；全不中=省略，不编"某建筑"（spike §5）。
     /// 纪律：跨步抽样+整体轮换（同锚点系统）；跳过儿童（不发帖）与 MovingAway；只读不写。
     /// </summary>
     public partial class CitizenPoolSystem : GameSystemBase
@@ -88,9 +102,15 @@ namespace CityLife.GameBridge
             m_Offset++;
             m_Cycle++;
             arr.Dispose();
+
+            // 实机肉眼验收用：每轮采样结束打一条样例卡
+            if (m_Entries.Count > 0)
+                Mod.Log.Info($"[Pool] 本轮 {m_Entries.Count} 条，样例：\"{m_Entries[0].Context}\"（{m_Entries[0].Name}）");
+            else
+                Mod.Log.Info("[Pool] 本轮 0 条（市民皆被跳过或城市无人）");
         }
 
-        /// <summary>此刻状态描述："退休大爷，在家呆着" / "手头紧的上班族，下班回家路上" / "游客，正在逛街"。</summary>
+        /// <summary>处境卡组装："退休大爷，在公园里溜达" / "手头紧的上班族，坐公交下班回家路上（去住宅区）" / "学生，打车上学路上（去学校）"。读不到的维度整段省略。</summary>
         private string Describe(Entity e, Citizen citizen, CitizenAge age, Purpose purpose)
         {
             // —— 身份（谁）——
@@ -118,22 +138,126 @@ namespace CityLife.GameBridge
                 }
             }
 
-            // —— 在干嘛（TravelPurpose 直译）——
-            var doing = purpose switch
-            {
-                Purpose.Working => "正在上班",
-                Purpose.GoingToWork => "去上班路上",
-                Purpose.GoingHome => "下班回家路上",
-                Purpose.Shopping => "逛街",
-                Purpose.Leisure => "闲逛",
-                Purpose.Sleeping => "在被窝刷手机",
-                Purpose.Studying => "在学校",
-                Purpose.GoingToSchool => "上学路上",
-                Purpose.Hospital => "在医院",
-                Purpose.None => "在家呆着",
-                _ => "",
-            };
-            return doing.Length > 0 ? $"{identity}，{doing}" : identity;
+            // —— 处境（在哪/在干嘛/乘什么/去哪）——
+            var situation = DescribeSituation(e, purpose);
+            return situation.Length > 0 ? $"{identity}，{situation}" : identity;
         }
+
+        /// <summary>处境半句：在室内→"在 XX（里）+动作"；在途中→"乘什么+路程短语+（去 XX）"。</summary>
+        private string DescribeSituation(Entity e, Purpose purpose)
+        {
+            // 室内：CurrentBuilding 在挂=在建筑内（行程分发时移除，spike §1）
+            if (EntityManager.HasComponent<CurrentBuilding>(e))
+            {
+                var place = ClassifyBuilding(EntityManager.GetComponentData<CurrentBuilding>(e).m_CurrentBuilding);
+                if (place != null)
+                {
+                    // "在商店里上班" vs "在住宅区呆着"：片区/开放场所不加"里"
+                    var at = place is "住宅区" or "景点" ? $"在{place}" : $"在{place}里";
+                    return at + IndoorActivity(purpose);
+                }
+                // 建筑读不出类型（外部连接/未分类）：只按目的直译，不编场所
+                return PurposePhrase(purpose);
+            }
+
+            // 在途中：乘什么（步行/未分类=省略）+ 路程短语 + 目的地括注
+            var s = TransportPhrase(e) + JourneyPhrase(purpose);
+            var dest = DestinationPlace(e);
+            if (dest != null)
+                s += s.Length > 0 ? $"（去{dest}）" : $"在去{dest}的路上";
+            return s;
+        }
+
+        /// <summary>乘什么：开私家车/打车/坐公交/开货车；步行（行人 agent，无 Vehicle 组件）与未分类载具一律省略。</summary>
+        private string TransportPhrase(Entity e)
+        {
+            if (!EntityManager.HasComponent<CurrentTransport>(e))
+                return ""; // 室内/无载具
+            var vehicle = EntityManager.GetComponentData<CurrentTransport>(e).m_CurrentTransport;
+            if (vehicle == Entity.Null || !EntityManager.HasComponent<Game.Vehicles.Vehicle>(vehicle))
+                return ""; // 步行：CurrentTransport 指向行人 agent（spike §3：判 Vehicle 是必须前置）
+            if (EntityManager.HasComponent<Game.Vehicles.PersonalCar>(vehicle)) return "开私家车";
+            if (EntityManager.HasComponent<Game.Vehicles.Taxi>(vehicle)) return "打车";
+            if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)) return "坐公交";
+            if (EntityManager.HasComponent<Game.Vehicles.DeliveryTruck>(vehicle)) return "开货车";
+            return ""; // 服务车等其他载具：v1 不分类，省略
+        }
+
+        /// <summary>目的地建筑类型词（"商店"）；无 Target/非建筑/未分类 → null（该维度省略）。</summary>
+        private string? DestinationPlace(Entity e)
+        {
+            if (!EntityManager.HasComponent<Game.Common.Target>(e))
+                return null;
+            var target = EntityManager.GetComponentData<Game.Common.Target>(e).m_Target;
+            if (target == Entity.Null)
+                return null;
+            // 目标是租户实体（公司/住户）时映射到其房产建筑（spike §2，TripNeededSystem decomp 行 145-150）
+            if (EntityManager.HasComponent<Game.Buildings.PropertyRenter>(target))
+                target = EntityManager.GetComponentData<Game.Buildings.PropertyRenter>(target).m_Property;
+            return ClassifyBuilding(target);
+        }
+
+        /// <summary>建筑类型词：景点/学校/医院/住宅区/商店/工厂/办公楼/公园；非建筑（外部连接等）与未分类 → null。</summary>
+        private string? ClassifyBuilding(Entity building)
+        {
+            if (building == Entity.Null || !EntityManager.HasComponent<Game.Buildings.Building>(building))
+                return null; // 外部连接等非建筑实体兜底（spike §1）
+            if (EntityManager.HasComponent<Game.Prefabs.SignatureBuildingData>(building)) return "景点";
+            if (EntityManager.HasComponent<Game.Buildings.School>(building)) return "学校";
+            if (EntityManager.HasComponent<Game.Buildings.Hospital>(building)) return "医院";
+            if (EntityManager.HasComponent<Game.Buildings.ResidentialProperty>(building)) return "住宅区";
+            if (EntityManager.HasComponent<Game.Buildings.CommercialProperty>(building)) return "商店";
+            if (EntityManager.HasComponent<Game.Buildings.IndustrialProperty>(building)) return "工厂";
+            if (EntityManager.HasComponent<Game.Buildings.OfficeProperty>(building)) return "办公楼";
+            if (EntityManager.HasComponent<Game.Buildings.AttractivenessProvider>(building)) return "公园";
+            return null;
+        }
+
+        /// <summary>室内动作（目的直译）：缀在"在 XX（里）"后；无对应动作 → 空串（只说地点）。</summary>
+        private static string IndoorActivity(Purpose purpose) => purpose switch
+        {
+            Purpose.Working => "上班",
+            Purpose.Studying => "上课",
+            Purpose.Sleeping => "睡觉",
+            Purpose.Shopping => "逛街",
+            Purpose.Leisure or Purpose.Relaxing => "溜达",
+            Purpose.Hospital or Purpose.InHospital => "看病",
+            Purpose.Sightseeing or Purpose.VisitAttractions => "看风景",
+            Purpose.InEmergencyShelter => "避难",
+            Purpose.None => "呆着",
+            _ => "",
+        };
+
+        /// <summary>路程短语（目的直译）：只覆盖"在路上"语义的目的，其余空串。</summary>
+        private static string JourneyPhrase(Purpose purpose) => purpose switch
+        {
+            Purpose.GoingToWork => "去上班路上",
+            Purpose.GoingHome => "下班回家路上",
+            Purpose.GoingToSchool => "上学路上",
+            Purpose.Shopping => "去逛街路上",
+            Purpose.Leisure => "出去玩路上",
+            Purpose.Hospital => "去医院路上",
+            Purpose.Sightseeing => "去看风景路上",
+            Purpose.VisitAttractions => "去逛景点路上",
+            Purpose.Traveling => "赶路",
+            Purpose.EmergencyShelter => "去避难所路上",
+            _ => "",
+        };
+
+        /// <summary>目的直译兜底（在建筑内但建筑类型读不出时用）：沿用升级前措辞。</summary>
+        private static string PurposePhrase(Purpose purpose) => purpose switch
+        {
+            Purpose.Working => "正在上班",
+            Purpose.GoingToWork => "去上班路上",
+            Purpose.GoingHome => "下班回家路上",
+            Purpose.Shopping => "逛街",
+            Purpose.Leisure => "闲逛",
+            Purpose.Sleeping => "在被窝刷手机",
+            Purpose.Studying => "在学校",
+            Purpose.GoingToSchool => "上学路上",
+            Purpose.Hospital or Purpose.InHospital => "在医院",
+            Purpose.None => "在家呆着",
+            _ => "",
+        };
     }
 }

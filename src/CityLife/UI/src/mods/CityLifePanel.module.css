@@ -162,6 +162,16 @@
     margin-right: 6px;
 }
 
+/* 「广告」徽标：文字徽标（同禁符号字形纪律），绿色系与市长橙/官方蓝区分 */
+.adBadge {
+    font-size: 10px;
+    color: #1a1e26;
+    background-color: rgba(120, 210, 150, 0.9);
+    border-radius: 3px;
+    padding: 0 4px;
+    margin-right: 6px;
+}
+
 .author {
     font-weight: bold;
     margin-right: 6px;

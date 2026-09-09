@@ -176,6 +176,9 @@ namespace CityLife.GameBridge
         /// <summary>
         /// 公司锚点标签（2026-08-20 玩家定案：人说"解放路那家面馆"，不说"城西北"）：
         /// 真实公司名（NameSystem）+ 所在路名后缀；无名系统时回退"方位+那家+业态"的旧兜底。
+        /// 2026-09-09 实锤补充：GetRenderedLabelName 对无自定义名公司返回原始资产 ID
+        /// （"Assets.NAME[Commercial_ConvenienceFoodStore]"——署名乱码源头），检出即视同无名回退；
+        /// word 本身已是产出业态词（BusinessWord → ShopOutput），无需再借 ClassifyBuilding。
         /// </summary>
         private string CompanyLabel(Entity company, Entity building, string word, float3 pos)
         {
@@ -183,7 +186,8 @@ namespace CityLife.GameBridge
             if (m_NameSystem != null)
             {
                 var name = m_NameSystem.GetRenderedLabelName(company);
-                if (!string.IsNullOrEmpty(name))
+                if (!string.IsNullOrEmpty(name)
+                    && !name.StartsWith("Assets.NAME[", System.StringComparison.Ordinal))
                     return name + RoadSuffix(building);
             }
             return Geo.DirectionOf(pos) + "那家" + word + RoadSuffix(building);

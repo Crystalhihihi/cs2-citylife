@@ -27,6 +27,7 @@ namespace CityLife.GameBridge
     {
         private const uint k_ShopCooldownH = 72;
         private const int k_RushBase = 30;   // 氛围排队基数（normal 档）
+        private const double k_AdTtlSec = 180; // 广告请求 TTL（秒）：与下发 CliRequest 同值，兼作墙钟兜底基准
 
         private EntityQuery m_InjectQuery = default!;
         private EntityAnchorSystem m_AnchorSystem = default!;
@@ -39,6 +40,7 @@ namespace CityLife.GameBridge
         private Entity m_PendingShop;
         private string m_PendingLabel = "";
         private AnchorKind m_PendingKind;
+        private DateTime m_PendingSince; // 发炉墙钟：网关静默丢包兜底计时起点（见 OnUpdate，勿复探）
 
         // 氛围排队（等开场/分批注入）
         private Entity m_RushShop;
@@ -71,6 +73,16 @@ namespace CityLife.GameBridge
         protected override void OnUpdate()
         {
             TickRush();
+            // 墙钟兜底（勿复探——照抄 ContentDirectorSystem 话题炉同款，§ CliGateway.PumpLoop 过期静默丢弃不回包）：
+            // 广告请求 Low 优先级 + TTL 180s，被高优先级饿死超 TTL 后网关直接丢包，OnAdResult 永不被调，
+            // m_PendingShop 不清零 → 该会话再不发广告（2026-09-09 日志实锤链路全通但广告饿死）。
+            // 超 TTL+60s 未回包即清挂起解锁，打一行 Warn 留痕。
+            if (m_PendingShop != Entity.Null
+                && (DateTime.UtcNow - m_PendingSince).TotalSeconds > k_AdTtlSec + 60)
+            {
+                Mod.Log.Warn($"[Ad] 广告炉 {k_AdTtlSec + 60:0}s 未回包（网关静默丢弃），墙钟兜底解锁：{m_PendingLabel}");
+                m_PendingShop = Entity.Null;
+            }
             if (!Content.ModSettings.ShopAds || Now < m_NextAdAt)
                 return;
             if (Mod.Gateway == null || Llm.CliGateway.Mute || m_PendingShop != Entity.Null)
@@ -95,6 +107,7 @@ namespace CityLife.GameBridge
                     m_PendingShop = a.Entity;
                     m_PendingLabel = a.Label;
                     m_PendingKind = want;
+                    m_PendingSince = DateTime.UtcNow; // 发炉墙钟（OnUpdate 静默丢包兜底计时起点）
                     var word = ShopOutput.WordOf(ShopOutput.OutputOf(EntityManager, a.Company));
                     var reason = want == AnchorKind.BusinessBad
                         ? "最近生意清淡，想搞波清仓打折（折扣/价格你自己编个实在的）"
@@ -104,7 +117,7 @@ namespace CityLife.GameBridge
                     s_Head ??= Content.PromptBuilder.BuildShopAdHead();
                     Mod.Gateway!.Enqueue(new Llm.CliRequest(
                         Content.PromptBuilder.BuildShopAdPrompt(s_Head, StripParen(a.Label), word, reason),
-                        Llm.CliPriority.Low, 180, "ad:1"));
+                        Llm.CliPriority.Low, k_AdTtlSec, "ad:1"));
                     m_ShopCooldownUntil[a.Entity] = Now + k_ShopCooldownH * TicksPerHour;
                     m_NextAdAt = Now + (uint)Content.ModSettings.ShopAdCooldownH * TicksPerHour;
                     Mod.Log.Info($"[Ad] 广告炉已发：{a.Label}（{word}，{want}）");

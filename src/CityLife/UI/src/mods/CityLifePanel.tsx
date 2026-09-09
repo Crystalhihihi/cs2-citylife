@@ -74,6 +74,10 @@ const isMayorPost = (p: FeedPost) => p.a === "市长";
 // 官方帖判定（活动公告/媒体快讯）：视觉高亮防被信息流冲掉（2026-08-20 实机：活动爆棚玩家却没看到公告）
 const isOfficialPost = (p: FeedPost) => p.a === "市政厅" || p.a === "城市快讯";
 
+// 广告帖判定（商家广告层）：C# 侧 ShopAdSystem 发帖 PersonaId 固定 "shopad"（JSON 键 p）。
+// 作者署名是真实店名、千变万化，只能认人格 id，不认 a。
+const isShopAdPost = (p: FeedPost) => p.p === "shopad";
+
 /** 市民信息流入口：GameTopLeft 浮动按钮 + 自绘面板（M2-B：评论区/自绘滚动条/拖拽/缩放）。 */
 export const CityLifeButton = () => {
     const [open, setOpen] = useState(false);
@@ -407,6 +411,9 @@ const CityLifePanel = () => {
                             )}
                             {isOfficialPost(p) && (
                                 <span className={styles.officialBadge}>官方</span>
+                            )}
+                            {isShopAdPost(p) && (
+                                <span className={styles.adBadge}>广告</span>
                             )}
                             <span className={styles.text}>{p.t}</span>
                             <div className={styles.topic}>

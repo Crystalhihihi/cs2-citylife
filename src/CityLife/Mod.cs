@@ -129,6 +129,10 @@ namespace CityLife
             // 相位调查（2026-08-21 计数全 0）：先挂 GameSimulation 验证"写入时机/清空顺序"嫌疑
             // （OverlayRenderSystem 若在 GameSimulation 消费，Rendering 相位的写入可能先清后拷被永久跳过）
             updateSystem.UpdateAt<GameBridge.BubbleWorldSpikeSystem>(SystemUpdatePhase.GameSimulation);
+
+            // 多人小剧场（S7，§12 #48 多人小剧场段）：对话锚点成组+真名单绑定+轮流冒泡（同屏 ≤2）。
+            // 登记在气泡世界层之后：同相序内先跑完气泡采样/生命周期，剧场再读锚点快照/验活
+            updateSystem.UpdateAt<GameBridge.BubbleTheaterSystem>(SystemUpdatePhase.GameSimulation);
         }
 
         public void OnDispose()

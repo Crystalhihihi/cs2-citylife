@@ -101,7 +101,7 @@ namespace CityLife.GameBridge
                 var name = m_NameSystem.GetRenderedLabelName(e);
                 if (string.IsNullOrEmpty(name))
                     continue;
-                m_Entries.Add(new CitizenContext(name, Describe(e, citizen, age, purpose), e));
+                m_Entries.Add(new CitizenContext(name, Describe(EntityManager, e, citizen, age, purpose), e));
             }
             m_Offset++;
             m_Cycle++;
@@ -114,8 +114,31 @@ namespace CityLife.GameBridge
                 Mod.Log.Info("[Pool] 本轮 0 条（市民皆被跳过或城市无人）");
         }
 
-        /// <summary>处境卡组装："退休大爷，在公园里溜达" / "手头紧的上班族，坐公交下班回家路上（去住宅区）" / "学生，打车上学路上（去学校）"。读不到的维度整段省略。</summary>
-        private string Describe(Entity e, Citizen citizen, CitizenAge age, Purpose purpose)
+        /// <summary>
+        /// 对任意市民实体出处境卡（S7 小剧场绑名单后按实体调用；与池采样同一条产线同一口径，
+        /// 一处定义别复制粘贴）。无 Citizen 组件/儿童/MovingAway → null（调用方跳过该参与者）。
+        /// 名字不在此处取——NameSystem 归调用方（EnvironmentDigestSystem 同款惰性解析先例）。
+        /// </summary>
+        internal static string? DescribeCitizen(EntityManager em, Entity e)
+        {
+            if (e == Entity.Null || !em.Exists(e) || !em.HasComponent<Citizen>(e))
+                return null;
+            var citizen = em.GetComponentData<Citizen>(e);
+            // 年龄=状态位低 2 位（AgeBit1=1/AgeBit2=2 → 0-3 直映 CitizenAge）；儿童不上镜跳过
+            var age = (CitizenAge)(int)(citizen.m_State & (CitizenFlags.AgeBit1 | CitizenFlags.AgeBit2));
+            if (age == CitizenAge.Child)
+                return null;
+            var purpose = em.HasComponent<TravelPurpose>(e)
+                ? em.GetComponentData<TravelPurpose>(e).m_Purpose
+                : Purpose.None;
+            if (purpose == Purpose.MovingAway)
+                return null;
+            return Describe(em, e, citizen, age, purpose);
+        }
+
+        /// <summary>处境卡组装："退休大爷，在公园里溜达" / "手头紧的上班族，坐公交下班回家路上（去住宅区）" / "学生，打车上学路上（去学校）"。读不到的维度整段省略。
+        /// static + 显式 EntityManager：池采样（OnUpdate）与小剧场按实体出卡（DescribeCitizen）共用。</summary>
+        private static string Describe(EntityManager em, Entity e, Citizen citizen, CitizenAge age, Purpose purpose)
         {
             // —— 身份（谁）——
             var tourist = (citizen.m_State & CitizenFlags.Tourist) != 0;
@@ -125,35 +148,35 @@ namespace CityLife.GameBridge
             if (tourist) identity = "游客";
             else if (homeless) identity = "无家可归者";
             else if (age == CitizenAge.Elderly) identity = male ? "退休大爷" : "退休大妈";
-            else if (age == CitizenAge.Teen || EntityManager.HasComponent<Student>(e)) identity = "学生";
-            else if (EntityManager.HasComponent<Worker>(e))
-                identity = EntityManager.GetComponentData<Worker>(e).m_Workplace != Entity.Null ? "上班族" : "失业中";
+            else if (age == CitizenAge.Teen || em.HasComponent<Student>(e)) identity = "学生";
+            else if (em.HasComponent<Worker>(e))
+                identity = em.GetComponentData<Worker>(e).m_Workplace != Entity.Null ? "上班族" : "失业中";
             else identity = "无业";
 
             // 家境（仅极端值才提——中不溜的不贴标签；阈值是猜的，[Pool·校准] 日志攒分布后校准）
-            if (!tourist && !homeless && EntityManager.HasComponent<HouseholdMember>(e))
+            if (!tourist && !homeless && em.HasComponent<HouseholdMember>(e))
             {
-                var hh = EntityManager.GetComponentData<HouseholdMember>(e).m_Household;
-                if (EntityManager.HasComponent<Household>(hh))
+                var hh = em.GetComponentData<HouseholdMember>(e).m_Household;
+                if (em.HasComponent<Household>(hh))
                 {
-                    var res = EntityManager.GetComponentData<Household>(hh).m_Resources;
+                    var res = em.GetComponentData<Household>(hh).m_Resources;
                     if (res < 1000) identity = "手头紧的" + identity;
                     else if (res > 20000) identity = "手头宽裕的" + identity;
                 }
             }
 
             // —— 处境（在哪/在干嘛/乘什么/去哪）——
-            var situation = DescribeSituation(e, purpose);
+            var situation = DescribeSituation(em, e, purpose);
             return situation.Length > 0 ? $"{identity}，{situation}" : identity;
         }
 
         /// <summary>处境半句：在室内→"在 XX（里）+动作"；在途中→"乘什么+路程短语+（去 XX）"。</summary>
-        private string DescribeSituation(Entity e, Purpose purpose)
+        private static string DescribeSituation(EntityManager em, Entity e, Purpose purpose)
         {
             // 室内：CurrentBuilding 在挂=在建筑内（行程分发时移除，spike §1）
-            if (EntityManager.HasComponent<CurrentBuilding>(e))
+            if (em.HasComponent<CurrentBuilding>(e))
             {
-                var place = ClassifyBuilding(EntityManager, EntityManager.GetComponentData<CurrentBuilding>(e).m_CurrentBuilding);
+                var place = ClassifyBuilding(em, em.GetComponentData<CurrentBuilding>(e).m_CurrentBuilding);
                 if (place != null)
                 {
                     // "在商店里上班" vs "在住宅区呆着"：片区/开放场所不加"里"
@@ -165,40 +188,40 @@ namespace CityLife.GameBridge
             }
 
             // 在途中：乘什么（步行/未分类=省略）+ 路程短语 + 目的地括注
-            var s = TransportPhrase(e) + JourneyPhrase(purpose);
-            var dest = DestinationPlace(e);
+            var s = TransportPhrase(em, e) + JourneyPhrase(purpose);
+            var dest = DestinationPlace(em, e);
             if (dest != null)
                 s += s.Length > 0 ? $"（去{dest}）" : $"在去{dest}的路上";
             return s;
         }
 
         /// <summary>乘什么：开私家车/打车/坐公交/开货车；步行（行人 agent，无 Vehicle 组件）与未分类载具一律省略。</summary>
-        private string TransportPhrase(Entity e)
+        private static string TransportPhrase(EntityManager em, Entity e)
         {
-            if (!EntityManager.HasComponent<CurrentTransport>(e))
+            if (!em.HasComponent<CurrentTransport>(e))
                 return ""; // 室内/无载具
-            var vehicle = EntityManager.GetComponentData<CurrentTransport>(e).m_CurrentTransport;
-            if (vehicle == Entity.Null || !EntityManager.HasComponent<Game.Vehicles.Vehicle>(vehicle))
+            var vehicle = em.GetComponentData<CurrentTransport>(e).m_CurrentTransport;
+            if (vehicle == Entity.Null || !em.HasComponent<Game.Vehicles.Vehicle>(vehicle))
                 return ""; // 步行：CurrentTransport 指向行人 agent（spike §3：判 Vehicle 是必须前置）
-            if (EntityManager.HasComponent<Game.Vehicles.PersonalCar>(vehicle)) return "开私家车";
-            if (EntityManager.HasComponent<Game.Vehicles.Taxi>(vehicle)) return "打车";
-            if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)) return "坐公交";
-            if (EntityManager.HasComponent<Game.Vehicles.DeliveryTruck>(vehicle)) return "开货车";
+            if (em.HasComponent<Game.Vehicles.PersonalCar>(vehicle)) return "开私家车";
+            if (em.HasComponent<Game.Vehicles.Taxi>(vehicle)) return "打车";
+            if (em.HasComponent<Game.Vehicles.PublicTransport>(vehicle)) return "坐公交";
+            if (em.HasComponent<Game.Vehicles.DeliveryTruck>(vehicle)) return "开货车";
             return ""; // 服务车等其他载具：v1 不分类，省略
         }
 
         /// <summary>目的地建筑类型词（"商店"）；无 Target/非建筑/未分类 → null（该维度省略）。</summary>
-        private string? DestinationPlace(Entity e)
+        private static string? DestinationPlace(EntityManager em, Entity e)
         {
-            if (!EntityManager.HasComponent<Game.Common.Target>(e))
+            if (!em.HasComponent<Game.Common.Target>(e))
                 return null;
-            var target = EntityManager.GetComponentData<Game.Common.Target>(e).m_Target;
+            var target = em.GetComponentData<Game.Common.Target>(e).m_Target;
             if (target == Entity.Null)
                 return null;
             // 目标是租户实体（公司/住户）时映射到其房产建筑（spike §2，TripNeededSystem decomp 行 145-150）
-            if (EntityManager.HasComponent<Game.Buildings.PropertyRenter>(target))
-                target = EntityManager.GetComponentData<Game.Buildings.PropertyRenter>(target).m_Property;
-            return ClassifyBuilding(EntityManager, target);
+            if (em.HasComponent<Game.Buildings.PropertyRenter>(target))
+                target = em.GetComponentData<Game.Buildings.PropertyRenter>(target).m_Property;
+            return ClassifyBuilding(em, target);
         }
 
         /// <summary>建筑类型词：景点/学校/医院/住宅区/商店/工厂/办公楼/公园；非建筑（外部连接等）与未分类 → null。

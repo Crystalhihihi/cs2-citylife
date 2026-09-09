@@ -71,7 +71,13 @@ namespace CityLife.GameBridge
     ///   （PickFor 自带 Any 兜底语义，场合是优先级不是命门），salt=锚点.Index+换文案次数
     ///   （沿用旧轮换语义：同泡连换两条不重样），同帧片段去重（m_UsedThisFrame，帧尾清）；
     ///   占位文案池自 v5.0 降级为池空兜底（开局炉未出时气泡仍有话）。
-    /// 扩展口（正式版待办）：共位小剧场（多泡剧本，§12 #48）、按 BornCycle 新鲜度衰减取泡。
+    /// 小剧场插队（v5.1，S7，§12 #48 多人小剧场段）：SetBubbleText 最前先问 BubbleTheaterSystem——
+    ///   锚点挂在活剧场 → 显示剧本台词而非池片段（TryGetLine 是**纯查询**，绝不推轮次）；
+    ///   轮次推进只走 TickLifecycle 的 OnAnchorRotated 回调（任一参与者气泡到时换下一条→下一人），
+    ///   剧场侧再把新台词经 RefreshAnchorText 推到说话人锚点上（上条读完下条立即接话）。
+    ///   供剧场系统的最小 internal 口：HasAnchor（验活）/SnapshotAnchors（选锚点低频快照）/
+    ///   EnsureAnchor（绑名单建组，带层开关+存在性+Transform+屏内+容量五道闸）/RefreshAnchorText。
+    /// 扩展口（正式版待办）：按 BornCycle 新鲜度衰减取泡。（共位小剧场已落地 S7；连续剧串场归 S8）
     /// </summary>
     public partial class BubbleWorldSpikeSystem : GameSystemBase
     {
@@ -167,6 +173,10 @@ namespace CityLife.GameBridge
         private bool m_LoggedSnippetPool;  // "片段池接通" INFO 只打一次
         private bool m_LoggedPoolEmpty;    // "池空回退" INFO 只打一次（防每帧刷）
         private readonly HashSet<string> m_UsedThisFrame = new(); // 本帧已用片段（同帧去重，帧尾清）
+
+        // 小剧场（v5.1，S7，§12 #48）：句柄懒解析判空（同片段池纪律）；插队取词在 SetBubbleText，
+        // 轮次回调在 TickLifecycle——OnRender 渲染热路径依旧零查询
+        private BubbleTheaterSystem? m_Theater;
 
         // 底板管线（通知图标管线：贴图/网格/缓冲是程序化内容 OnCreate 即建；材质懒取游戏图标材质）
         private bool m_PlateOn = true;
@@ -482,6 +492,68 @@ namespace CityLife.GameBridge
             return false;
         }
 
+        // —— S7 小剧场接口（改动最小化：四个 internal 口 + 生命周期回调，OnRender 热路径不碰）——
+
+        /// <summary>剧场句柄懒解析（主菜单世界系统可能不存在，判空前绝不碰）。</summary>
+        private BubbleTheaterSystem? Theater
+            => m_Theater ??= World.GetExistingSystemManaged<BubbleTheaterSystem>();
+
+        /// <summary>S7 剧场口：锚点是否在场（剧场终了判定"任一参与者锚点离屏即终了"用）。主线程低频。</summary>
+        internal bool HasAnchorOf(Entity e) => HasAnchor(e);
+
+        /// <summary>S7 剧场口：在场锚点快照（实体+类型+模拟坐标）**清空后**写入 dst。
+        /// 供剧场选锚点（候选来自可见人锚点附近的环境点——本表天然全是屏内锚点）。主线程低频专用。</summary>
+        internal void SnapshotAnchors(List<(Entity Anchor, byte Kind, float3 Pos)> dst)
+        {
+            dst.Clear();
+            foreach (var b in m_Bubbles)
+                if (EntityManager.Exists(b.Anchor) && EntityManager.HasComponent<Transform>(b.Anchor))
+                    dst.Add((b.Anchor, b.Kind, EntityManager.GetComponentData<Transform>(b.Anchor).m_Position));
+        }
+
+        /// <summary>S7 剧场口：确保实体有气泡锚点（在场→true；否则过五道闸——层开/存在/有 Transform/
+        /// 屏内（当前相机+分锚点距离档）/容量未满——立即按 Collect 同路径建组）。建组走 SetBubbleText，
+        /// 剧场若已激活则插队分支直接给首句台词。任一闸不过 → false（剧场开播中止）。</summary>
+        internal bool EnsureAnchor(Entity e, byte kind)
+        {
+            if (!m_Active || !MasterOn)
+                return false; // 层关着锚了也看不见
+            if (HasAnchor(e))
+                return true;
+            if (m_Bubbles.Count >= k_MaxBubbles)
+                return false;
+            if (!EntityManager.Exists(e) || !EntityManager.HasComponent<Transform>(e))
+                return false;
+            var cam = m_CameraUpdate.activeCamera != null ? m_CameraUpdate.activeCamera
+                : Camera.main != null ? Camera.main
+                : Camera.allCameras.Length > 0 ? Camera.allCameras[0] : null;
+            if (cam == null || !OnScreen(cam, e, kind))
+                return false;
+            var b = new TrackedBubble { Anchor = e, Kind = kind, TextIdx = 0 };
+            SetBubbleText(ref b, 0);
+            b.NextAt = UnityEngine.Time.time + HoldFor(e.Index, 0, b.Text.Length); // 时长依赖文案，须在 SetBubbleText 之后
+            m_Bubbles.Add(b);
+            return true;
+        }
+
+        /// <summary>S7 剧场口：立即重取该锚点文案并重启驻留计时（剧场"上条读完下条接话"用）。
+        /// <b>不</b>推剧场轮次——推进只走 TickLifecycle 的 OnAnchorRotated（本方法内 SetBubbleText →
+        /// TryGetLine 是纯查询，无递归风险）。锚点不在场则空转。</summary>
+        internal void RefreshAnchorText(Entity anchor)
+        {
+            for (int i = 0; i < m_Bubbles.Count; i++)
+            {
+                if (m_Bubbles[i].Anchor != anchor)
+                    continue;
+                var b = m_Bubbles[i];
+                b.TextIdx++;
+                SetBubbleText(ref b, b.TextIdx);
+                b.NextAt = UnityEngine.Time.time + HoldFor(b.Anchor.Index, b.TextIdx, b.Text.Length);
+                m_Bubbles[i] = b;
+                return;
+            }
+        }
+
         // —— 生命周期：各气泡独立时钟（按字数缩放 + 确定性错相，绝不同时切换）——
         private void TickLifecycle()
         {
@@ -494,6 +566,9 @@ namespace CityLife.GameBridge
                 if (now >= b.NextAt)
                 {
                     b.TextIdx++;
+                    // S7 小剧场：任一参与者气泡到时换下一条→下一人（剧场内部纯推进，
+                    // 再把新台词 RefreshAnchorText 到说话人锚点上）；非剧场锚点空转
+                    Theater?.OnAnchorRotated(b.Anchor);
                     SetBubbleText(ref b, b.TextIdx);
                     b.NextAt = now + HoldFor(b.Anchor.Index, b.TextIdx, b.Text.Length);
                     m_Bubbles[i] = b;
@@ -501,10 +576,19 @@ namespace CityLife.GameBridge
             }
         }
 
-        /// <summary>换文案唯一入口（采样建组/生命周期轮换都走这）：优先闲聊炉片段池（v5.0 主源），
-        /// 取不到回退占位文案池（池空兜底——开局炉未出时气泡仍有话）。</summary>
+        /// <summary>换文案唯一入口（采样建组/生命周期轮换/剧场建组与推轮都走这）：
+        /// 最先小剧场插队（v5.1：锚点挂活剧场 → 剧本台词，纯查询不推轮次），
+        /// 其次闲聊炉片段池（v5.0 主源），取不到回退占位文案池（池空兜底——开局炉未出时气泡仍有话）。</summary>
         private void SetBubbleText(ref TrackedBubble b, int textIdx)
         {
+            var theater = Theater;
+            if (theater != null && theater.TryGetLine(b.Anchor, out var theaterLine))
+            {
+                b.Text = theaterLine;
+                if (m_BaseTextMaterial != null)
+                    EnsureBaked(b.Text, b.Kind);
+                return;
+            }
             if (!TryPickSnippet(b, textIdx, out var text))
             {
                 // 池空兜底（占位文案池）：锚点+次数取模轮换（旧语义，确定性错开；公园锚点有专池）

@@ -100,13 +100,13 @@ namespace CityLife.GameBridge
             var statics = new NativeList<Entity>(64, Allocator.Temp);
             var staticTree = m_ObjectSearch.GetStaticSearchTree(readOnly: true, out var depsStatic);
             depsStatic.Complete();
-            var itStatic = new NearbyEntityIterator(queryBounds, center.xz, statics);
+            var itStatic = new NearbyEntityIterator(queryBounds, center.xz, k_Radius, statics);
             staticTree.Iterate(ref itStatic);
 
             var moving = new NativeList<Entity>(32, Allocator.Temp);
             var movingTree = m_ObjectSearch.GetMovingSearchTree(readOnly: true, out var depsMoving);
             depsMoving.Complete();
-            var itMoving = new NearbyEntityIterator(queryBounds, center.xz, moving);
+            var itMoving = new NearbyEntityIterator(queryBounds, center.xz, k_Radius, moving);
             movingTree.Iterate(ref itMoving);
 
             var routeStops = new NativeList<Entity>(8, Allocator.Temp);
@@ -130,6 +130,32 @@ namespace CityLife.GameBridge
                 Mod.Log.Info($"[环境圈] 摘要样例：({center.x:F0},{center.z:F0}) → {result}");
             }
             return result;
+        }
+
+        /// <summary>
+        /// 半径收集（S7 小剧场选锚点/绑名单用）：center 半径 radius 内的 Objects static 树实体
+        /// （建筑/车站——车站是 ObjectPrefab 物件，spike §4）与 moving 树实体（离道行人 agent + 载具，
+        /// 带 Game.Creatures.Resident 的才是行人，调用方再滤）。结果**追加**进调用方给的表（自行清空）。
+        /// 主线程低频点专用（组炉/组剧场级），禁入热路径；游戏未就绪=两表原样（不加任何东西）。
+        /// </summary>
+        public void CollectAround(float3 center, float radius, NativeList<Entity> statics, NativeList<Entity> movers)
+        {
+            m_ObjectSearch ??= World.GetExistingSystemManaged<Game.Objects.SearchSystem>();
+            if (m_ObjectSearch == null)
+                return;
+            // 查询盒 Y 轴放宽到近乎全程——四叉树按 XZ 组织，放宽 Y 即纯水平半径语义
+            var queryBounds = new Bounds3(
+                new float3(center.x - radius, -10000f, center.z - radius),
+                new float3(center.x + radius, 10000f, center.z + radius));
+            // 读树纪律（spike §6 注意③）：readOnly 取树 + 依赖 Complete，主线程直查
+            var staticTree = m_ObjectSearch.GetStaticSearchTree(readOnly: true, out var depsStatic);
+            depsStatic.Complete();
+            var itStatic = new NearbyEntityIterator(queryBounds, center.xz, radius, statics);
+            staticTree.Iterate(ref itStatic);
+            var movingTree = m_ObjectSearch.GetMovingSearchTree(readOnly: true, out var depsMoving);
+            depsMoving.Complete();
+            var itMoving = new NearbyEntityIterator(queryBounds, center.xz, radius, movers);
+            movingTree.Iterate(ref itMoving);
         }
 
         /// <summary>聚类蒸馏（执行层确定性）：戏值排序 事件&gt;景点&gt;人气(候车/人挤人)&gt;店铺聚类，取前 maxPoints 条逐条截 15 字。</summary>
@@ -162,7 +188,7 @@ namespace CityLife.GameBridge
                 }
                 if (EntityManager.HasComponent<Game.Prefabs.SignatureBuildingData>(e) && signaturePoint == null)
                 {
-                    var name = RenderedName(e);
+                    var name = RenderedName(m_NameSystem, e);
                     signaturePoint = name != null ? $"就在「{name}」旁边" : "旁边有个景点";
                     continue; // 景点单独优先报，不进聚类计数
                 }
@@ -205,7 +231,7 @@ namespace CityLife.GameBridge
             }
             if (bestKind != null)
             {
-                var name = ShopNameOf(clusterRep[bestKind]);
+                var name = ShopNameOf(EntityManager, m_NameSystem, clusterRep[bestKind]);
                 var suffix = ClusterSuffix(bestKind);
                 clusterPoint = name != null ? $"「{name}」等{bestCount}{suffix}" : $"旁边有{bestCount}{suffix}";
             }
@@ -234,28 +260,29 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>真实店名：租户公司名优先（EntityAnchorSystem 先例：NameSystem.GetRenderedLabelName(company)），
-        /// 无名回退建筑自身渲染名，再无名 → null（聚类点退纯计数文案）。</summary>
-        private string? ShopNameOf(Entity building)
+        /// 无名回退建筑自身渲染名，再无名 → null（聚类点退纯计数文案）。
+        /// internal static：S7 小剧场的场景卡取店名共用这一处定义（别复制粘贴）。</summary>
+        internal static string? ShopNameOf(EntityManager em, Game.UI.NameSystem? nameSystem, Entity building)
         {
-            if (m_NameSystem == null)
+            if (nameSystem == null)
                 return null;
-            if (EntityManager.HasBuffer<Renter>(building))
+            if (em.HasBuffer<Renter>(building))
             {
-                var renters = EntityManager.GetBuffer<Renter>(building);
+                var renters = em.GetBuffer<Renter>(building);
                 for (int i = 0; i < renters.Length; i++)
                 {
-                    var name = m_NameSystem.GetRenderedLabelName(renters[i].m_Renter);
+                    var name = nameSystem.GetRenderedLabelName(renters[i].m_Renter);
                     if (!string.IsNullOrEmpty(name))
                         return name;
                 }
             }
-            return RenderedName(building);
+            return RenderedName(nameSystem, building);
         }
 
-        /// <summary>渲染名兜底（NameSystem 缺席/空名 → null，不硬造）。</summary>
-        private string? RenderedName(Entity entity)
+        /// <summary>渲染名兜底（NameSystem 缺席/空名 → null，不硬造）。internal static：S7 场景卡共用。</summary>
+        internal static string? RenderedName(Game.UI.NameSystem? nameSystem, Entity entity)
         {
-            var name = m_NameSystem?.GetRenderedLabelName(entity);
+            var name = nameSystem?.GetRenderedLabelName(entity);
             return string.IsNullOrEmpty(name) ? null : name;
         }
 
@@ -281,12 +308,14 @@ namespace CityLife.GameBridge
         {
             private Bounds3 m_QueryBounds;
             private float2 m_Center;
+            private float m_Radius;   // 精判圆半径（S7 起按调用方传入，BuildDigest 用 k_Radius）
             private NativeList<Entity> m_Results;
 
-            public NearbyEntityIterator(Bounds3 queryBounds, float2 center, NativeList<Entity> results)
+            public NearbyEntityIterator(Bounds3 queryBounds, float2 center, float radius, NativeList<Entity> results)
             {
                 m_QueryBounds = queryBounds;
                 m_Center = center;
+                m_Radius = radius;
                 m_Results = results;
             }
 
@@ -295,7 +324,7 @@ namespace CityLife.GameBridge
             public void Iterate(QuadTreeBoundsXZ bounds, Entity item)
             {
                 float2 d = MathUtils.Center(bounds.m_Bounds).xz - m_Center;
-                if (math.dot(d, d) <= k_Radius * k_Radius)
+                if (math.dot(d, d) <= m_Radius * m_Radius)
                     m_Results.Add(item);
             }
         }

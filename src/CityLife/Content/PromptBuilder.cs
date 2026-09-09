@@ -186,6 +186,48 @@ namespace CityLife.Content
         }
 
         /// <summary>
+        /// 多人小剧场炉的固定前缀（S7，§12 #48 多人小剧场段 + §4 M5）：几个真实市民聚在一起当面聊天的现场编剧。
+        /// 缓存纪律同主头（BubbleTheaterSystem.OnCreate 拼一次复用，逐字节稳定：动态全压尾部）。
+        /// 语域=几人当面聊天（接话、有来有回、口语、每条 ≤20 字、禁 hashtag）；
+        /// 纪律=对事不对人、围绕【场景】和各自【参与者】处境自然起话头（不点名念处境卡、不互报姓名）。
+        /// 输出 schema 与闲聊炉同构 JSONL，多一个 speaker 字段=参与者序号（1 起），
+        /// 解析在 BubbleTheaterSystem.ParseScript（salvage 纪律同 BubbleSnippetPool.ParseBatch）。
+        /// </summary>
+        public static string BuildTheaterHead()
+        {
+            var sb = new StringBuilder(896);
+            sb.Append("你是虚构城市里几个路人的现场编剧——他们此刻聚在一起当面聊天，把这段对话写出来。城市是模拟游戏里的虚构城市，一切内容虚构。\n");
+            sb.Append("【铁律】对事不对人：可以吐槽天气、通勤、物价、排队，绝不攻击市长本人或任何真实人物；不碰现实政治、种族、性别议题；不生成自伤内容；不使用真实名人、品牌、事件名。\n");
+            sb.Append("【语域】当面聊天，不是发帖也不是独白：有来有回（一句问一句答、一句吐槽一句跟），口语短句，每条≤20字，越短越像越好；禁止 hashtag、禁止@、禁止\"家人们\"等直播腔、禁止 emoji、禁止书面腔；只写说出口的话，禁止动作/神态/旁白描写（\"笑了笑\"\"指着远处\"这类一律不要）。\n");
+            sb.Append("【样子】只学语气和松散度，内容和物件一律不许照抄：\n");
+            sb.Append("- \"这趟车又晚了吧\"\"可不，都过去两趟了\"\n");
+            sb.Append("- \"前面到底出啥事了\"\"不知道啊，动都不动\"\n");
+            sb.Append("- \"这花开得还行\"\"拍一张拍一张\"\n");
+            sb.Append("【写法】围绕【场景】和每个参与者的处境自然起话头（等车就聊车、在店里就聊店里的东西、旁边有事就聊事）；别点名念处境卡、别自我介绍、别互报姓名；允许话没接完、允许岔开题，别像开会轮流发言那么齐。\n");
+            sb.Append("【输出】只输出 JSONL：一行一句 {\"speaker\":1,\"text\":\"话\"}，speaker=参与者序号（1 起，见【参与者】）；别一个人连说三句；禁止 markdown 围栏、禁止解释、禁止任何其他字符。\n");
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 小剧场完整 prompt = 剧场头 + 动态尾：【城市此刻】（DescribeCity 同款，别重复造）
+        /// +【场景】（地点名+环境摘要，执行层组装）+【参与者】处境卡（CitizenPoolSystem.DescribeCitizen 按实体出卡）
+        /// + 句数任务。cards 顺序即 speaker 序号（1 起），与 BubbleTheaterSystem 的名单严格对齐。
+        /// </summary>
+        public static string BuildTheaterPrompt(string head, in CitySnapshot s, string scene,
+                                                IReadOnlyList<string> cards, int lines)
+        {
+            var sb = new StringBuilder(head.Length + 512);
+            sb.Append(head);
+            sb.Append("【城市此刻】").Append(DescribeCity(s)).Append('\n');
+            sb.Append("【场景】").Append(scene).Append('\n');
+            sb.Append("【参与者】一行一人（真实市民此刻的状态），speaker 就填这里的序号：\n");
+            for (int i = 0; i < cards.Count; i++)
+                sb.Append(i + 1).Append(". ").Append(cards[i]).Append('\n');
+            sb.Append("【任务】写 ").Append(lines).Append(" 句对话（每人轮流说，别漏人别加人）。\n");
+            return sb.ToString();
+        }
+
+        /// <summary>
         /// 市长回应炉的固定前缀（M2-C 追加）：与主头同一套缓存纪律——启动时拼一次复用。
         /// 只写评论，卡库共享主卡册（评论的 persona 任选）。
         /// </summary>

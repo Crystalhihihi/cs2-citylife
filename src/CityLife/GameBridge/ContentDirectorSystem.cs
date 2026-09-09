@@ -28,6 +28,7 @@ namespace CityLife.GameBridge
         private CityChangeSystem m_ChangeSystem = default!;
         private Content.PostPool m_Pool = default!;
         private List<Content.Persona> m_Personas = default!;
+        private Content.TopicReservoir m_Topics = default!;    // Daily 话题库（S2，§12 #48：内置货架 + 社区 topics.jsonl + 生成源衰减）
         private List<string> m_Usernames = default!;
         private string m_Head = "";
         private List<Content.Assignment> m_CurrentAssigned = new();
@@ -60,7 +61,7 @@ namespace CityLife.GameBridge
             m_ChangeSystem = World.GetOrCreateSystemManaged<CityChangeSystem>();
             m_Pool = new Content.PostPool();
 
-            // 风格卡册 + 全网名字池（ModsSettings/CityLife/ 下，schema 见 Persona.cs 头注释）
+            // 风格卡册 + 全网名字池 + Daily 话题库（ModsSettings/CityLife/ 下，schema 见 Persona.cs / TopicReservoir.cs 头注释）
             var cfgDir = System.IO.Path.GetFullPath(System.IO.Path.Combine(
                 System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
                 @"..\LocalLow\Colossal Order\Cities Skylines II\ModsSettings\CityLife"));
@@ -68,6 +69,8 @@ namespace CityLife.GameBridge
                 System.IO.Path.Combine(cfgDir, "personas.jsonl"), msg => Mod.Log.Info(msg));
             m_Usernames = Content.PersonaBook.LoadUsernames(
                 System.IO.Path.Combine(cfgDir, "usernames.jsonl"), msg => Mod.Log.Info(msg));
+            m_Topics = Content.TopicReservoir.Load(
+                System.IO.Path.Combine(cfgDir, "topics.jsonl"), msg => Mod.Log.Info(msg)); // 装载失败内置池兜底，不致命
             m_Head = Content.PromptBuilder.BuildHead(m_Personas); // 拼一次缓存复用（缓存纪律）
             ReplyHead = Content.PromptBuilder.BuildReplyHead(m_Personas); // 市长回应炉固定头（同纪律）
             Content.ModSettings.Load(cfgDir, msg => Mod.Log.Info(msg)); // 玩家开关（t0Fallback 等）
@@ -492,13 +495,13 @@ namespace CityLife.GameBridge
             return contexts;
         }
 
-        /// <summary>每席位话题（分区制）：仅 Daily 炉给题；突发/请愿等主题炉全炉一题，返回 null 不占位。</summary>
+        /// <summary>每席位话题（TopicReservoir 分区制）：仅 Daily 炉给题；突发/请愿等主题炉全炉一题，返回 null 不占位。</summary>
         private List<string?> AssignSlotTopics()
         {
             var list = new List<string?>(m_CurrentAssigned.Count);
             var daily = m_BatchTopic == Content.Topic.Daily;
             for (int i = 0; i < m_CurrentAssigned.Count; i++)
-                list.Add(daily ? Content.PromptBuilder.DailyTopicFor(m_BatchCount, i) : null);
+                list.Add(daily ? m_Topics.TopicFor(m_BatchCount, i) : null);
             return list;
         }
 

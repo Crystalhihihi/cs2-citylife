@@ -28,9 +28,9 @@ namespace CityLife.Content
     }
 
     /// <summary>
-    /// 风格卡册：内置卡包（中文首发；英文平行包随发布补，§12 #21）+ 玩家覆写 + 全网名字池。
-    /// 加载：内置 → personas.jsonl（同 id 覆写/新 id 追加）；usernames.jsonl（一行一个网名）进全局名字池，
-    /// 与各卡自有候选名混抽——首发版向社区征集网名即更新此文件（社区贡献零门槛入口）。
+    /// 风格卡册：内置卡包（中文首发；英文平行包随发布补，§12 #21）+ 玩家 personas.jsonl + 全网名字池。
+    /// 加载：内置 → personas.jsonl 默认**追加**；文件首行 {"mode":"replace"} 才整册替换（与 topics.jsonl 同口径，§12 #48）；
+    /// usernames.jsonl（一行一个网名）进全局名字池，与各卡自有候选名混抽——首发版向社区征集网名即更新此文件（社区贡献零门槛入口）。
     /// </summary>
     public static class PersonaBook
     {
@@ -49,27 +49,63 @@ namespace CityLife.Content
             "{\"id\":\"crystal\",\"names\":\"Crystalhihihi\",\"style\":\"城市头号迷妹，再小的变化也能发现萌点，开心落在一草一木上，不喊口号\",\"tone\":\"default\",\"always\":\"true\"}",
         };
 
-        /// <summary>加载卡册：内置 + 覆写文件（可空）。任何解析问题都降级跳过，绝不让一张坏卡炸掉整册。</summary>
+        /// <summary>
+        /// 加载卡册：内置卡包 + 玩家 personas.jsonl。默认**追加**进内置卡册（社区加卡零门槛）；
+        /// 文件第一条有效行（非空非注释）是 {"mode":"replace"} 才整册替换内置——社区"完整卡包"的口子
+        /// （与 topics.jsonl 同口径，§12 #48）。任何解析问题都降级跳过，绝不让一张坏卡炸掉整册；
+        /// 文件缺失/读取失败/replace 出空册一律回退内置兜底，不致命。
+        /// </summary>
         public static List<Persona> Load(string? overridePath, Action<string> log)
         {
-            var builtin = Parse(string.Join("\n", k_Builtin), log, "内置卡包");
+            var builtin = Parse(string.Join("\n", k_Builtin), out _);
             var book = new List<Persona>(builtin);
             if (!string.IsNullOrEmpty(overridePath) && File.Exists(overridePath))
             {
-                var custom = Parse(File.ReadAllText(overridePath), log, "玩家卡包");
-                var added = 0;
-                foreach (var p in custom)
+                try
                 {
-                    var idx = book.FindIndex(b => b.Id == p.Id);
-                    if (idx >= 0) book[idx] = p; else { book.Add(p); added++; }
+                    var text = File.ReadAllText(overridePath);
+                    var custom = Parse(text, out var skipped);
+                    if (IsReplaceMode(text))
+                    {
+                        if (custom.Count > 0)
+                        {
+                            book = custom;
+                            log($"[Persona] 卡册就绪：replace 模式——玩家整册 {custom.Count} 张替换内置（非法行跳过 {skipped} 张）");
+                        }
+                        else
+                        {
+                            log($"[Persona] 卡册就绪：replace 模式但玩家包 0 张有效——保留内置 {builtin.Count} 张兜底（非法行跳过 {skipped} 张）");
+                        }
+                    }
+                    else
+                    {
+                        book.AddRange(custom);
+                        log($"[Persona] 卡册就绪：内置 {builtin.Count} 张 + 玩家追加 {custom.Count} 张（非法行跳过 {skipped} 张）");
+                    }
                 }
-                log($"[Persona] 卡册就绪：内置 {builtin.Count} 张 + 玩家新增 {added} 张/覆写 {custom.Count - added} 张");
+                catch (Exception e)
+                {
+                    log($"[Persona] 卡册就绪：玩家卡包读取失败，内置 {builtin.Count} 张兜底：{e.Message}");
+                }
             }
             else
             {
-                log($"[Persona] 卡册就绪：内置 {builtin.Count} 张（无玩家覆写文件）");
+                log($"[Persona] 卡册就绪：内置 {builtin.Count} 张（无玩家卡包文件）");
             }
             return book;
+        }
+
+        /// <summary>replace 判定：文件第一条有效行（非空非注释）是 {"mode":"replace"}。</summary>
+        private static bool IsReplaceMode(string jsonl)
+        {
+            foreach (var raw in jsonl.Split('\n'))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith("#") || line.StartsWith("//"))
+                    continue;
+                return JsonMini.GetStr(line, "mode") == "replace";
+            }
+            return false;
         }
 
         /// <summary>加载全网名字池（usernames.jsonl，一行一个网名；# 开头为注释）。文件不存在返回空表。</summary>
@@ -96,14 +132,18 @@ namespace CityLife.Content
             return names;
         }
 
-        private static List<Persona> Parse(string jsonl, Action<string> log, string source)
+        /// <summary>解析 JSONL 卡包：缺 id/style 的行跳过并计入 skipped（由 Load 一行汇总，不刷屏）；{"mode":…} 指令行不算卡。</summary>
+        private static List<Persona> Parse(string jsonl, out int skipped)
         {
             var list = new List<Persona>();
+            skipped = 0;
             foreach (var raw in jsonl.Split('\n'))
             {
                 var line = raw.Trim();
                 if (line.Length == 0 || line.StartsWith("#") || line.StartsWith("//"))
                     continue;
+                if (JsonMini.GetStr(line, "mode") != null)
+                    continue; // 模式指令行，不是卡
 
                 var p = new Persona
                 {
@@ -122,7 +162,7 @@ namespace CityLife.Content
 
                 if (p.Id.Length == 0 || p.Style.Length == 0)
                 {
-                    log($"[Persona] {source}：跳过一张缺 id/style 的卡：{line.Substring(0, System.Math.Min(40, line.Length))}…");
+                    skipped++;
                     continue;
                 }
                 list.Add(p);

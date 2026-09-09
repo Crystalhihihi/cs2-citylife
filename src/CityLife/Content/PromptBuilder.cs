@@ -148,7 +148,7 @@ namespace CityLife.Content
 
         /// <summary>
         /// 完整批量 prompt = 稳定头 + 动态尾。动态部分：城市此刻/本轮话题/分配/锚点/前情/突发/市长说/已发禁重复。
-        /// recent = 最近已发正文（去重反馈）；seed = Daily 话题轮换；anchors/prevPosts 与 assigned 等长对齐（可空）；
+        /// recent = 最近已发正文（去重反馈）；seed = 处境池轮换（Daily 话题抽题已迁 TopicReservoir）；anchors/prevPosts 与 assigned 等长对齐（可空）；
         /// breaking = 突发事件文本（非空则本炉是热议串）；mayorContext = 市长发言（市民回应用，写回是 M4）。
         /// </summary>
         public static string BuildBatch(string head, in CitySnapshot s, Topic topic,
@@ -175,7 +175,7 @@ namespace CityLife.Content
                 // 处境：市民语境池（真实市民的当下）优先，池空回退罐头处境池
                 var ctx = contexts != null && i < contexts.Count ? contexts[i] : null;
                 sb.Append('（').Append(ctx ?? k_Contexts[(int)((seed + (uint)i) % (uint)k_Contexts.Length)]).Append('）');
-                // 话题：每席位独立抽题（分区制——真实社区一帖一题，2026-08-20 玩家定案）
+                // 话题：每席位独立抽题（TopicReservoir 分区制——真实社区一帖一题，2026-08-20 玩家定案）
                 var slotTopic = topics != null && i < topics.Count ? topics[i] : null;
                 if (!string.IsNullOrEmpty(slotTopic))
                 {
@@ -246,26 +246,8 @@ namespace CityLife.Content
             return $"人口{FuzzPeople(s.Citizens)}，失业率{Qual(s.UnemploymentPercent, 5f, 12f)}，幸福度{Qual(s.Happiness, 40f, 70f)}，天气{weather}，季节{season}，时刻{s.HourOfDay}点";
         }
 
-        // Daily 话题分区池（2026-08-20 玩家用小黑盒分区图定案：真实社区是一帖一题，不是整炉一题）：
-        // 分区制——每席位独立抽（分区,话题），"无意义话题"（猫/饭/快递）与"实际的事"（锚点/突发）混排
-        private static readonly (string Zone, string[] Topics)[] k_DailyZones =
-        {
-            ("美食", new[] { "一日三餐吃什么", "夜宵哪家强", "楼下新店的尝鲜报告", "外卖红包又没了" }),
-            ("通勤", new[] { "通勤路上那些事", "停车又绕了三圈", "公交挤成相片", "油价/电费又动了" }),
-            ("职场", new[] { "加班那点事", "发工资前后的日子", "办公室八卦", "摸鱼心得" }),
-            ("家里", new[] { "家里长短", "娃的作业/学校", "楼上装修的电钻声", "小区快递柜又满了" }),
-            ("萌宠", new[] { "家里的猫/狗今天又干了什么", "楼下那只流浪猫" }),
-            ("消费", new[] { "快递又卡半路", "最近买的好东西/踩的坑", "换季添件衣服" }),
-            ("娱乐", new[] { "最近在追的剧或玩的游戏", "周末打算怎么过", "阳台种点什么好" }),
-            ("沙雕", new[] { "今天的糗事", "随手拍的离谱一幕", "隔壁邻居的八卦", "健身房办卡纠结" }),
-        };
-
-        /// <summary>每席位话题：分区按 batch+slot 轮转，区内话题错开——整炉十帖十个题。</summary>
-        public static string DailyTopicFor(uint batch, int slot)
-        {
-            var zone = k_DailyZones[(int)((batch + (uint)slot) % k_DailyZones.Length)];
-            return zone.Topics[(int)((batch + (uint)(slot * 3 + 1)) % zone.Topics.Length)];
-        }
+        // Daily 话题分区池已迁入 TopicReservoir（S2，§12 #48 社区拓展段）：内置货架原样搬迁一座不动，
+        // 社区 topics.jsonl 追加/replace、生成源新鲜度衰减都在那里；每席位抽题走 TopicReservoir.TopicFor(batch, slot)
 
         // 处境池（2026-08-20 治僵硬第二刀：模型"凭空发帖"必僵——给个此刻状态就有现场感）；
         // 执行层按 seed+席位轮换，与话题/锚点解耦——锚点管"说什么"，处境管"在干嘛说"

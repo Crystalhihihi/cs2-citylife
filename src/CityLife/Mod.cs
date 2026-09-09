@@ -105,6 +105,9 @@ namespace CityLife
             // 市民语境池（作者署名+处境：每个作者是一个真实市民的当下——"创造条件，不做限制"）
             updateSystem.UpdateAt<GameBridge.CitizenPoolSystem>(SystemUpdatePhase.GameSimulation);
 
+            // 环境圈摘要（S6，§12 #48）：四叉树半径查询+聚类蒸馏"旁边有什么"，供闲聊炉组炉时缀处境卡
+            updateSystem.UpdateAt<GameBridge.EnvironmentDigestSystem>(SystemUpdatePhase.GameSimulation);
+
             // 闲聊炉（S4，§12 #48）：3-5 游戏分钟一炉产气泡片段入 BubbleSnippetPool
             // （展示零 token；S5 才接气泡世界层，本系统只备池）
             updateSystem.UpdateAt<GameBridge.BubbleChatterSystem>(SystemUpdatePhase.GameSimulation);

@@ -4,6 +4,8 @@ using Game;
 using Game.Citizens;
 using Game.Simulation;
 using Unity.Entities;
+using Unity.Mathematics;
+using Transform = Game.Objects.Transform;
 
 namespace CityLife.GameBridge
 {
@@ -12,6 +14,8 @@ namespace CityLife.GameBridge
     /// × 话题库配题（TopicReservoir）×【城市此刻】（TopicRadarSystem 快照）喂给 LLM，
     /// 产出"张嘴说话"语域的气泡片段入 BubbleSnippetPool——展示零 token：池是缓冲，
     /// S5 接气泡世界层后刷屏不再花 token（本任务不接世界层，只备好池子）。
+    /// S6 环境圈摘要：组炉时对每张被选中的处境卡按市民实体现位查一次 EnvironmentDigestSystem.BuildDigest
+    /// （40m 半径四叉树聚类蒸馏），非空缀"｜旁边：X、Y"进卡的 prompt 文本；每炉查询次数=卡片数（≤14），不进热路径。
     ///
     /// 节拍锚游戏时间（#48：与信息流同尺——暂停=零成本、倍速=生成消费同速放大）：
     /// Now = SimulationSystem.frameIndex（模拟 tick，暂停即停走），游戏分钟 = TicksPerHour/60
@@ -40,6 +44,7 @@ namespace CityLife.GameBridge
         private CitizenPoolSystem m_CitizenPool = default!;
         private ContentDirectorSystem m_Director = default!; // 话题库持有方（别重复造，配题抽同一货架）
         private SimulationSystem m_SimulationSystem = default!;
+        private EnvironmentDigestSystem m_Environment = default!; // S6 环境圈摘要：组炉时逐卡查"旁边有什么"
 
         private readonly Content.BubbleSnippetPool m_Pool = new();
         private string m_Head = "";
@@ -66,6 +71,7 @@ namespace CityLife.GameBridge
             m_CitizenPool = World.GetOrCreateSystemManaged<CitizenPoolSystem>();
             m_Director = World.GetOrCreateSystemManaged<ContentDirectorSystem>();
             m_SimulationSystem = World.GetOrCreateSystemManaged<SimulationSystem>();
+            m_Environment = World.GetOrCreateSystemManaged<EnvironmentDigestSystem>();
             m_Head = Content.PromptBuilder.BuildChatterHead(); // 固定头拼一次缓存复用（逐字节稳定纪律）
         }
 
@@ -114,10 +120,24 @@ namespace CityLife.GameBridge
             m_CurrentZones.Clear();
             var stride = Math.Max(1, entries.Count / count);
             var start = (int)(m_ForgeCount % (uint)entries.Count);
+            var digested = 0; // 本炉带环境摘要的卡数（[环境圈] 每炉一行计数用）
             for (int k = 0; k < count; k++)
             {
                 var entry = entries[(start + k * stride) % entries.Count];
-                cards.Add(entry.Context);
+                // S6 环境圈摘要（§12 #48 场景为调料）：对卡的市民实体现位查一次 40m 半径，
+                // 非空则缀"｜旁边：X、Y"。每炉查询次数=卡片数（≤14），3-5 游戏分钟一炉，不进热路径
+                var card = entry.Context;
+                var pos = CitizenPosition(entry.Entity);
+                if (pos.HasValue)
+                {
+                    var digest = m_Environment.BuildDigest(pos.Value);
+                    if (digest.Length > 0)
+                    {
+                        card += "｜旁边：" + digest;
+                        digested++;
+                    }
+                }
+                cards.Add(card);
                 var topic = m_Director.Topics.TopicFor(m_ForgeCount, k); // 每张配一题（话题库分区轮转+新鲜度加权）
                 topics.Add(topic);
                 m_CurrentZones.Add(ZoneOf(topic)); // 分区回填备收炉对齐（执行层查表，不赌模型复述）
@@ -129,6 +149,7 @@ namespace CityLife.GameBridge
             m_ForgePending = true;
             m_ForgeSince = DateTime.UtcNow;
             Mod.Log.Info($"[闲聊炉] 开炉：处境卡 {count} 张（第 {m_ForgeCount + 1} 炉，池存 {m_Pool.Count}）");
+            Mod.Log.Info($"[环境圈] 本炉摘要：{digested} 条非空（共 {count} 卡）"); // 每炉最多一行计数（首炉样例行在 EnvironmentDigestSystem）
 
             m_ForgeCount++;
             m_NextForgeAt = Now + (3u + m_ForgeCount % 3u) * TicksPerMinute; // 3-4-5 游戏分钟轮换
@@ -165,6 +186,34 @@ namespace CityLife.GameBridge
                 if (entries[i].Topic == topic)
                     return entries[i].Zone;
             return "";
+        }
+
+        /// <summary>
+        /// 市民现位（S6 环境圈圆心）：在建筑内 → 建筑位置（CurrentBuilding 仅室内挂，spike §1）；
+        /// 在路上 → CurrentTransport 所指行人 agent/载具的位置（spike §3）；兜底市民自身 Transform
+        /// （市民本体是逻辑实体一般没有，防版本差异留着）；实体已死/读不到 → null（该卡不缀摘要）。
+        /// 全程 HasComponent 先行：池子采样到组炉之间市民可能已搬走（CitizenContext.Entity 是采样时快照）。
+        /// </summary>
+        private float3? CitizenPosition(Entity citizen)
+        {
+            if (citizen == Entity.Null || !EntityManager.Exists(citizen))
+                return null;
+            if (EntityManager.HasComponent<CurrentBuilding>(citizen))
+            {
+                var b = EntityManager.GetComponentData<CurrentBuilding>(citizen).m_CurrentBuilding;
+                if (EntityManager.HasComponent<Transform>(b))
+                    return EntityManager.GetComponentData<Transform>(b).m_Position;
+                return null; // 建筑读不到位置（外部连接等）：不退市民自身坐标（可能不是现位）
+            }
+            if (EntityManager.HasComponent<CurrentTransport>(citizen))
+            {
+                var t = EntityManager.GetComponentData<CurrentTransport>(citizen).m_CurrentTransport;
+                if (t != Entity.Null && EntityManager.HasComponent<Transform>(t))
+                    return EntityManager.GetComponentData<Transform>(t).m_Position;
+            }
+            if (EntityManager.HasComponent<Transform>(citizen))
+                return EntityManager.GetComponentData<Transform>(citizen).m_Position;
+            return null;
         }
     }
 }

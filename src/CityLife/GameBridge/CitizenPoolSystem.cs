@@ -6,16 +6,20 @@ using Unity.Mathematics;
 
 namespace CityLife.GameBridge
 {
-    /// <summary>一条真实市民语境：显示名 + 处境卡（"手头紧的上班族，坐公交下班回家路上（去住宅区）"）。内容导演按席位分配给模型当写作处境。结构保持 {Name, Context} 不变，消费处零改动。</summary>
+    /// <summary>一条真实市民语境：显示名 + 处境卡（"手头紧的上班族，坐公交下班回家路上（去住宅区）"）+ 采样时的市民实体。
+    /// 内容导演按席位分配给模型当写作处境。Entity 是 S6 环境圈摘要的定位锚（采样时实体就在手上顺带存下；
+    /// 市民会死/搬走，消费前必须 EntityManager.Exists 兜底——版本代际自动防复用，见 spike §7）。</summary>
     public readonly struct CitizenContext
     {
         public readonly string Name;
         public readonly string Context;
+        public readonly Entity Entity;
 
-        public CitizenContext(string name, string context)
+        public CitizenContext(string name, string context, Entity entity)
         {
             Name = name;
             Context = context;
+            Entity = entity;
         }
     }
 
@@ -97,7 +101,7 @@ namespace CityLife.GameBridge
                 var name = m_NameSystem.GetRenderedLabelName(e);
                 if (string.IsNullOrEmpty(name))
                     continue;
-                m_Entries.Add(new CitizenContext(name, Describe(e, citizen, age, purpose)));
+                m_Entries.Add(new CitizenContext(name, Describe(e, citizen, age, purpose), e));
             }
             m_Offset++;
             m_Cycle++;
@@ -149,7 +153,7 @@ namespace CityLife.GameBridge
             // 室内：CurrentBuilding 在挂=在建筑内（行程分发时移除，spike §1）
             if (EntityManager.HasComponent<CurrentBuilding>(e))
             {
-                var place = ClassifyBuilding(EntityManager.GetComponentData<CurrentBuilding>(e).m_CurrentBuilding);
+                var place = ClassifyBuilding(EntityManager, EntityManager.GetComponentData<CurrentBuilding>(e).m_CurrentBuilding);
                 if (place != null)
                 {
                     // "在商店里上班" vs "在住宅区呆着"：片区/开放场所不加"里"
@@ -194,22 +198,23 @@ namespace CityLife.GameBridge
             // 目标是租户实体（公司/住户）时映射到其房产建筑（spike §2，TripNeededSystem decomp 行 145-150）
             if (EntityManager.HasComponent<Game.Buildings.PropertyRenter>(target))
                 target = EntityManager.GetComponentData<Game.Buildings.PropertyRenter>(target).m_Property;
-            return ClassifyBuilding(target);
+            return ClassifyBuilding(EntityManager, target);
         }
 
-        /// <summary>建筑类型词：景点/学校/医院/住宅区/商店/工厂/办公楼/公园；非建筑（外部连接等）与未分类 → null。</summary>
-        private string? ClassifyBuilding(Entity building)
+        /// <summary>建筑类型词：景点/学校/医院/住宅区/商店/工厂/办公楼/公园；非建筑（外部连接等）与未分类 → null。
+        /// internal static 共享：EnvironmentDigestSystem 聚类计数直接用（一处定义，别复制粘贴）。</summary>
+        internal static string? ClassifyBuilding(EntityManager em, Entity building)
         {
-            if (building == Entity.Null || !EntityManager.HasComponent<Game.Buildings.Building>(building))
+            if (building == Entity.Null || !em.HasComponent<Game.Buildings.Building>(building))
                 return null; // 外部连接等非建筑实体兜底（spike §1）
-            if (EntityManager.HasComponent<Game.Prefabs.SignatureBuildingData>(building)) return "景点";
-            if (EntityManager.HasComponent<Game.Buildings.School>(building)) return "学校";
-            if (EntityManager.HasComponent<Game.Buildings.Hospital>(building)) return "医院";
-            if (EntityManager.HasComponent<Game.Buildings.ResidentialProperty>(building)) return "住宅区";
-            if (EntityManager.HasComponent<Game.Buildings.CommercialProperty>(building)) return "商店";
-            if (EntityManager.HasComponent<Game.Buildings.IndustrialProperty>(building)) return "工厂";
-            if (EntityManager.HasComponent<Game.Buildings.OfficeProperty>(building)) return "办公楼";
-            if (EntityManager.HasComponent<Game.Buildings.AttractivenessProvider>(building)) return "公园";
+            if (em.HasComponent<Game.Prefabs.SignatureBuildingData>(building)) return "景点";
+            if (em.HasComponent<Game.Buildings.School>(building)) return "学校";
+            if (em.HasComponent<Game.Buildings.Hospital>(building)) return "医院";
+            if (em.HasComponent<Game.Buildings.ResidentialProperty>(building)) return "住宅区";
+            if (em.HasComponent<Game.Buildings.CommercialProperty>(building)) return "商店";
+            if (em.HasComponent<Game.Buildings.IndustrialProperty>(building)) return "工厂";
+            if (em.HasComponent<Game.Buildings.OfficeProperty>(building)) return "办公楼";
+            if (em.HasComponent<Game.Buildings.AttractivenessProvider>(building)) return "公园";
             return null;
         }
 

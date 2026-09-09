@@ -14,7 +14,7 @@ using Transform = Game.Objects.Transform;
 namespace CityLife.GameBridge
 {
     /// <summary>
-    /// M3 气泡层 v4.0（自烘焙 TMP 文字网格 + 通知图标管线底板，SRP 回调自绘；执行层折行+按字计时）。
+    /// M3 气泡层 v4.5（自烘焙 TMP 文字网格 + 通知图标管线底板，SRP 回调自绘；执行层折行+按字计时）。
     ///
     /// 文字管线定案（勿复探）：
     /// - v1（Buffer.DrawText）判死：共享 TMP fontSize=200 懒烘焙+scale=1 硬编码=巨字；overlay 通道
@@ -22,8 +22,8 @@ namespace CityLife.GameBridge
     /// - v2 正路：烘焙借 GetTextMesh()（**快照八项状态+finally 恢复**，污染全城标签的坑勿拆），
     ///   材质 clone OverlayConfigurationPrefab.m_TextMaterial + CopyFontAtlasParameters，
     ///   绘制 beginContextRendering + Graphics.DrawMesh。v2.1 实机验证：跟随/视角全解。
-    /// - 跟随读 InterpolatedTransform（模拟 Transform 是 tick 级，读它必卡）；显隐尺=到镜头距离
-    ///   （k_MaxDist，勿再加落点距离闸——浅俯仰角误杀全屏）；hideOverlay 只记日志不门控。
+    /// - 跟随读 InterpolatedTransform（模拟 Transform 是 tick 级，读它必卡）；显隐尺=分锚点距离
+    ///   （MaxDistFor，勿再加落点距离闸——浅俯仰角误杀全屏）；hideOverlay 只记日志不门控。
     ///
     /// 底板长征全记录（勿复探）：
     /// - v2.2 通知图标管线：能画、深底白边观感对，但尺寸/锚点黑盒（plateH=9.26m 巨框错位），当时判死。
@@ -31,24 +31,61 @@ namespace CityLife.GameBridge
     ///   缩放域失配修复/试色四套）——v3.5 起显形成功，但 WaterSourceName 是自发光标签 shader：
     ///   _EmissionColor=白是亮度地板（供体实采值 (1,1,1,1)），深色底板永远出不来，试色只剩
     ///   "透明/白"两态（2026-09-08 实机）。TMP 路线**观感**判死。
-    /// - v4.0 定案：回归通知图标管线（观感已被 v2.2 实机证明），尺寸/锚点不反推，运行时标定键
-    ///   实机选定：Ctrl+5 尺寸倍率、Ctrl+6 Y 下沉系数（抵消图标 shader 的图钉式抬高——v2.2 截图里
-    ///   文字贴底板下缘实锤锚点在下）。TLE 先例契约：mesh ±1 quad + m_Params.x=2
+    /// - v4.0 定案：回归通知图标管线（观感已被 v2.2 实机证明），运行时标定键实机选定：
+    ///   Ctrl+5 尺寸倍率、Ctrl+6 Y 下沉系数。TLE 先例契约：mesh ±1 quad + m_Params.x=2
     ///   （Cities2-TrafficLightsEnhancement/Systems/Overlay/RenderSystem.cs，AddIcon 原文）。
+    /// - v4.1 黑盒破解（勿复探）："尺寸/锚点黑盒"实为 shader 内置距离补偿——渲染半径 =
+    ///   m_Params.x·0.063·dist^0.6（IconCluster.CalculateRadius 反编译实锤），锚点在图标
+    ///   下缘（GetBounds = m_Center + cameraUp·radius）。此前"越远越大/近处框包不住字/标定
+    ///   只在单一距离成立"全因未除该因子；v4.1 喂参归一化后，标定跨距离一次定案。
+    /// - v4.2 视角露馅修复：抬高轴是相机 up 而非世界 Y（v4.1 注释已写 cameraUp 但代码补错了轴）
+    ///   ——平视碰巧正确，俯视底板横向漂移与文字分家（2026-09-08 实机截图实锤）。
+    /// - v4.3 双层/裸奔修复：indirect args 与实例缓冲是 GPU 执行期才读，三档共享一份 args 缓冲
+    ///   +一份材质轮换 SetData/SetBuffer，CPU 跑在 GPU 前面时后写的档覆盖先画的档——同一泡被两档
+    ///   各画一遍（宽+窄叠两层）或整档被别档 args 截断（裸奔）。改每档独立 args+材质+实例缓冲
+    ///   （2026-09-08 实机截图实锤）。
     ///
     /// 长文适配（沿用）：执行层折行（CJK 1 格/其余半格、13 格/行、≤4 行、溢出收"…"——排版是确定性
     ///   的活，不归 LLM）；内容不限字数（话痨/沉默是人格，全文归信息流）；屏占按行恒定；驻留按字数。
     ///
-    /// 键位：Ctrl+9 开关；Ctrl+8 数量档（30/60/120）；Ctrl+7 底板开关；
-    ///       Ctrl+5 底板尺寸档；Ctrl+6 底板 Y 补偿档（标定完砍键）。
-    /// 扩展口（正式版待办）：①内容管道接入（信息层降级产物+共位小剧场）；②k_MaxDist 按
-    ///   "人清晰可见"实机标定（§12 #41）；③密度/重叠治理（同屏上限+防叠）。
+    /// 键位：Ctrl+9 会话内快速开关（与设置页总开关 AND 语义，设置页为权威总闸）。
+    ///   （Ctrl+5/6 底板标定键已于 2026-09-08 实机定案后砍除，终值落常量 k_PlateSizeRatio/k_PlateYDrop；
+    ///     Ctrl+6 复用为 LOD 打点后，2026-09-09 距离标定收官一并砍除；
+    ///     Ctrl+7/8 底板开关/数量档于设置页上线后砍除（2026-09-09，§12 #45）——改由设置页承载）
+    /// 密度/重叠治理（v4.4）：屏幕矩形互斥（底板 footprint 投影、视深为尺）+ 近者优先 +
+    ///   同屏可见上限=采样池/6。
+    /// 分锚点显隐距离（v4.5，2026-09-09 实机标定）：人 125m / 车 320m / 楼 800m 基础档，
+    ///   采样/绘制同用 MaxDistFor 一把尺；玩家倍率滑杆已接设置页（§12 #44/#45，Mod.Options 直读生效）。
+    /// 设置页接入（2026-09-09，§12 #45）：总开关 BubbleEnabled（与 Ctrl+9 AND）、三类距离倍率、
+    ///   密度档 BubbleDensity（Low/Medium/High→30/60/120，LevelCount 优先读它）、底板开关 BubblePlate
+    ///   （OnUpdate 每帧同步，改动即时生效）——全部经 Mod.Options 直读，null（主菜单期）回落默认。
+    /// 自动隐藏双闸（v4.6，2026-09-09，§12 #46）：建造工具激活（ToolSystem.activeTool != DefaultToolSystem
+    ///   实例；推土机 BulldozeToolSystem 也是独立工具，含在判定内一并隐藏）与拍照模式
+    ///   （PhotoModeRenderSystem.Enabled——该系 OnCreate 即置 false，唯一置真路径是
+    ///   PhotoModeUISystem.Activate(true)→Enable(true)）时整个气泡层不画（文字+底板全停，采样照跑）。
+    ///   各配设置页开关 BubbleAutoHideBuildTool/BubbleAutoHidePhotoMode（默认开、即时生效），
+    ///   判定在 OnUpdate 算好存字段、OnRender 只读字段；hideOverlay 禁用（v4.2 实机正常游玩也 True）。
+    ///   跳变打一行 INFO（防抖，只在变化时打）。
+    /// 扩展口（正式版待办）：内容管道接入（信息层降级产物+共位小剧场）。
     /// </summary>
     public partial class BubbleWorldSpikeSystem : GameSystemBase
     {
         private const int k_MaxBubbles = 120;
-        private const float k_MaxDist = 800f;        // 单泡距镜头上限（采样/绘制两用）——同时就是 LOD 尺子：
-                                                     // 超出即人不可辨（§12 #41 的标定终值落在这个常量上）
+        // 分锚点显隐距离基础档（2026-09-09 实机标定终值，§12 #44；采样/绘制同用这一组尺）——
+        // 纯距离门控不做俯仰角门控；玩家倍率滑杆在设置页（§12 #45），MaxDistFor 里乘上。
+        // 人档即 §12 #41 的"人清晰可见"临界
+        private const float k_MaxDistHuman = 125f;
+        private const float k_MaxDistCar = 320f;
+        private const float k_MaxDistBuilding = 800f;
+
+        /// <summary>分锚点显隐距离：基础档 × 设置页倍率（Mod.Options?.BubbleDistXxx ?? 1f，§12 #45）。</summary>
+        private static float MaxDistFor(byte kind)
+        {
+            var opts = Mod.Options;
+            return kind == 0 ? k_MaxDistHuman * (opts?.BubbleDistHuman ?? 1f)
+                 : kind == 1 ? k_MaxDistCar * (opts?.BubbleDistCar ?? 1f)
+                 : k_MaxDistBuilding * (opts?.BubbleDistBuilding ?? 1f);
+        }
         private const float k_TargetPixels = 26f;    // 文字目标屏占高（像素/行——多行按行数叠）
         private const float k_MinWorldH = 0.35f;     // 单行世界高下限（街景不至于糊脸上）
         private const float k_MaxWorldH = 5f;        // 单行上限（远看不成区名牌）
@@ -59,9 +96,23 @@ namespace CityLife.GameBridge
         private const int k_PlateTexW = 512;
         private const int k_PlateTexH = 128;
 
-        // 底板标定档（图标 shader 尺寸/锚点黑盒的实机标定——v4.0 定案后砍到只剩一档常量）
-        private static readonly float[] k_SizeRatios = { 1.5f, 1.7f, 2.0f, 2.3f };   // 底板高 = 文字块高 × 档（Ctrl+5）
-        private static readonly float[] k_YDrops = { 0f, 0.35f, 0.5f, 0.7f, 1.0f };  // 底板下移 = 底板高 × 档（Ctrl+6）
+        // 图标 shader 内置距离补偿（反编译 IconCluster.CalculateRadius 实锤）：
+        // 渲染半径 = m_Params.x × k_IconScaleK × dist^k_IconDistExp，且锚点在图标下缘
+        // （图钉式抬高一个半径：GetBounds = m_Center + cameraUp·radius）。v2.2-v4.0 底板
+        // "越远越大/近处框包不住字/标定只在单一距离成立"全因没除这个因子——喂参前必须归一。
+        private const float k_IconScaleK = 0.063f;
+        private const float k_IconDistExp = 0.6f;
+
+        // 底板标定终值（2026-09-08 实机定案；v4.1 归一化后跨距离/视角稳定，v4.3 后无共享态干扰）：
+        // 底板高 = 文字块高 × 1.7；Y 补偿 = 底板高 × 1.0——shader 抬高量恰为一个 plateH，
+        // 与 CalculateRadius 的半径语义（渲染全高 = 2×半径）互洽
+        private const float k_PlateSizeRatio = 1.7f;
+        private const float k_PlateYDrop = 1.0f;
+
+        // 密度/重叠治理（§4：同屏上限+防叠）：屏幕矩形互斥（带留白）、近者优先、
+        // 同屏可见上限 = 采样池 ÷ k_VisibleDiv（30/60/120 → 5/10/20）
+        private const float k_DePad = 1.15f;
+        private const int k_VisibleDiv = 6;
 
         // 执行层排版：13 格/行（CJK 1 格、其余半格）、最多 4 行
         private const float k_WrapCells = 13f;
@@ -77,7 +128,6 @@ namespace CityLife.GameBridge
         private EntityQuery m_IconConfigQuery = default!;
 
         private bool m_Active;
-        private int m_Level = 2;                    // 0=30 1=60 2=120
         private readonly List<TrackedBubble> m_Bubbles = new();
         private uint m_Frame;
         private uint m_LastKeyFrame;
@@ -98,21 +148,45 @@ namespace CityLife.GameBridge
         private bool m_LoggedFirstRender;
         private bool m_LastHideOverlay;
 
+        // 自动隐藏双闸（§12 #46）：建造工具激活 / 拍照模式。系统句柄懒解析（主菜单世界可能没有），
+        // 状态在 OnUpdate 算好存字段，OnRender 只读字段；跳变日志走 SetGate 防抖
+        private Game.Tools.ToolSystem m_ToolSystem = default!;
+        private Game.Tools.DefaultToolSystem m_DefaultToolSystem = default!;
+        private PhotoModeRenderSystem m_PhotoModeRender = default!;
+        private bool m_HiddenByBuildTool;
+        private bool m_HiddenByPhotoMode;
+
         // 底板管线（通知图标管线：贴图/网格/缓冲是程序化内容 OnCreate 即建；材质懒取游戏图标材质）
         private bool m_PlateOn = true;
-        private Material m_PlateMaterial = null!;
-        private bool m_PlateMaterialWarned;
+        private Material[] m_PlateMaterials = null!;    // 每档一份 clone：共享一份材质轮换绑缓冲，
+        private bool m_PlateMaterialWarned;             // GPU 延迟读会让三档画出同一份实例数据
         private Texture2DArray m_PlateTex = null!;
         private Mesh[] m_PlateMeshes = null!;
         private ComputeBuffer[] m_PlateInstBuf = null!;
-        private ComputeBuffer m_PlateArgs = null!;
+        private ComputeBuffer[] m_PlateArgs = null!;    // 每档一份：indirect args 是 GPU 执行期才读，
+                                                        // 单缓冲跨档 SetData 会被后写的档覆盖（v4.3 实锤）
         private readonly uint[] m_ArgsArray = new uint[5];
         private readonly List<NotificationIconBufferSystem.InstanceData>[] m_PlateData
             = { new(), new(), new() };
         private int m_InstanceBufferID;
         private bool m_LoggedFirstPlate;
-        private int m_SizeRatioIdx = 1;             // k_SizeRatios 索引（Ctrl+5）
-        private int m_YDropIdx = 2;                 // k_YDrops 索引（Ctrl+6；默认 0.5=图钉抬高对半补）
+
+        // 防叠候选/中选列表（每帧清空复用，零分配）
+        private readonly List<DrawCandidate> m_Candidates = new();
+        private readonly List<DrawCandidate> m_Kept = new();
+        private int m_KeptCount;
+
+        /// <summary>一帧内一个待画气泡的全部绘制参数（文字矩阵+底板参数+屏幕包围盒）。</summary>
+        private struct DrawCandidate
+        {
+            public BakedText Entry;
+            public Matrix4x4 TextMatrix;
+            public float3 Pos;
+            public float Dist;
+            public float PlateH;
+            public int Bucket;
+            public Rect ScreenRect;
+        }
 
         /// <summary>一个被追踪的气泡：锚点实体 + 当前文案 + 独立生命周期。</summary>
         private struct TrackedBubble
@@ -171,6 +245,10 @@ namespace CityLife.GameBridge
             m_ConfigQuery = GetEntityQuery(ComponentType.ReadOnly<OverlayConfigurationData>());
             m_IconConfigQuery = GetEntityQuery(ComponentType.ReadOnly<IconConfigurationData>());
             m_InstanceBufferID = Shader.PropertyToID("instanceBuffer"); // shader 侧结构化缓冲名（TLE 实锤）
+            // 设置页初值（§12 #45）：总开关/底板开关联 Mod.Options（null=主菜单期回落默认）。
+            // m_Active 是 Ctrl+9 会话开关，权威总闸在 MasterOn（每次绘制/采样都现读设置页）
+            m_Active = Mod.Options?.BubbleEnabled ?? false;
+            m_PlateOn = Mod.Options?.BubblePlate ?? true;
             BuildPlateAssets();
             RenderPipelineManager.beginContextRendering += OnRender;
         }
@@ -188,28 +266,16 @@ namespace CityLife.GameBridge
 
         protected override void OnUpdate()
         {
+            // Ctrl+9 = 会话内快速开关（与设置页总开关 AND；Ctrl+7/8 已砍除，2026-09-09 §12 #45）
             var ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
             var debounced = m_Frame - m_LastKeyFrame > 30;
             if (debounced && ctrl && Input.GetKeyDown(KeyCode.Alpha9)) { m_LastKeyFrame = m_Frame; Toggle(); }
-            if (debounced && ctrl && Input.GetKeyDown(KeyCode.Alpha8)) { m_LastKeyFrame = m_Frame; CycleLevel(); }
-            if (debounced && ctrl && Input.GetKeyDown(KeyCode.Alpha7))
-            {
-                m_LastKeyFrame = m_Frame;
-                m_PlateOn = !m_PlateOn;
-                Mod.Log.Info($"[BubbleW] 底板 {(m_PlateOn ? "开" : "关")}");
-            }
-            if (debounced && ctrl && Input.GetKeyDown(KeyCode.Alpha5))
-            {
-                m_LastKeyFrame = m_Frame;
-                m_SizeRatioIdx = (m_SizeRatioIdx + 1) % k_SizeRatios.Length;
-                Mod.Log.Info($"[BubbleW] 底板尺寸档 → ×{k_SizeRatios[m_SizeRatioIdx]}");
-            }
-            if (debounced && ctrl && Input.GetKeyDown(KeyCode.Alpha6))
-            {
-                m_LastKeyFrame = m_Frame;
-                m_YDropIdx = (m_YDropIdx + 1) % k_YDrops.Length;
-                Mod.Log.Info($"[BubbleW] 底板 Y 补偿档 → ×{k_YDrops[m_YDropIdx]}");
-            }
+
+            // 底板开关每帧同步设置页（改动即时生效；null=主菜单期保留现状）
+            m_PlateOn = Mod.Options?.BubblePlate ?? m_PlateOn;
+
+            // 自动隐藏双闸每帧重算（§12 #46；信号实锤见 UpdateAutoHideGates 注释）
+            UpdateAutoHideGates();
 
             // FPS 计：每 4 秒一行（开着才有意义）
             m_FpsAccum += UnityEngine.Time.deltaTime;
@@ -217,14 +283,14 @@ namespace CityLife.GameBridge
             m_FpsTimer += UnityEngine.Time.deltaTime;
             if (m_FpsTimer >= 4f)
             {
-                if (m_Active)
-                    Mod.Log.Info($"[BubbleW] FPS avg={(m_FpsFrames / m_FpsAccum):F1}（N={LevelCount()}，在场 {m_Bubbles.Count}，缓存 {m_Cache.Count}）");
+                if (m_Active && MasterOn)
+                    Mod.Log.Info($"[BubbleW] FPS avg={(m_FpsFrames / m_FpsAccum):F1}（N={LevelCount()}，在场 {m_Bubbles.Count}，缓存 {m_Cache.Count}，可见 {m_KeptCount}）");
                 m_FpsAccum = 0;
                 m_FpsFrames = 0;
                 m_FpsTimer = 0f;
             }
 
-            if (!m_Active)
+            if (!m_Active || !MasterOn)
             {
                 m_Frame++;
                 return;
@@ -253,13 +319,63 @@ namespace CityLife.GameBridge
                 foreach (var b in m_Bubbles)
                     if (!m_Cache.ContainsKey((b.Text, b.Kind)))
                         EnsureBaked(b.Text, b.Kind);
-            if (m_PlateOn && m_PlateMaterial == null)
+            if (m_PlateOn && (m_PlateMaterials == null || m_PlateMaterials[0] == null))
                 TryInitPlateMaterial();
 
             m_Frame++;
         }
 
-        private int LevelCount() => m_Level == 0 ? 30 : m_Level == 1 ? 60 : 120;
+        /// <summary>权威总闸：设置页 BubbleEnabled（§12 #45）。null（主菜单期）视为开——闸不住菜单期探针。</summary>
+        private static bool MasterOn => Mod.Options == null || Mod.Options.BubbleEnabled;
+
+        /// <summary>自动隐藏双闸判定（§12 #46，2026-09-09 反编译 Game.dll 实锤，勿复探）：
+        /// 建造工具 = <c>ToolSystem.activeTool != DefaultToolSystem 实例</c>——ToolSystem.OnCreate 里
+        /// activeTool 初始即 m_DefaultToolSystem，选任何工具（含推土机 BulldozeToolSystem，§12 #46 口径：
+        /// 推土也算工具激活，一并隐藏）都会换掉它；游戏本体 PhotoModeUISystem.Activate 里
+        /// "activeTool != m_BulldozeTool 则收回 DefaultToolSystem"的写法同口径。ToolSystem 主菜单世界
+        /// 可能不存在，GetExistingSystemManaged 判空。
+        /// 拍照模式 = <c>PhotoModeRenderSystem.Enabled</c>——该系 OnCreate 即 base.Enabled=false，
+        /// 全程序唯一置真路径是 PhotoModeUISystem.Activate(true) → Enable(true)
+        /// （Activate 仅由 GamePanelUISystem 拍照面板开合调用；编辑器那条在编辑器世界，与本世界无关），
+        /// 游戏自己也这么读（RichPresenceUpdateSystem 判 Enabled）。退出时 Enable(false) 后
+        /// 由 OnUpdate 在镜头混合结束才收回 Enabled=false——退出过渡期仍算拍照中，气泡多藏一拍正合适。
+        /// RenderingSystem.hideOverlay 禁用：v4.2 实机正常游玩也会 True（见 OnRender 顶部诊断日志）。
+        /// 两闸各受设置页开关控制（关=不隐藏，即时生效）；null（主菜单期）回落默认开。</summary>
+        private void UpdateAutoHideGates()
+        {
+            if (m_ToolSystem == null)
+                m_ToolSystem = World.GetExistingSystemManaged<Game.Tools.ToolSystem>();
+            if (m_DefaultToolSystem == null)
+                m_DefaultToolSystem = World.GetExistingSystemManaged<Game.Tools.DefaultToolSystem>();
+            if (m_PhotoModeRender == null)
+                m_PhotoModeRender = World.GetExistingSystemManaged<PhotoModeRenderSystem>();
+
+            var opts = Mod.Options;
+            var buildActive = m_ToolSystem != null && m_DefaultToolSystem != null
+                && m_ToolSystem.activeTool != null && m_ToolSystem.activeTool != m_DefaultToolSystem;
+            var photoActive = m_PhotoModeRender != null && m_PhotoModeRender.Enabled;
+            SetGate(ref m_HiddenByBuildTool, buildActive && (opts?.BubbleAutoHideBuildTool ?? true), "建造工具激活");
+            SetGate(ref m_HiddenByPhotoMode, photoActive && (opts?.BubbleAutoHidePhotoMode ?? true), "拍照模式");
+        }
+
+        /// <summary>单闸状态更新 + 跳变日志（防抖：只在状态变化时打一行 INFO）。</summary>
+        private static void SetGate(ref bool gate, bool on, string reason)
+        {
+            if (gate == on)
+                return;
+            gate = on;
+            Mod.Log.Info($"[BubbleW] 自动隐藏：{reason} → {(on ? "隐藏气泡层" : "恢复显示")}");
+        }
+
+        /// <summary>采样池大小：优先读设置页密度档（Low/Medium/High→30/60/120）；null（主菜单期）回落默认档 120。</summary>
+        private static int LevelCount()
+        {
+            var opts = Mod.Options;
+            if (opts == null)
+                return 120;
+            return opts.BubbleDensity == CityLifeSetting.BubbleDensityLevel.Low ? 30
+                 : opts.BubbleDensity == CityLifeSetting.BubbleDensityLevel.Medium ? 60 : 120;
+        }
 
         private void Toggle()
         {
@@ -276,13 +392,6 @@ namespace CityLife.GameBridge
             Mod.Log.Info($"[BubbleW] 气泡层 {(m_Active ? "开启" : "关闭")}（N={LevelCount()}）");
         }
 
-        private void CycleLevel()
-        {
-            m_Level = (m_Level + 1) % 3;
-            m_Bubbles.Clear();
-            Mod.Log.Info($"[BubbleW] 数量档 → {LevelCount()}");
-        }
-
         // —— 采样：三类锚点，屏内+距离上限，人:车:楼 配比 ——
         private void Resample(Camera cam)
         {
@@ -295,7 +404,7 @@ namespace CityLife.GameBridge
             {
                 var b = m_Bubbles[i];
                 if (!EntityManager.Exists(b.Anchor) || !EntityManager.HasComponent<Transform>(b.Anchor)
-                    || !OnScreen(cam, b.Anchor))
+                    || !OnScreen(cam, b.Anchor, b.Kind))
                     m_Bubbles.RemoveAt(i);
             }
 
@@ -305,11 +414,11 @@ namespace CityLife.GameBridge
             Collect(cam, m_HumanQuery, want, 0);
         }
 
-        private bool OnScreen(Camera cam, Entity e)
+        private bool OnScreen(Camera cam, Entity e, byte kind)
         {
             var p = EntityManager.GetComponentData<Transform>(e).m_Position;
             var s = cam.WorldToScreenPoint(p);
-            return s.z > 5f && s.z <= k_MaxDist
+            return s.z > 5f && s.z <= MaxDistFor(kind)
                 && s.x >= 0 && s.x <= Screen.width && s.y >= 0 && s.y <= Screen.height;
         }
 
@@ -326,7 +435,7 @@ namespace CityLife.GameBridge
                     continue;
                 var p = EntityManager.GetComponentData<Transform>(e).m_Position;
                 var s = cam.WorldToScreenPoint(p);
-                if (s.z < 5f || s.z > k_MaxDist)
+                if (s.z < 5f || s.z > MaxDistFor(kind))
                     continue;
                 if (s.x < 0 || s.x > Screen.width || s.y < 0 || s.y > Screen.height)
                     continue;
@@ -621,8 +730,11 @@ namespace CityLife.GameBridge
                     UnityEngine.Object.Destroy(t);
                     m_PlateMeshes[i] = BuildPlateMesh(k_PlateAspects[i]);
                 }
-                m_PlateArgs = new ComputeBuffer(1, 5 * sizeof(uint), ComputeBufferType.IndirectArguments);
+                m_PlateArgs = new ComputeBuffer[k_PlateAspects.Length];
+                for (int i = 0; i < k_PlateAspects.Length; i++)
+                    m_PlateArgs[i] = new ComputeBuffer(1, 5 * sizeof(uint), ComputeBufferType.IndirectArguments);
                 m_PlateInstBuf = new ComputeBuffer[k_PlateAspects.Length];
+                m_PlateMaterials = new Material[k_PlateAspects.Length];
             }
             catch (Exception ex)
             {
@@ -708,11 +820,11 @@ namespace CityLife.GameBridge
                 if (m_PrefabSystem.TryGetPrefab(e, out PrefabBase pb) && pb is IconConfigurationPrefab cfg
                     && cfg.m_Material != null)
                 {
-                    m_PlateMaterial = new Material(cfg.m_Material)
-                    {
-                        mainTexture = m_PlateTex, // renderQueue 不动：克隆自带 3700，恰在文字（3800）之下
-                    };
-                    Mod.Log.Info("[BubbleW] 底板材质已克隆（IconConfigurationPrefab.m_Material + 自建 Texture2DArray）");
+                    // 每档一份 clone（renderQueue 不动：克隆自带 3700，恰在文字 3800 之下）——
+                    // 共享一份材质轮换 SetBuffer，GPU 延迟读会让三档画出同一份缓冲（双层/裸奔根因）
+                    for (int i = 0; i < k_PlateAspects.Length; i++)
+                        m_PlateMaterials[i] = new Material(cfg.m_Material) { mainTexture = m_PlateTex };
+                    Mod.Log.Info("[BubbleW] 底板材质×3 已克隆（IconConfigurationPrefab.m_Material + 自建 Texture2DArray）");
                 }
                 else if (!m_PlateMaterialWarned)
                 {
@@ -736,8 +848,15 @@ namespace CityLife.GameBridge
             if (m_PlateMeshes != null)
                 foreach (var m in m_PlateMeshes)
                     if (m != null) UnityEngine.Object.Destroy(m);
-            if (m_PlateMaterial != null) UnityEngine.Object.Destroy(m_PlateMaterial);
-            if (m_PlateArgs != null) { m_PlateArgs.Release(); m_PlateArgs = null; }
+            if (m_PlateMaterials != null)
+                foreach (var m in m_PlateMaterials)
+                    if (m != null) UnityEngine.Object.Destroy(m);
+            if (m_PlateArgs != null)
+            {
+                foreach (var b in m_PlateArgs)
+                    b?.Release();
+                m_PlateArgs = null;
+            }
             if (m_PlateInstBuf != null)
                 foreach (var b in m_PlateInstBuf)
                     b?.Release();
@@ -756,11 +875,16 @@ namespace CityLife.GameBridge
                 Mod.Log.Info($"[BubbleW] hideOverlay → {hide}（仅诊断，v2 不门控）");
             }
 
-            if (!m_Active || m_Bubbles.Count == 0)
+            if (!m_Active || !MasterOn || m_Bubbles.Count == 0)
+                return;
+
+            // 自动隐藏闸（§12 #46）：隐藏时整层不画（文字+底板全停），采样照跑
+            if (m_HiddenByBuildTool || m_HiddenByPhotoMode)
                 return;
 
             // 数组非空+末元素非空：BuildPlateAssets 中途抛异常会留下半空数组
-            var drawPlate = m_PlateOn && m_PlateMaterial != null && m_PlateArgs != null
+            var drawPlate = m_PlateOn && m_PlateArgs != null && m_PlateArgs[k_PlateAspects.Length - 1] != null
+                && m_PlateMaterials != null && m_PlateMaterials[k_PlateAspects.Length - 1] != null
                 && m_PlateMeshes != null && m_PlateMeshes[k_PlateAspects.Length - 1] != null;
             foreach (var cam in cameras)
             {
@@ -768,12 +892,15 @@ namespace CityLife.GameBridge
                     continue;
 
                 var camPos = (float3)cam.transform.position;
+                var camUp = (float3)cam.transform.up;
                 var rot = Quaternion.LookRotation(cam.transform.forward, cam.transform.up);
                 var tanHalfFov = math.tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
                 if (drawPlate)
                     foreach (var list in m_PlateData)
                         list.Clear();
 
+                // 第一遍：收集候选（位置/尺寸/屏幕包围盒），超距/镜头背后剔除
+                m_Candidates.Clear();
                 foreach (var b in m_Bubbles)
                 {
                     if (!EntityManager.Exists(b.Anchor))
@@ -790,7 +917,7 @@ namespace CityLife.GameBridge
                         continue;
                     p.y += b.Kind == 0 ? 2.6f : b.Kind == 1 ? 2.8f : 12f; // 人头/车顶/楼顶（估值，正式版按包围盒）
                     var dist = math.distance(camPos, p);
-                    if (dist > k_MaxDist)
+                    if (dist > MaxDistFor(b.Kind))
                         continue;
 
                     // 恒定屏占按"行"：单行世界高 = 2·dist·tan(fov/2)·目标像素/屏高，夹 [0.35, 5]m；
@@ -801,28 +928,70 @@ namespace CityLife.GameBridge
                     var s = worldH / entry.Height;
                     var matrix = Matrix4x4.TRS((Vector3)p, rot, new Vector3(s, s, s))
                         * Matrix4x4.Translate(-entry.Center);
-                    foreach (var (mesh, mat) in entry.Parts)
-                        Graphics.DrawMesh(mesh, matrix, mat, 0, cam, 0, null, ShadowCastingMode.Off, false);
                     entry.LastUsed = UnityEngine.Time.time;
 
+                    // 底板参数（选档宁宽勿窄：需求比 = 文案宽高比 ÷ 底板高倍率 × 横向余量）
+                    var plateH = worldH * k_PlateSizeRatio;
+                    var need = entry.Aspect * worldH / plateH * 1.08f;
+                    var bucket = k_PlateAspects.Length - 1;
+                    for (int i = 0; i < k_PlateAspects.Length; i++)
+                        if (k_PlateAspects[i] >= need) { bucket = i; break; }
+
+                    // 屏幕包围盒（防叠用）：按底板 footprint 投影，视深为尺（与投影同尺）；
+                    // 镜头背后 WorldToScreenPoint 会镜像翻转，直接不参选
+                    var sp = cam.WorldToScreenPoint((Vector3)p);
+                    if (sp.z < 1f)
+                        continue;
+                    var pxPerM = cam.pixelHeight / (2f * sp.z * tanHalfFov);
+                    var w = plateH * k_PlateAspects[bucket] * pxPerM * k_DePad;
+                    var h = plateH * pxPerM * k_DePad;
+                    m_Candidates.Add(new DrawCandidate
+                    {
+                        Entry = entry,
+                        TextMatrix = matrix,
+                        Pos = p,
+                        Dist = dist,
+                        PlateH = plateH,
+                        Bucket = bucket,
+                        ScreenRect = new Rect(sp.x - w * 0.5f, sp.y - h * 0.5f, w, h),
+                    });
+                }
+
+                // 防叠：近者优先，屏幕矩形互斥，同屏上限——叠压/超限的泡本帧让位（不参与绘制）
+                m_Candidates.Sort((a, b) => a.Dist.CompareTo(b.Dist));
+                m_Kept.Clear();
+                var cap = math.max(4, LevelCount() / k_VisibleDiv);
+                foreach (var c in m_Candidates)
+                {
+                    if (m_Kept.Count >= cap)
+                        break;
+                    var blocked = false;
+                    foreach (var k in m_Kept)
+                        if (c.ScreenRect.Overlaps(k.ScreenRect)) { blocked = true; break; }
+                    if (!blocked)
+                        m_Kept.Add(c);
+                }
+
+                // 第二遍：只画中选泡（文字逐段 + 底板入档缓冲）
+                foreach (var c in m_Kept)
+                {
+                    foreach (var (mesh, mat) in c.Entry.Parts)
+                        Graphics.DrawMesh(mesh, c.TextMatrix, mat, 0, cam, 0, null, ShadowCastingMode.Off, false);
                     if (drawPlate)
                     {
-                        // 底板高 = 文字块高 × 尺寸档；Y 下沉抵消图标 shader 图钉式抬高（Ctrl+6 标定）
-                        var plateH = worldH * k_SizeRatios[m_SizeRatioIdx];
-                        // 选档宁宽勿窄：需求比 = 文案宽高比 ÷ 底板高倍率 × 横向余量
-                        var need = entry.Aspect * worldH / plateH * 1.08f;
-                        var bucket = k_PlateAspects.Length - 1;
-                        for (int i = 0; i < k_PlateAspects.Length; i++)
-                            if (k_PlateAspects[i] >= need) { bucket = i; break; }
-                        m_PlateData[bucket].Add(new NotificationIconBufferSystem.InstanceData
+                        // 锚点在底板下缘、抬高轴 = 相机 up；m_Params.x 除掉 shader 自带的
+                        // k_IconScaleK·dist^k_IconDistExp 补偿，渲染尺寸才等于 plateH（跨距离稳定）
+                        var iconScale = k_IconScaleK * math.pow(math.max(c.Dist, 1f), k_IconDistExp);
+                        m_PlateData[c.Bucket].Add(new NotificationIconBufferSystem.InstanceData
                         {
-                            m_Position = p - new float3(0f, plateH * k_YDrops[m_YDropIdx], 0f),
-                            m_Params = new float4(plateH, 0f, 1f, 1f), // (全高米数, 不脉动, 不透明, 开)
-                            m_Icon = bucket,
-                            m_Distance = dist,
+                            m_Position = c.Pos - camUp * (c.PlateH * k_PlateYDrop),
+                            m_Params = new float4(c.PlateH / iconScale, 0f, 1f, 1f), // (归一化全高, 不脉动, 不透明, 开)
+                            m_Icon = c.Bucket,
+                            m_Distance = c.Dist,
                         });
                     }
                 }
+                m_KeptCount = m_Kept.Count;
 
                 if (drawPlate)
                     DrawPlates(cam);
@@ -856,7 +1025,8 @@ namespace CityLife.GameBridge
                     m_PlateInstBuf[bucket] = buf;
                 }
                 buf.SetData(list, 0, 0, list.Count);
-                m_PlateMaterial.SetBuffer(m_InstanceBufferID, buf);
+                var mat = m_PlateMaterials[bucket];
+                mat.SetBuffer(m_InstanceBufferID, buf); // 每档专属材质+缓冲，无跨档共享态
 
                 var mesh = m_PlateMeshes[bucket];
                 m_ArgsArray[0] = mesh.GetIndexCount(0);
@@ -864,7 +1034,7 @@ namespace CityLife.GameBridge
                 m_ArgsArray[2] = mesh.GetIndexStart(0);
                 m_ArgsArray[3] = mesh.GetBaseVertex(0);
                 m_ArgsArray[4] = 0;
-                m_PlateArgs.SetData(m_ArgsArray);
+                m_PlateArgs[bucket].SetData(m_ArgsArray);
 
                 // bounds 包住本档所有实例（唯一的剔除机制，半径余量按最大底板算）
                 var bounds = new Bounds((Vector3)list[0].m_Position, Vector3.zero);
@@ -872,13 +1042,13 @@ namespace CityLife.GameBridge
                     bounds.Encapsulate((Vector3)inst.m_Position);
                 bounds.Expand(40f);
 
-                Graphics.DrawMeshInstancedIndirect(mesh, 0, m_PlateMaterial, bounds, m_PlateArgs,
+                Graphics.DrawMeshInstancedIndirect(mesh, 0, mat, bounds, m_PlateArgs[bucket],
                     0, null, ShadowCastingMode.Off, false, 0, cam);
 
                 if (!m_LoggedFirstPlate)
                 {
                     m_LoggedFirstPlate = true;
-                    Mod.Log.Info($"[BubbleW] 底板首画（bucket={bucket} N={list.Count} plateH={list[0].m_Params.x:F2}m 尺寸档×{k_SizeRatios[m_SizeRatioIdx]} Y补×{k_YDrops[m_YDropIdx]} 图标管线）");
+                    Mod.Log.Info($"[BubbleW] 底板首画（bucket={bucket} N={list.Count} plateH={list[0].m_Params.x:F2}m 定值×{k_PlateSizeRatio} Y×{k_PlateYDrop} 图标管线）");
                 }
             }
         }

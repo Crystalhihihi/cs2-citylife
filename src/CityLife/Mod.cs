@@ -1,3 +1,4 @@
+using Colossal.IO.AssetDatabase;
 using Colossal.Logging;
 using Game;
 using Game.Modding;
@@ -18,6 +19,10 @@ namespace CityLife
 
         /// <summary>LLM 网关（后台线程泵，全 one-shot）。MUTE 开关走 CliGateway.Mute 静态属性。</summary>
         public static Llm.CliGateway? Gateway { get; private set; }
+
+        /// <summary>游戏内设置页实例（选项→Mods→CityLife，玩家配置主源 §12 #45）。
+        /// null = 未初始化/已 Dispose（主菜单期消费处一律回落默认值）。</summary>
+        public static GameBridge.CityLifeSetting? Options { get; private set; }
 
         /// <summary>发帖通道（CustomChirps 软依赖反射桥）。<b>已退役留档</b>（2026-08-20：面板直供 FeedStore 后不再创建；
         /// 代码保留——自研发帖内核/兼容层若需要可在此复活）。</summary>
@@ -41,6 +46,18 @@ namespace CityLife
             {
                 Log.Warn($"[Filter] Harmony 补丁应用失败（原版 chirp 会继续显示，不影响其他功能）：{e.Message}");
             }
+
+            // 游戏内设置页（选项→Mods→CityLife）：玩家配置主源（§12 #45）。
+            // LoadSettings 从 .coc 读回玩家改动（无文件则全默认）；RegisterInOptionsUI 注册进选项菜单；
+            // 本地化中英双语（zh-CN 兜底注册同一中文字典）。
+            Options = new GameBridge.CityLifeSetting(this);
+            AssetDatabase.global.LoadSettings(nameof(CityLife), Options, new GameBridge.CityLifeSetting(this));
+            Options.RegisterInOptionsUI();
+            var lm = Game.SceneFlow.GameManager.instance.localizationManager;
+            lm.AddSource("en-US", new Colossal.Localization.MemorySource(GameBridge.CityLifeLocalization.En));
+            lm.AddSource("zh-HANS", new Colossal.Localization.MemorySource(GameBridge.CityLifeLocalization.Zh));
+            lm.AddSource("zh-CN", new Colossal.Localization.MemorySource(GameBridge.CityLifeLocalization.Zh));
+            Log.Info("[Settings] 游戏内设置页已注册（选项→Mods→CityLife）+ 中英本地化已注入");
 
             // M1 CLI 网关装配：日志注入 + 启动后台泵。供给不可用不致命，
             // 请求会走失败重试路径并计数，游戏照常（T0 模板兜底）。
@@ -101,9 +118,6 @@ namespace CityLife
             // （先例 city-storytelling-mod PromptUISystem / 官方 UI 系统均注册在此阶段）
             updateSystem.UpdateAt<GameBridge.CityLifeUISystem>(SystemUpdatePhase.UIUpdate);
 
-            // M3-spike：气泡渲染管线验证（Ctrl+1/2/3=100/300/600 个，Ctrl+0=关；日志 [Bubble] FPS avg）
-            updateSystem.UpdateAt<GameBridge.BubbleSpikeSystem>(SystemUpdatePhase.UIUpdate);
-
             // M3-W：世界渲染 spike——走游戏原生 OverlayRenderSystem（DrawText/DrawCustomMesh/DrawCircle）。
             // 相位调查（2026-08-21 计数全 0）：先挂 GameSimulation 验证"写入时机/清空顺序"嫌疑
             // （OverlayRenderSystem 若在 GameSimulation 消费，Rendering 相位的写入可能先清后拷被永久跳过）
@@ -116,6 +130,7 @@ namespace CityLife
             Gateway?.Dispose();
             Gateway = null;
             ChirpChannel = null;
+            Options = null;
         }
     }
 }

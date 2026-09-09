@@ -14,12 +14,18 @@ namespace CityLife.GameBridge
     /// 2026-08-20 起**发帖直写 FeedStore**（自家面板是唯一展示层）：CustomChirps 软依赖退役留档，
     /// 玩家不再需要安装它。阈值与模板知识全在 Content 命名空间（版本免疫）；这里只做编排，不写业务规则。
     /// 注意：GameSystemBase 更新间隔**必须是 2 的幂**（非 2 幂 mod 初始化直接抛异常，2026-08-19 踩坑）。
+    ///
+    /// 话题创建炉（S3，§12 #48 水位触发段）：每节拍检查话题库水位——新鲜生成话题（权重 ≥0.25，炉龄 ≤16）
+    /// &lt;15 条则经网关发一炉产 30-50 条入 TopicReservoir（输出 schema 与社区 topics.jsonl 同构，
+    /// 解析复用装载路径）。触发/闸门全在执行层确定性（#27：LLM 不握触发权），feedMode/MUTE 与主炉同口径。
     /// </summary>
     public partial class ContentDirectorSystem : GameSystemBase
     {
         private const int k_BatchSize = 10;     // 每炉条数（高速游戏下池子要更深：释放随模拟帧加速，补炉是墙钟延迟）
         private const int k_RefillWatermark = 5; // 池低于此数补炉
         private const int k_RecentKeep = 12;     // 已发正文保留数（去重反馈+查重共用）
+        private const int k_TopicWatermark = 15; // 话题炉水位线：新鲜生成话题低于此数开炉（§12 #48）
+        private const double k_TopicForgeTtl = 300; // 话题炉 TTL（秒）：低频补给，宁缺毋滥
 
         private EntityQuery m_CitizenQuery = default!;
         private TopicRadarSystem m_Radar = default!;
@@ -47,6 +53,9 @@ namespace CityLife.GameBridge
         private uint m_LastThreadBatch;          // 上一次发续热炉的炉计数（每 5 炉一次的节流）
         private uint m_Tick;                     // 导演自身节拍计数（feedMode=throttled 降频用）
         private bool m_BatchPending;
+        private bool m_TopicForgePending;        // 话题炉在飞（低频补给，同时在飞最多一炉）
+        private System.DateTime m_TopicForgeSince; // 话题炉发炉时刻（UTC）：网关过期丢弃不回包，墙钟兜底解锁
+        private string m_TopicForgeHead = "";    // 话题炉固定 prompt 头（OnCreate 拼一次缓存复用）
 
         /// <summary>市长回应炉的固定 prompt 头（OnCreate 时拼好；CityLifeUISystem 发炉时取用）。</summary>
         public static string? ReplyHead;
@@ -73,6 +82,7 @@ namespace CityLife.GameBridge
                 System.IO.Path.Combine(cfgDir, "topics.jsonl"), msg => Mod.Log.Info(msg)); // 装载失败内置池兜底，不致命
             m_Head = Content.PromptBuilder.BuildHead(m_Personas); // 拼一次缓存复用（缓存纪律）
             ReplyHead = Content.PromptBuilder.BuildReplyHead(m_Personas); // 市长回应炉固定头（同纪律）
+            m_TopicForgeHead = Content.PromptBuilder.BuildTopicForgeHead(); // 话题炉固定头（S3，同纪律）
             Content.ModSettings.Load(cfgDir, msg => Mod.Log.Info(msg)); // 玩家开关（t0Fallback 等）
             Mod.Feed.MaxItems = Content.ModSettings.FeedMaxItems;   // 信息流上限（玩家可调）
 
@@ -123,6 +133,12 @@ namespace CityLife.GameBridge
                         World.GetOrCreateSystemManaged<EventChainSystem>().OnIntentJson(r.Result.Text);
                     else
                         Mod.Log.Info($"[LLM] 意图解析炉失败：{r.Result.Error}");
+                    continue;
+                }
+                // 话题创建炉走专线路由：产出入话题库，不占常规批次位
+                if (r.RequestId != null && r.RequestId.StartsWith("topic:"))
+                {
+                    HandleTopicForgeResult(r);
                     continue;
                 }
 
@@ -276,6 +292,7 @@ namespace CityLife.GameBridge
                 Mod.Gateway.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Normal, 600));
                 m_BatchPending = true;
                 m_BatchCount++;
+                m_Topics.CurrentCycle = m_BatchCount; // 炉次同步：生成话题的衰减基准锚主炉节拍（节拍锚游戏时间）
             }
 
             // ④ 评论续热炉（评论区生态：热帖过一会儿继续长评论，争论有来回——2026-08-20 玩家反馈）
@@ -290,6 +307,26 @@ namespace CityLife.GameBridge
                 Mod.Gateway.Enqueue(new Llm.CliRequest(
                     Content.PromptBuilder.BuildThreadPrompt(ReplyHead, tAuthor, tText, tComments, count),
                     Llm.CliPriority.Low, 180, "thread:" + tSeq));
+            }
+
+            // ⑤ 话题创建炉（S3，§12 #48 水位触发）：新鲜生成话题（权重≥0.25/炉龄≤16）<15 条才开炉，
+            // 一炉产 30-50 条。触发/闸门全在执行层确定性（#27：LLM 不握触发权）；feedMode/MUTE 与主炉同口径。
+            if (m_TopicForgePending && (System.DateTime.UtcNow - m_TopicForgeSince).TotalSeconds > k_TopicForgeTtl + 60)
+                m_TopicForgePending = false; // 网关过期丢弃不回包（TTL 内泵在排队也会死等），墙钟兜底解锁
+            if (allowRefill && !m_TopicForgePending && Mod.Gateway != null && !Llm.CliGateway.Mute)
+            {
+                var fresh = m_Topics.FreshGeneratedCount();
+                if (fresh < k_TopicWatermark)
+                {
+                    Mod.Log.Info($"[Topic炉] 水位 {fresh}（<{k_TopicWatermark}），开炉");
+                    var count = 30 + (int)(m_BatchCount % 21); // 30-50 条，随炉次确定性变化
+                    Mod.Gateway.Enqueue(new Llm.CliRequest(
+                        Content.PromptBuilder.BuildTopicForgePrompt(
+                            m_TopicForgeHead, snapshot, m_Topics.SampleForPrompt(m_BatchCount, 20), count),
+                        Llm.CliPriority.Low, k_TopicForgeTtl, "topic:" + m_BatchCount));
+                    m_TopicForgePending = true;
+                    m_TopicForgeSince = System.DateTime.UtcNow;
+                }
             }
 
             m_Tick++;
@@ -365,6 +402,22 @@ namespace CityLife.GameBridge
                 if (Mod.Feed.AppendComment(seq, AuthorFor(pid), text))
                     added++;
             Mod.Log.Info($"[LLM] 市长帖 #{seq} 回应 +{added} 条评论");
+        }
+
+        /// <summary>
+        /// 话题创建炉结果处理：JSONL 复用话题库装载路径解析入库——部分行可用就部分入库，
+        /// 坏行计数（与社区装载同纪律）；失败只记日志不致命，水位低下节拍自然会再触发。
+        /// </summary>
+        private void HandleTopicForgeResult(Llm.CliCompletedResult r)
+        {
+            m_TopicForgePending = false;
+            if (!r.Result.Success)
+            {
+                Mod.Log.Info($"[Topic炉] 一炉失败：{r.Result.Error}（水位低了，下节拍再试）");
+                return;
+            }
+            var added = m_Topics.AddGeneratedBatch(r.Result.Text, out var skipped);
+            Mod.Log.Info($"[Topic炉] 入库 {added} 条（解析丢 {skipped} 条，库现 {m_Topics.Entries.Count} 题）");
         }
 
         /// <summary>已发正文登记：去重反馈池 + 人格卡前情（连载机制数据源）。</summary>

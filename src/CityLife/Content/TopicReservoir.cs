@@ -5,7 +5,7 @@ using CityLife.Util;
 
 namespace CityLife.Content
 {
-    /// <summary>话题来源：内置=默认货架；社区=玩家 topics.jsonl；生成=话题创建炉（S3，未到）产出。</summary>
+    /// <summary>话题来源：内置=默认货架；社区=玩家 topics.jsonl；生成=话题创建炉（S3）产出。</summary>
     public enum TopicSource
     {
         Builtin,
@@ -43,19 +43,21 @@ namespace CityLife.Content
     ///   ——越新越易被抽中，货架常新而非"说完"（#48 话题创建炉的出水口）。
     ///
     /// 容量：上限 MaxCapacity（默认 200），超出先逐出最旧的**生成**源条目；内置/社区永不逐出。
-    ///   生成源条目由 S3 话题创建炉经 AddGenerated 入库，炉节拍推进 CurrentCycle（衰减基准）。
+    ///   生成源条目由 S3 话题创建炉经 AddGenerated/AddGeneratedBatch 入库，炉节拍推进 CurrentCycle（衰减基准）。
+    ///   S3 水位口径见 FreshGeneratedCount：新鲜生成话题 &lt;15 条才开炉（触发在 ContentDirectorSystem，执行层确定性）。
     /// </summary>
     public sealed class TopicReservoir
     {
         private const int k_HalfLifeCycles = 8;   // 生成话题新鲜度半衰期（炉次）：每过 8 炉权重减半
         private const double k_MinWeight = 0.05;  // 生成话题权重下限：再老也留一口被抽中的机会，直到被容量逐出
+        private const double k_FreshWeight = 0.25; // "新鲜"门槛：权重 ≥0.25（炉龄 ≤16，两个半衰期内）算新鲜——S3 水位线口径
 
         private readonly List<TopicEntry> m_Entries = new();
 
         /// <summary>库容上限：超出先逐出最旧的生成源条目（内置/社区永不逐出）。</summary>
         public int MaxCapacity = 200;
 
-        /// <summary>当前炉次（S3 话题创建炉推进；生成话题衰减的年龄基准）。未接 S3 前恒 0，权重全 1，行为等同均匀抽。</summary>
+        /// <summary>当前炉次（主炉 m_BatchCount 同步推进；生成话题衰减的年龄基准）。</summary>
         public uint CurrentCycle;
 
         /// <summary>池内全部条目（只读视图，诊断/调试/S3 水位判断用）。</summary>
@@ -192,6 +194,57 @@ namespace CityLife.Content
                 BornCycle = CurrentCycle,
             });
             EvictOverflow();
+        }
+
+        /// <summary>
+        /// 话题创建炉产出批量入库（S3 的装载口）：输出 schema 与社区 topics.jsonl 完全同构，
+        /// 故直接复用同一条 Parse 路径——坏行跳过计数、好行 salvage（与社区装载同纪律，不致命）；
+        /// 逐条走 AddGenerated（BornCycle=CurrentCycle + 超容逐出）。返回入库条数。
+        /// </summary>
+        public int AddGeneratedBatch(string jsonl, out int skipped)
+        {
+            var entries = Parse(jsonl, TopicSource.Generated, out skipped);
+            foreach (var e in entries)
+                AddGenerated(e.Zone, e.Topic, e.Tags);
+            return entries.Count;
+        }
+
+        /// <summary>S3 水位：当前新鲜的生成源话题条数（权重 ≥ k_FreshWeight，即炉龄 ≤16）。&lt;15 触发话题创建炉。</summary>
+        public int FreshGeneratedCount()
+        {
+            var n = 0;
+            foreach (var e in m_Entries)
+                if (e.Source == TopicSource.Generated && WeightOf(e) >= k_FreshWeight)
+                    n++;
+            return n;
+        }
+
+        /// <summary>
+        /// 话题炉 prompt 的禁重复抽样（S3 动态尾）：确定性——同 salt+池状态同结果。
+        /// 从 salt 锚定的起点按等步长绕池取最多 max 条题面（分区天然铺开），同题面去重，不足则有多少给多少。
+        /// </summary>
+        public List<string> SampleForPrompt(uint salt, int max)
+        {
+            var list = new List<string>(max);
+            var n = m_Entries.Count;
+            if (n == 0 || max <= 0)
+                return list;
+            var stride = n > max ? n / max : 1; // 等步长铺满全池
+            var start = (int)(salt % (uint)n);
+            for (var k = 0; k < n && list.Count < max; k++)
+            {
+                var topic = m_Entries[(start + k * stride) % n].Topic;
+                var dup = false;
+                for (var i = 0; i < list.Count; i++)
+                    if (list[i] == topic)
+                    {
+                        dup = true;
+                        break;
+                    }
+                if (!dup)
+                    list.Add(topic);
+            }
+            return list;
         }
 
         /// <summary>超容逐出：只逐生成源里最旧的（BornCycle 最小）；池里全是内置/社区则允许超容——默认货架永不丢。</summary>

@@ -102,6 +102,41 @@ namespace CityLife.Content
             => adHead + "【店铺】" + name + "（" + word + "）【事由】" + reason + "\n写一条广告。\n";
 
         /// <summary>
+        /// 话题创建炉的固定前缀（S3，§12 #48 水位触发段）：启动时拼一次缓存复用（缓存纪律同主头，逐字节稳定）。
+        /// 角色=虚构城市居民闲聊话题策划；内容纪律守 #23 红线（无专名/无政治/无现实热点）。
+        /// 输出 schema 与社区 topics.jsonl 完全同构——解析直接复用 TopicReservoir 的装载代码路径。
+        /// </summary>
+        public static string BuildTopicForgeHead()
+        {
+            var sb = new StringBuilder(768);
+            sb.Append("你是虚构城市\"市民圈\"的话题策划，给居民闲聊出话题。城市是模拟游戏里的虚构城市，一切内容虚构。\n");
+            sb.Append("【铁律】话题要生活化、口语化，是居民随口能接的日常题；不使用真实名人、品牌、地名、事件名；不碰现实政治、种族、性别议题；不追现实热点——写虚构城市里永远不过时的日常。\n");
+            sb.Append("【覆盖】分区尽量铺开：美食/通勤/职场/家里/萌宠/消费/娱乐/沙雕轮着来，也可开新分区（衣着、住房、出行、八卦、工作、宠物……），别扎堆。\n");
+            sb.Append("【规格】每条 ≤20 字，是一句居民能接话的题目（\"夜宵哪家强\"\"停车又绕了三圈\"这种），不是新闻标题，不要访谈腔。\n");
+            sb.Append("【输出】只输出 JSONL：一行一条 {\"zone\":\"分区\",\"topic\":\"话题\",\"tags\":[\"场合标签，可空\"]}，禁止输出任何其他字符（不要 markdown 围栏、不要解释、不要序号）。\n");
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 话题炉完整 prompt = 话题头 + 动态尾：城市此刻 + 已有话题抽样（禁重复反馈）+ 条数任务。
+        /// existing 是执行层确定性抽样（TopicReservoir.SampleForPrompt，~20 条）；count 由水位调用方定（30-50）。
+        /// </summary>
+        public static string BuildTopicForgePrompt(string head, in CitySnapshot s, IReadOnlyList<string> existing, int count)
+        {
+            var sb = new StringBuilder(head.Length + 512);
+            sb.Append(head);
+            sb.Append("【城市此刻】").Append(DescribeCity(s)).Append('\n');
+            if (existing.Count > 0)
+            {
+                sb.Append("【已有话题，禁止重复或换汤不换药】\n");
+                foreach (var t in existing)
+                    sb.Append("- ").Append(t).Append('\n');
+            }
+            sb.Append("【任务】写 ").Append(count).Append(" 条新话题。\n");
+            return sb.ToString();
+        }
+
+        /// <summary>
         /// 市长回应炉的固定前缀（M2-C 追加）：与主头同一套缓存纪律——启动时拼一次复用。
         /// 只写评论，卡库共享主卡册（评论的 persona 任选）。
         /// </summary>

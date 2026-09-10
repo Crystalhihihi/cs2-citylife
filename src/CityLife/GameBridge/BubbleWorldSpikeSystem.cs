@@ -55,6 +55,10 @@ namespace CityLife.GameBridge
     /// 密度/重叠治理（v4.4）：屏幕矩形互斥（底板 footprint 投影、视深为尺）+ 同屏可见上限=采样池/6；
     ///   中选优先级 v5.2 起改滞回（§12 #49，实机"近者优先帧帧翻盘、人堆互顶读不完"的根治）：
     ///   剧场参与者必留 > 在画泡驻留期内保位（换文案时刻才重新竞争）> 近者优先填坑。
+    ///   v5.3 起叠加可见端分类比例（§12 #51，"不是所有一起冒"）：楼/车各 ≤上限/3，人不限（人为主）；
+    ///   车站不当楼说话（楼查询排除 Game.Routes.WaitingPassengers，车站声音归候车行人/小剧场）；
+    ///   长文稳锚：换文案时实测锚点移速，动的限长（>3m/s ≤16 字 / >0.6 ≤32 / 静止 ≤48），楼不限；
+    ///   追踪上限=采样满档 120+剧场保留位 16（池灌满不再把剧场 EnsureAnchor 顶死）。
     /// 分锚点显隐距离（v4.5，2026-09-09 实机标定）：人 125m / 车 320m / 楼 800m 基础档，
     ///   采样/绘制同用 MaxDistFor 一把尺；玩家倍率滑杆已接设置页（§12 #44/#45，Mod.Options 直读生效）。
     /// 设置页接入（2026-09-09，§12 #45）：总开关 BubbleEnabled（与 Ctrl+9 AND）、三类距离倍率、
@@ -82,7 +86,9 @@ namespace CityLife.GameBridge
     /// </summary>
     public partial class BubbleWorldSpikeSystem : GameSystemBase
     {
-        private const int k_MaxBubbles = 120;
+        // 追踪上限 = 采样池满档 120 + 剧场保留位 16（2026-09-10 实机：池子被采样灌满后 EnsureAnchor
+        // 容量闸必挂，剧场开播中止连发——采样永远填不到这里，差额就是剧场的专用坑）
+        private const int k_MaxBubbles = 136;
         // 分锚点显隐距离基础档（2026-09-09 实机标定终值，§12 #44；采样/绘制同用这一组尺）——
         // 纯距离门控不做俯仰角门控；玩家倍率滑杆在设置页（§12 #45），MaxDistFor 里乘上。
         // 人档即 §12 #41 的"人清晰可见"临界
@@ -214,9 +220,10 @@ namespace CityLife.GameBridge
             public Rect ScreenRect;
             public Entity Anchor;   // 滞回：上帧在画判定
             public float NextAt;    // 驻留期满时刻（unscaledTime，与 TrackedBubble 同时钟）
+            public byte Kind;       // 0 人 1 车 2 楼——可见端分类比例上限用（§12 #51）
         }
 
-        /// <summary>一个被追踪的气泡：锚点实体 + 当前文案 + 独立生命周期。</summary>
+        /// <summary>一个被追踪的气泡：锚点实体 + 当前文案 + 独立生命周期 + 实测移速（长文稳锚用，§12 #51）。</summary>
         private struct TrackedBubble
         {
             public Entity Anchor;
@@ -224,6 +231,9 @@ namespace CityLife.GameBridge
             public string Text;     // 当前文案（Add 前必走 SetBubbleText，不会读到 null）
             public int TextIdx;
             public float NextAt;    // 下次换文案时刻（unscaledTime 墙钟——倍速不缩短驻留，§12 #49）
+            public float3 LastPos;  // 上次换文案时锚点位（测速用）
+            public float LastSetAt; // 上次换文案时刻（unscaledTime；0=未测过）
+            public float Speed;     // 实测移速 m/s（换文案间隔的位移/时长点估计；初值 车=3 假设在动，人/楼=0）
         }
 
         /// <summary>一段烘焙好的文字：网格+材质对（CJK fallback 可能多段）+ 合并包围盒参数。</summary>
@@ -269,6 +279,9 @@ namespace CityLife.GameBridge
             m_BuildingQuery = GetEntityQuery(
                 ComponentType.ReadOnly<Game.Buildings.Building>(),
                 ComponentType.ReadOnly<Transform>(),
+                // 车站不当楼说话（2026-09-10 实机："公交站说晚饭吃啥"读取混乱）——候车组件实锤挂车站实体
+                // （Game.Routes.WaitingPassengers，spike §4）；车站的声音归候车行人锚点/小剧场，不归楼池
+                ComponentType.Exclude<Game.Routes.WaitingPassengers>(),
                 ComponentType.Exclude<Game.Common.Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
             m_ConfigQuery = GetEntityQuery(ComponentType.ReadOnly<OverlayConfigurationData>());
@@ -483,6 +496,7 @@ namespace CityLife.GameBridge
                     Anchor = scored[i].e,
                     Kind = kind,
                     TextIdx = 0,
+                    Speed = kind == 1 ? 3f : 0f, // 车未测先按在动（只配短句），人/楼按静止（§12 #51 长文稳锚）
                 };
                 SetBubbleText(ref b, 0);
                 b.NextAt = now + HoldFor(scored[i].e.Index, 0, b.Text.Length); // 时长依赖文案，须在 SetBubbleText 之后
@@ -535,7 +549,7 @@ namespace CityLife.GameBridge
                 : Camera.allCameras.Length > 0 ? Camera.allCameras[0] : null;
             if (cam == null || !OnScreen(cam, e, kind))
                 return false;
-            var b = new TrackedBubble { Anchor = e, Kind = kind, TextIdx = 0 };
+            var b = new TrackedBubble { Anchor = e, Kind = kind, TextIdx = 0, Speed = kind == 1 ? 3f : 0f };
             SetBubbleText(ref b, 0);
             b.NextAt = UnityEngine.Time.unscaledTime + HoldFor(e.Index, 0, b.Text.Length); // 时长依赖文案，须在 SetBubbleText 之后
             m_Bubbles.Add(b);
@@ -587,6 +601,16 @@ namespace CityLife.GameBridge
         /// 其次闲聊炉片段池（v5.0 主源），取不到回退占位文案池（池空兜底——开局炉未出时气泡仍有话）。</summary>
         private void SetBubbleText(ref TrackedBubble b, int textIdx)
         {
+            // 实测移速（§12 #51 长文稳锚）：换文案间隔位移/时长的点估计；读不到位置维持旧值
+            if (EntityManager.HasComponent<Transform>(b.Anchor))
+            {
+                var pos = EntityManager.GetComponentData<Transform>(b.Anchor).m_Position;
+                var nowS = UnityEngine.Time.unscaledTime;
+                if (b.LastSetAt > 0f && nowS - b.LastSetAt > 0.5f)
+                    b.Speed = math.distance(pos, b.LastPos) / (nowS - b.LastSetAt);
+                b.LastPos = pos;
+                b.LastSetAt = nowS;
+            }
             var theater = Theater;
             if (theater != null && theater.TryGetLine(b.Anchor, out var theaterLine))
             {
@@ -638,10 +662,16 @@ namespace CityLife.GameBridge
             }
             var pool = m_Chatter.Snippets;
             var occasion = OccasionFor(b.Kind);
+            // 长文稳锚（§12 #51）：楼不限长；动的锚点按实测移速限长——快车只彪短句，堵车/站稳才说长话。
+            // 楼 anchor 恒静止；人走路 ~1.5m/s 归中档；车未测速前按在动（初始化 3 m/s）
+            var maxLen = b.Kind == 2 ? int.MaxValue
+                : b.Speed > 3f ? 16
+                : b.Speed > 0.6f ? 32
+                : 48;
             var salt = (uint)(b.Anchor.Index + textIdx);
             for (uint k = 0; k < 8; k++)
             {
-                var picked = pool.PickFor(occasion, salt + k);
+                var picked = pool.PickFor(occasion, salt + k, maxLen);
                 if (picked == null)
                     return false; // 该场合连 Any 候选都没有（理论到不了，纯防御）
                 if (k < 7 && m_UsedThisFrame.Contains(picked.Text))
@@ -1119,6 +1149,7 @@ namespace CityLife.GameBridge
                         ScreenRect = new Rect(sp.x - w * 0.5f, sp.y - h * 0.5f, w, h),
                         Anchor = b.Anchor,
                         NextAt = b.NextAt,
+                        Kind = b.Kind,
                     });
                 }
 
@@ -1126,19 +1157,27 @@ namespace CityLife.GameBridge
                 // ① 剧场参与者必留（看戏不被路人顶掉）② 上帧在画且驻留期未满的保位（到换文案时刻才重新竞争，
                 // 换文案时刻天然错相=整屏不一起换）③ 剩余坑位近者优先填满。
                 // 旧版纯"近者优先"帧帧翻盘：人堆里深度微变→胜负手每帧换→泡互顶谁也没读完（2026-09-10 实机实锤）。
+                // 可见端分类比例（§12 #51，"不是所有一起冒"）：楼 ≤cap/3、车 ≤cap/3、人不限（人为主 §12 #48 哲学）；
+                // 剧场泡不受分类上限管（必留档高于一切）。
                 m_Candidates.Sort((a, b) => a.Dist.CompareTo(b.Dist));
                 m_Kept.Clear();
                 m_KeptSet.Clear();
                 var cap = math.max(4, LevelCount() / k_VisibleDiv);
+                var kindCap = cap / 3;
+                var keptCar = 0;
+                var keptBuilding = 0;
                 var nowU = UnityEngine.Time.unscaledTime;
                 var theater = Theater;
                 foreach (var c in m_Candidates) // ①② 保位档（候选已近→远排好，保位也近者优先）
                 {
                     if (m_Kept.Count >= cap)
                         break;
+                    var isTheater = theater != null && theater.HasActiveOn(c.Anchor);
                     var hold = nowU < c.NextAt && m_PrevKept.Contains(c.Anchor);
-                    if (!hold && (theater == null || !theater.HasActiveOn(c.Anchor)))
+                    if (!isTheater && !hold)
                         continue;
+                    if (!isTheater && c.Kind == 1 && keptCar >= kindCap) { continue; }
+                    if (!isTheater && c.Kind == 2 && keptBuilding >= kindCap) { continue; }
                     var blocked = false;
                     foreach (var k in m_Kept)
                         if (c.ScreenRect.Overlaps(k.ScreenRect)) { blocked = true; break; }
@@ -1146,6 +1185,7 @@ namespace CityLife.GameBridge
                     {
                         m_Kept.Add(c);
                         m_KeptSet.Add(c.Anchor);
+                        if (c.Kind == 1) keptCar++; else if (c.Kind == 2) keptBuilding++;
                     }
                 }
                 foreach (var c in m_Candidates) // ③ 填坑档
@@ -1154,6 +1194,8 @@ namespace CityLife.GameBridge
                         break;
                     if (m_KeptSet.Contains(c.Anchor))
                         continue;
+                    if (c.Kind == 1 && keptCar >= kindCap) { continue; }
+                    if (c.Kind == 2 && keptBuilding >= kindCap) { continue; }
                     var blocked = false;
                     foreach (var k in m_Kept)
                         if (c.ScreenRect.Overlaps(k.ScreenRect)) { blocked = true; break; }
@@ -1161,6 +1203,7 @@ namespace CityLife.GameBridge
                     {
                         m_Kept.Add(c);
                         m_KeptSet.Add(c.Anchor);
+                        if (c.Kind == 1) keptCar++; else if (c.Kind == 2) keptBuilding++;
                     }
                 }
                 // 本帧中选集 = 下帧滞回依据（HashSet.Clear 保容量，逐帧零分配）

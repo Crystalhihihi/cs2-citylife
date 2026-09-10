@@ -440,7 +440,7 @@ namespace CityLife.GameBridge
             if (digest.Length > 0)
                 scene += "｜旁边：" + digest;
             var prompt = Content.PromptBuilder.BuildTheaterPrompt(m_Head, snapshot, scene, cards, lines);
-            Mod.Gateway!.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Low, k_ForgeTtl, "theater:" + m_ForgeCount));
+            Mod.Gateway!.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Normal, k_ForgeTtl, "theater:" + m_ForgeCount)); // Normal 不 Low：thinking 时代低优先级在队尾等死，剧本晚到=锚点已散=开播中止（2026-09-10 实机）
 
             var casting = new Casting
             {

@@ -123,13 +123,22 @@ namespace CityLife.Content
 
         /// <summary>
         /// S5 取泡口：按场合确定性抽一条（候选 = exact 场合 ∪ Any；同 salt+池状态必同条——气泡换文案要可复现）。
+        /// maxLen 限长（§12 #51 长文稳锚：动的锚点只配短句；入库已 ≤40 字）；限长后无候选回退不限长（宁长勿模板）。
         /// 池空/无候选返回 null（调用方回退占位文案）。
         /// </summary>
-        public BubbleSnippet? PickFor(BubbleOccasion occasion, uint salt)
+        public BubbleSnippet? PickFor(BubbleOccasion occasion, uint salt, int maxLen = int.MaxValue)
+        {
+            var picked = PickFiltered(occasion, salt, maxLen);
+            return picked ?? (maxLen == int.MaxValue ? null : PickFiltered(occasion, salt, int.MaxValue));
+        }
+
+        /// <summary>限长过滤的确定性抽取（候选计数 → salt 取模定位）。无候选返回 null。</summary>
+        private BubbleSnippet? PickFiltered(BubbleOccasion occasion, uint salt, int maxLen)
         {
             var n = 0;
             for (int i = 0; i < m_Entries.Count; i++)
-                if (m_Entries[i].Occasion == occasion || m_Entries[i].Occasion == BubbleOccasion.Any)
+                if ((m_Entries[i].Occasion == occasion || m_Entries[i].Occasion == BubbleOccasion.Any)
+                    && m_Entries[i].Text.Length <= maxLen)
                     n++;
             if (n == 0)
                 return null;
@@ -138,6 +147,8 @@ namespace CityLife.Content
             {
                 var e = m_Entries[i];
                 if (e.Occasion != occasion && e.Occasion != BubbleOccasion.Any)
+                    continue;
+                if (e.Text.Length > maxLen)
                     continue;
                 if (target-- == 0)
                     return e;

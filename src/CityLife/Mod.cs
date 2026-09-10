@@ -58,6 +58,12 @@ namespace CityLife
             lm.AddSource("zh-HANS", new Colossal.Localization.MemorySource(GameBridge.CityLifeLocalization.Zh));
             lm.AddSource("zh-CN", new Colossal.Localization.MemorySource(GameBridge.CityLifeLocalization.Zh));
             Log.Info("[Settings] 游戏内设置页已注册（选项→Mods→CityLife）+ 中英本地化已注入");
+            // 开机回读玩家当前值——验收/排查第一眼就能看到闸门口径
+            // （2026-09-10 教训：feedMode=openOnly 收面板时主炉/话题炉/闲聊炉/剧场炉按设计全静默，日志零线索）
+            Log.Info($"[Settings] 当前值：feedMode={Content.ModSettings.FeedMode} t0Fallback={Content.ModSettings.T0Fallback} " +
+                     $"写回={Content.ModSettings.WriteBackTier} 信息流上限={Content.ModSettings.FeedMaxItems}｜" +
+                     $"气泡 总开关={Options.BubbleEnabled} 距离倍率 人{Options.BubbleDistHuman:0.##}/车{Options.BubbleDistCar:0.##}/楼{Options.BubbleDistBuilding:0.##} " +
+                     $"密度={Options.BubbleDensity} 底板={Options.BubblePlate}");
 
             // M1 CLI 网关装配：日志注入 + 启动后台泵。供给不可用不致命，
             // 请求会走失败重试路径并计数，游戏照常（T0 模板兜底）。

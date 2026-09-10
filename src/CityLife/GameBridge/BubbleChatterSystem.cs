@@ -23,9 +23,9 @@ namespace CityLife.GameBridge
     /// 更新间隔 128 帧只是时刻表检查粒度（2 的幂铁律，AGENTS.md 实锤坑），真实节拍由
     /// m_NextForgeAt 游戏时刻控制：开炉后定下一炉 = Now + (3|4|5) 游戏分钟（炉计数轮换，确定性）。
     ///
-    /// 闸门（与 S3 话题炉同口径）：feedMode（openOnly 收面板停炉 / throttled 收面板仅池空保温）
-    /// + MUTE 静默（连 prompt 都不拼，零成本）+ 网关可用 + 无在飞。在飞标志 + 墙钟 TTL+60s
-    /// 兜底解锁（S3 同款：网关过期丢弃不回包，绝不能死等）。
+    /// 闸门（§12 #49 起独立于 feedMode——气泡不看面板也在显示，收面板不该退回占位话）：
+    /// 设置页"气泡 AI 闲聊"开关（默认开，关=零 token）+ MUTE 静默（连 prompt 都不拼，零成本）
+    /// + 网关可用 + 无在飞。在飞标志 + 墙钟 TTL+60s 兜底解锁（S3 同款：网关过期丢弃不回包，绝不能死等）。
     ///
     /// 结果路由：网关结果由 ContentDirectorSystem 统一出队，按 requestId "chatter:" 前缀转交
     /// OnChatterResult（"ad:"→ShopAdSystem 同款先例——本系统不能自己 TryDequeueResult，
@@ -98,12 +98,8 @@ namespace CityLife.GameBridge
             if (m_ForgePending || Mod.Gateway == null || Llm.CliGateway.Mute)
                 return; // MUTE 静默零成本：连 prompt 都不拼
 
-            // feedMode 门控（与 S3 话题炉同口径）：openOnly 收面板停炉；throttled 收面板仅池空保温
-            var panelOpen = Content.LiveContext.PanelOpen;
-            var mode = Content.ModSettings.FeedMode;
-            if (mode == "openOnly" && !panelOpen)
-                return;
-            if (mode == "throttled" && !panelOpen && m_Pool.Count > 0)
+            // 开关闸（§12 #49）：气泡不看面板也在显示，故不随 feedMode 停——独立开关，默认开；关=零 token
+            if (!Content.ModSettings.BubbleChatterEnabled)
                 return;
 
             var snapshot = m_Radar.Latest;

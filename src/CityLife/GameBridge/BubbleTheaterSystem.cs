@@ -31,7 +31,8 @@ namespace CityLife.GameBridge
     /// ③ 开炉：场景卡（地点名+环境摘要 BuildDigest）+ 每人一张处境卡（CitizenPoolSystem.DescribeCitizen
     ///    按实体出卡）→ 一次 LLM 调用产 2-4 轮剧本 JSONL {"speaker":1,"text":...}（speaker=参与者序号，
     ///    1 起）。固定头 PromptBuilder.BuildTheaterHead 启动拼一次缓存（逐字节稳定纪律）。
-    ///    网关/MUTE/feedMode/TTL 兜底闸门全照抄闲聊炉；结果走 ContentDirectorSystem 按 "theater:" 前缀
+    ///    网关/MUTE/TTL 兜底闸门照抄闲聊炉；feedMode 已解耦（§12 #49），改吃设置页"气泡小剧场"
+    ///    独立开关（默认开，关=零 token）。结果走 ContentDirectorSystem 按 "theater:" 前缀
     ///    转交 OnTheaterResult（不自己 TryDequeueResult——两个消费者轮询同一队列会互相偷包）。
     /// ④ 播放：激活前全量复核（任一参与者失效/离开/锚点不可锚=开播中止，全有或全无——speaker 序号
     ///    与名单绑定，减员不重排）；激活时第一句直接落到其说话人锚点，其余参与者锚点显"……"（在听）。
@@ -189,12 +190,8 @@ namespace CityLife.GameBridge
             if (Mod.Gateway == null || Llm.CliGateway.Mute)
                 return; // MUTE 静默零成本：连扫描都不做（供给不可用=不开，不致命）
 
-            // feedMode 门控（闲聊炉同口径）：openOnly 收面板停炉；throttled 收面板仅"无活剧场"保温
-            var panelOpen = Content.LiveContext.PanelOpen;
-            var mode = Content.ModSettings.FeedMode;
-            if (mode == "openOnly" && !panelOpen)
-                return;
-            if (mode == "throttled" && !panelOpen && m_Active.Count > 0)
+            // 开关闸（§12 #49）：同闲聊炉口径——独立于 feedMode 的设置页开关，默认开；关=零 token
+            if (!Content.ModSettings.BubbleTheaterEnabled)
                 return;
 
             var snapshot = m_Radar.Latest;
@@ -583,6 +580,11 @@ namespace CityLife.GameBridge
             }
             return false;
         }
+
+        /// <summary>气泡防叠优先级查询（纯查询，§12 #49）：锚点挂在未播完的活剧场 → true——
+        /// 剧场泡不被路人泡顶掉（人堆里"近者优先"帧帧翻盘、谁也没读完的实机教训）。</summary>
+        internal bool HasActiveOn(Entity anchor)
+            => m_ByAnchor.TryGetValue(anchor, out var t) && !t.Finished;
 
         /// <summary>气泡生命周期回调（BubbleWorldSpikeSystem.TickLifecycle 在任一剧场锚点到时换文案前调）：
         /// 剧本推进一句——下一句写到其说话人的锚点上，并让该锚点立即换文案（RefreshAnchorText：

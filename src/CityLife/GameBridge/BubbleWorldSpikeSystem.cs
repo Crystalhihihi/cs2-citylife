@@ -52,8 +52,9 @@ namespace CityLife.GameBridge
     ///   （Ctrl+5/6 底板标定键已于 2026-09-08 实机定案后砍除，终值落常量 k_PlateSizeRatio/k_PlateYDrop；
     ///     Ctrl+6 复用为 LOD 打点后，2026-09-09 距离标定收官一并砍除；
     ///     Ctrl+7/8 底板开关/数量档于设置页上线后砍除（2026-09-09，§12 #45）——改由设置页承载）
-    /// 密度/重叠治理（v4.4）：屏幕矩形互斥（底板 footprint 投影、视深为尺）+ 近者优先 +
-    ///   同屏可见上限=采样池/6。
+    /// 密度/重叠治理（v4.4）：屏幕矩形互斥（底板 footprint 投影、视深为尺）+ 同屏可见上限=采样池/6；
+    ///   中选优先级 v5.2 起改滞回（§12 #49，实机"近者优先帧帧翻盘、人堆互顶读不完"的根治）：
+    ///   剧场参与者必留 > 在画泡驻留期内保位（换文案时刻才重新竞争）> 近者优先填坑。
     /// 分锚点显隐距离（v4.5，2026-09-09 实机标定）：人 125m / 车 320m / 楼 800m 基础档，
     ///   采样/绘制同用 MaxDistFor 一把尺；玩家倍率滑杆已接设置页（§12 #44/#45，Mod.Options 直读生效）。
     /// 设置页接入（2026-09-09，§12 #45）：总开关 BubbleEnabled（与 Ctrl+9 AND）、三类距离倍率、
@@ -197,8 +198,11 @@ namespace CityLife.GameBridge
         private readonly List<DrawCandidate> m_Candidates = new();
         private readonly List<DrawCandidate> m_Kept = new();
         private int m_KeptCount;
+        // 滞回状态（§12 #49）：上帧中选锚点集 + 本帧中选锚点集（兼做防重入查重）
+        private readonly HashSet<Entity> m_PrevKept = new();
+        private readonly HashSet<Entity> m_KeptSet = new();
 
-        /// <summary>一帧内一个待画气泡的全部绘制参数（文字矩阵+底板参数+屏幕包围盒）。</summary>
+        /// <summary>一帧内一个待画气泡的全部绘制参数（文字矩阵+底板参数+屏幕包围盒+滞回判定用的锚点/驻留期满时刻）。</summary>
         private struct DrawCandidate
         {
             public BakedText Entry;
@@ -208,6 +212,8 @@ namespace CityLife.GameBridge
             public float PlateH;
             public int Bucket;
             public Rect ScreenRect;
+            public Entity Anchor;   // 滞回：上帧在画判定
+            public float NextAt;    // 驻留期满时刻（unscaledTime，与 TrackedBubble 同时钟）
         }
 
         /// <summary>一个被追踪的气泡：锚点实体 + 当前文案 + 独立生命周期。</summary>
@@ -217,7 +223,7 @@ namespace CityLife.GameBridge
             public byte Kind;       // 0 人 1 车 2 楼
             public string Text;     // 当前文案（Add 前必走 SetBubbleText，不会读到 null）
             public int TextIdx;
-            public float NextAt;    // 下次换文案时刻（Time.time）
+            public float NextAt;    // 下次换文案时刻（unscaledTime 墙钟——倍速不缩短驻留，§12 #49）
         }
 
         /// <summary>一段烘焙好的文字：网格+材质对（CJK fallback 可能多段）+ 合并包围盒参数。</summary>
@@ -469,7 +475,7 @@ namespace CityLife.GameBridge
             }
             arr.Dispose();
             scored.Sort((a, b) => a.d.CompareTo(b.d));
-            var now = UnityEngine.Time.time;
+            var now = UnityEngine.Time.unscaledTime;
             for (int i = 0; i < scored.Count && i < cap && m_Bubbles.Count < k_MaxBubbles; i++)
             {
                 var b = new TrackedBubble
@@ -531,7 +537,7 @@ namespace CityLife.GameBridge
                 return false;
             var b = new TrackedBubble { Anchor = e, Kind = kind, TextIdx = 0 };
             SetBubbleText(ref b, 0);
-            b.NextAt = UnityEngine.Time.time + HoldFor(e.Index, 0, b.Text.Length); // 时长依赖文案，须在 SetBubbleText 之后
+            b.NextAt = UnityEngine.Time.unscaledTime + HoldFor(e.Index, 0, b.Text.Length); // 时长依赖文案，须在 SetBubbleText 之后
             m_Bubbles.Add(b);
             return true;
         }
@@ -548,7 +554,7 @@ namespace CityLife.GameBridge
                 var b = m_Bubbles[i];
                 b.TextIdx++;
                 SetBubbleText(ref b, b.TextIdx);
-                b.NextAt = UnityEngine.Time.time + HoldFor(b.Anchor.Index, b.TextIdx, b.Text.Length);
+                b.NextAt = UnityEngine.Time.unscaledTime + HoldFor(b.Anchor.Index, b.TextIdx, b.Text.Length);
                 m_Bubbles[i] = b;
                 return;
             }
@@ -557,7 +563,7 @@ namespace CityLife.GameBridge
         // —— 生命周期：各气泡独立时钟（按字数缩放 + 确定性错相，绝不同时切换）——
         private void TickLifecycle()
         {
-            var now = UnityEngine.Time.time;
+            var now = UnityEngine.Time.unscaledTime;
             for (int i = 0; i < m_Bubbles.Count; i++)
             {
                 var b = m_Bubbles[i];
@@ -653,7 +659,8 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>气泡驻留时长：阅读时间 4s 起、每字 +0.28s、封顶 30s（话痨段落让人读完），
-        /// 再叠 0-4s 确定性抖动（实体×集数散列——全屏绝不同时切换）。</summary>
+        /// 再叠 0-4s 确定性抖动（实体×集数散列——全屏绝不同时切换）。
+        /// 墙钟语义（§12 #49）：配 unscaledTime 消费——倍速只加速模拟，不加速人阅读。</summary>
         private static float HoldFor(int entityIndex, int textIdx, int textLen)
         {
             var read = 4f + textLen * 0.28f;
@@ -819,7 +826,7 @@ namespace CityLife.GameBridge
                 entry.Height = math.max(bounds.size.y, 0.01f);
                 entry.Aspect = bounds.size.x / entry.Height;
                 entry.Lines = lines;
-                entry.LastUsed = UnityEngine.Time.time;
+                entry.LastUsed = UnityEngine.Time.unscaledTime;
                 EvictIfNeeded();
                 m_Cache[key] = entry;
                 if (!m_LoggedFirstBake)
@@ -1084,7 +1091,7 @@ namespace CityLife.GameBridge
                     var s = worldH / entry.Height;
                     var matrix = Matrix4x4.TRS((Vector3)p, rot, new Vector3(s, s, s))
                         * Matrix4x4.Translate(-entry.Center);
-                    entry.LastUsed = UnityEngine.Time.time;
+                    entry.LastUsed = UnityEngine.Time.unscaledTime;
 
                     // 底板参数（选档宁宽勿窄：需求比 = 文案宽高比 ÷ 底板高倍率 × 横向余量）
                     var plateH = worldH * k_PlateSizeRatio;
@@ -1110,23 +1117,56 @@ namespace CityLife.GameBridge
                         PlateH = plateH,
                         Bucket = bucket,
                         ScreenRect = new Rect(sp.x - w * 0.5f, sp.y - h * 0.5f, w, h),
+                        Anchor = b.Anchor,
+                        NextAt = b.NextAt,
                     });
                 }
 
-                // 防叠：近者优先，屏幕矩形互斥，同屏上限——叠压/超限的泡本帧让位（不参与绘制）
+                // 防叠（§12 #49 滞回版）：屏幕矩形互斥+同屏上限不变，中选人改三档优先级——
+                // ① 剧场参与者必留（看戏不被路人顶掉）② 上帧在画且驻留期未满的保位（到换文案时刻才重新竞争，
+                // 换文案时刻天然错相=整屏不一起换）③ 剩余坑位近者优先填满。
+                // 旧版纯"近者优先"帧帧翻盘：人堆里深度微变→胜负手每帧换→泡互顶谁也没读完（2026-09-10 实机实锤）。
                 m_Candidates.Sort((a, b) => a.Dist.CompareTo(b.Dist));
                 m_Kept.Clear();
+                m_KeptSet.Clear();
                 var cap = math.max(4, LevelCount() / k_VisibleDiv);
-                foreach (var c in m_Candidates)
+                var nowU = UnityEngine.Time.unscaledTime;
+                var theater = Theater;
+                foreach (var c in m_Candidates) // ①② 保位档（候选已近→远排好，保位也近者优先）
                 {
                     if (m_Kept.Count >= cap)
                         break;
+                    var hold = nowU < c.NextAt && m_PrevKept.Contains(c.Anchor);
+                    if (!hold && (theater == null || !theater.HasActiveOn(c.Anchor)))
+                        continue;
                     var blocked = false;
                     foreach (var k in m_Kept)
                         if (c.ScreenRect.Overlaps(k.ScreenRect)) { blocked = true; break; }
                     if (!blocked)
+                    {
                         m_Kept.Add(c);
+                        m_KeptSet.Add(c.Anchor);
+                    }
                 }
+                foreach (var c in m_Candidates) // ③ 填坑档
+                {
+                    if (m_Kept.Count >= cap)
+                        break;
+                    if (m_KeptSet.Contains(c.Anchor))
+                        continue;
+                    var blocked = false;
+                    foreach (var k in m_Kept)
+                        if (c.ScreenRect.Overlaps(k.ScreenRect)) { blocked = true; break; }
+                    if (!blocked)
+                    {
+                        m_Kept.Add(c);
+                        m_KeptSet.Add(c.Anchor);
+                    }
+                }
+                // 本帧中选集 = 下帧滞回依据（HashSet.Clear 保容量，逐帧零分配）
+                m_PrevKept.Clear();
+                foreach (var a in m_KeptSet)
+                    m_PrevKept.Add(a);
 
                 // 第二遍：只画中选泡（文字逐段 + 底板入档缓冲）
                 foreach (var c in m_Kept)

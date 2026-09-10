@@ -55,6 +55,10 @@ namespace CityLife.GameBridge
             { OptDesc(nameof(CityLifeSetting.BubbleAutoHideBuildTool)), "Hide all bubbles while a build tool is active (bulldozer counts as a tool too)." },
             { Opt(nameof(CityLifeSetting.BubbleAutoHidePhotoMode)), "Auto-hide in photo mode" },
             { OptDesc(nameof(CityLifeSetting.BubbleAutoHidePhotoMode)), "Hide all bubbles while photo mode is active." },
+            { Opt(nameof(CityLifeSetting.BubbleChatterEnabled)), "Bubble AI chatter" },
+            { OptDesc(nameof(CityLifeSetting.BubbleChatterEnabled)), "Chatter furnace feeds bubbles with AI lines on its own game-time cadence, independent of feed mode — bubbles are visible even with the panel closed. Off = placeholder lines only (zero tokens)." },
+            { Opt(nameof(CityLifeSetting.BubbleTheaterEnabled)), "Bubble mini-theater" },
+            { OptDesc(nameof(CityLifeSetting.BubbleTheaterEnabled)), "Group scripted dialogues at multi-person scenes (stops / shops / parks / homes). Off = no grouping, no furnace (zero tokens)." },
 
             { Opt(nameof(CityLifeSetting.FeedMode)), "Feed generation mode" },
             { OptDesc(nameof(CityLifeSetting.FeedMode)), "Always = the city lives on its own; OpenOnly = generation stops while the panel is closed (saves tokens); Throttled = reduced rate while closed." },
@@ -100,6 +104,10 @@ namespace CityLife.GameBridge
             { OptDesc(nameof(CityLifeSetting.BubbleAutoHideBuildTool)), "建造工具激活期间隐藏全部气泡（推土机也算工具激活，一并隐藏）。" },
             { Opt(nameof(CityLifeSetting.BubbleAutoHidePhotoMode)), "拍照模式下自动隐藏" },
             { OptDesc(nameof(CityLifeSetting.BubbleAutoHidePhotoMode)), "拍照模式激活期间隐藏全部气泡。" },
+            { Opt(nameof(CityLifeSetting.BubbleChatterEnabled)), "气泡 AI 闲聊" },
+            { OptDesc(nameof(CityLifeSetting.BubbleChatterEnabled)), "闲聊炉按自己的游戏时间节拍给气泡供文案，不随信息流节拍停——气泡不看面板也在显示。关=只用占位文案（零 token）。" },
+            { Opt(nameof(CityLifeSetting.BubbleTheaterEnabled)), "气泡小剧场" },
+            { OptDesc(nameof(CityLifeSetting.BubbleTheaterEnabled)), "多人场景（车站/商店/公园/住宅）组剧本轮播对话。关=不成组不开炉（零 token）。" },
 
             { Opt(nameof(CityLifeSetting.FeedMode)), "信息流生成节拍" },
             { OptDesc(nameof(CityLifeSetting.FeedMode)), "常开=城市自己在活着；仅展开=收起面板即停生成省 token；节流=收起时降频保温。" },

@@ -84,6 +84,15 @@ namespace CityLife.GameBridge
         [SettingsUISection(kTab, kGroupBubble)]
         public bool BubbleAutoHidePhotoMode { get; set; } = true;
 
+        /// <summary>气泡 AI 闲聊生成（默认开，§12 #49）：闲聊炉按自己的游戏时间节拍产气泡文案，
+        /// 不随信息流节拍（feedMode）停——气泡不看面板也在显示，收面板不该让气泡退回占位话。关=气泡只用占位文案（零 token）。</summary>
+        [SettingsUISection(kTab, kGroupBubble)]
+        public bool BubbleChatterEnabled { get; set; } = true;
+
+        /// <summary>气泡小剧场（默认开，§12 #49）：多人场景（车站/商店/公园/住宅）组剧本轮播对话。关=不成组不开炉（零 token）。</summary>
+        [SettingsUISection(kTab, kGroupBubble)]
+        public bool BubbleTheaterEnabled { get; set; } = true;
+
         // —— 信息流组（四键自 settings.json 迁移，Content.ModSettings 同名字段改透传本实例） ——
 
         /// <summary>信息流生成节拍（默认 Always 常开）。</summary>
@@ -114,6 +123,8 @@ namespace CityLife.GameBridge
             BubblePlate = true;
             BubbleAutoHideBuildTool = true;
             BubbleAutoHidePhotoMode = true;
+            BubbleChatterEnabled = true;
+            BubbleTheaterEnabled = true;
             FeedMode = FeedModeOption.Always;
             T0Fallback = false;
             WriteBackTier = WriteBackTierOption.Normal;

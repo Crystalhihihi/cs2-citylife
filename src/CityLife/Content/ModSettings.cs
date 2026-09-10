@@ -50,6 +50,12 @@ namespace CityLife.Content
         /// <summary>信息流仓库上限（默认 100；超 500 的全量推送开始亏性能，钳 20-500）——透传设置页。</summary>
         public static int FeedMaxItems => Mod.Options?.FeedMaxItems ?? 100;
 
+        /// <summary>气泡 AI 闲聊生成（默认开）——透传设置页。§12 #49：闲聊炉不随 feedMode 停（气泡不看面板也在显示）。</summary>
+        public static bool BubbleChatterEnabled => Mod.Options?.BubbleChatterEnabled ?? true;
+
+        /// <summary>气泡小剧场（默认开）——透传设置页。§12 #49：同闲聊炉口径，独立开关。</summary>
+        public static bool BubbleTheaterEnabled => Mod.Options?.BubbleTheaterEnabled ?? true;
+
         /// <summary>突发事件报道总开关（默认开）。</summary>
         public static bool BreakingNews { get; private set; } = true;
         /// <summary>热议档闸门：两次"全城集中讨论"的最小间隔（游戏小时，默认 12，钳 1-72）。</summary>

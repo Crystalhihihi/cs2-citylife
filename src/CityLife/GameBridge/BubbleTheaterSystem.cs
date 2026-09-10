@@ -36,6 +36,7 @@ namespace CityLife.GameBridge
     ///    转交 OnTheaterResult（不自己 TryDequeueResult——两个消费者轮询同一队列会互相偷包）。
     /// ④ 播放：激活前全量复核（任一参与者失效/离开/锚点不可锚=开播中止，全有或全无——speaker 序号
     ///    与名单绑定，减员不重排）；激活时第一句直接落到其说话人锚点，其余参与者锚点显"……"（在听）。
+    ///    台词带说话人名前缀（§12 #50："安珀尔：……"——多人/共锚分辨说话人，顺带成剧场视觉标识）。
     ///    轮次推进挂气泡换文案节拍：BubbleWorldSpikeSystem.TickLifecycle 里任一剧场锚点到时
     ///    → OnAnchorRotated → 下一句写到其说话人锚点 + RefreshAnchorText 立即换文案（上条读完
     ///    下条接话）；SetBubbleText 的插队分支 TryGetLine 是**纯查询**，绝不推轮次。
@@ -517,7 +518,7 @@ namespace CityLife.GameBridge
                     t.Anchors.Add(p.Anchor);
                 }
             var (s0, t0) = t.Script[0];
-            t.Lines[t.Participants[s0].Anchor] = t0;
+            t.Lines[t.Participants[s0].Anchor] = t.Participants[s0].Name + "：" + t0; // 名字前缀（§12 #50：多人/共锚分辨说话人，顺带成剧场视觉标识）
             t.Cursor = 1;
             if (t.Cursor >= t.Script.Count)
                 t.Finished = true; // 纯防御（有效 ≥2 句到不了这）
@@ -597,7 +598,7 @@ namespace CityLife.GameBridge
                 return;
             var (speaker, text) = t.Script[t.Cursor++];
             var speakerAnchor = t.Participants[speaker].Anchor;
-            t.Lines[speakerAnchor] = text;
+            t.Lines[speakerAnchor] = t.Participants[speaker].Name + "：" + text; // 名字前缀（§12 #50）
             if (t.Cursor >= t.Script.Count)
                 t.Finished = true;
             if (speakerAnchor != anchor)

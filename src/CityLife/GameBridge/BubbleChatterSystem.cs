@@ -39,6 +39,8 @@ namespace CityLife.GameBridge
     {
         private const double k_ForgeTtl = 300;  // 在飞请求 TTL（秒）：低频补给宁缺毋滥（S3 同值）
         private const int k_MinCards = 12;      // 每炉处境卡 12-16 张（炉计数取模确定性变化）×每卡 2-3 句（§12 #53 一次性供给侧加产）
+        private const int k_MinVehicleCards = 3; // 每炉 Vehicle 场合保底卡数（池里有才保——场合供给侧保底，治车载泡被吃回归）
+        private const int k_MinWalkCards = 3;    // 每炉 Walk 场合保底卡数（同上）
 
         private EntityQuery m_CitizenQuery = default!;
         private TopicRadarSystem m_Radar = default!;
@@ -113,16 +115,22 @@ namespace CityLife.GameBridge
             if (entries.Count == 0)
                 return; // 市民池还没采到（开局）；m_NextForgeAt 不动，下拍再试
             var count = Math.Min(k_MinCards + (int)(m_ForgeCount % 5), entries.Count);
+            // 先定人后组卡：场合供给侧保底（车载/步行锚点需求在街面，市民池分布夜晚室内占大头——
+            // 刀①拆除 Any 桥梁后 Vehicle/Walk 片段被一次性消耗饿死=车载泡全沉默，保底详见 EnsureOccasionSupply）
+            var picked = new List<CitizenContext>(count);
+            var stride = Math.Max(1, entries.Count / count);
+            var start = (int)(m_ForgeCount % (uint)entries.Count);
+            for (int k = 0; k < count; k++)
+                picked.Add(entries[(start + k * stride) % entries.Count]);
+            EnsureOccasionSupply(entries, picked, m_ForgeCount);
             var cards = new List<string>(count);
             var topics = new List<string>(count);
             m_CurrentZones.Clear();
             m_CurrentOccasions.Clear();
-            var stride = Math.Max(1, entries.Count / count);
-            var start = (int)(m_ForgeCount % (uint)entries.Count);
             var digested = 0; // 本炉带环境摘要的卡数（[环境圈] 每炉一行计数用）
-            for (int k = 0; k < count; k++)
+            for (int k = 0; k < picked.Count; k++)
             {
-                var entry = entries[(start + k * stride) % entries.Count];
+                var entry = picked[k];
                 // S6 环境圈摘要（§12 #48 场景为调料）：对卡的市民实体现位查一次 40m 半径，
                 // 非空则缀"｜旁边：X、Y"。每炉查询次数=卡片数（≤14），3-5 游戏分钟一炉，不进热路径
                 var card = entry.Context;
@@ -145,11 +153,15 @@ namespace CityLife.GameBridge
             }
 
             m_Pool.CurrentCycle = m_ForgeCount; // BornCycle 基准锚本炉
-            var prompt = Content.PromptBuilder.BuildChatterPrompt(m_Head, snapshot, cards, topics, Content.CityRumors.Recent(3)); // 刀②城市记忆：最新 3 条传闻当话料
+            var rumorsNow = Content.CityRumors.Recent(3); // 刀②城市记忆：最新 3 条传闻当话料
+            var prompt = Content.PromptBuilder.BuildChatterPrompt(m_Head, snapshot, cards, topics, rumorsNow);
             Mod.FastGateway!.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Low, k_ForgeTtl, "chatter:" + m_ForgeCount)); // 快轨（§12 #59）
             m_ForgePending = true;
             m_ForgeSince = DateTime.UtcNow;
-            Mod.Log.Info($"[闲聊炉] 开炉：处境卡 {count} 张（第 {m_ForgeCount + 1} 炉，池存 {m_Pool.Count}）");
+            var occTally = TallyOccasions();
+            Mod.Log.Info($"[闲聊炉] 开炉：处境卡 {count} 张（走{occTally[1]}/车{occTally[2]}/室{occTally[3]}/通{occTally[0]}，第 {m_ForgeCount + 1} 炉，池存 {m_Pool.Count}）");
+            if (rumorsNow.Count > 0)
+                Mod.Log.Info($"[闲聊炉] 本炉传闻：{string.Join(" / ", rumorsNow)}"); // 城市记忆可观测性：直接看到它在干活
             Mod.Log.Info($"[环境圈] 本炉摘要：{digested} 条非空（共 {count} 卡）"); // 每炉最多一行计数（首炉样例行在 EnvironmentDigestSystem）
 
             m_ForgeCount++;
@@ -201,6 +213,61 @@ namespace CityLife.GameBridge
                 if (entries[i].Topic == topic)
                     return entries[i].Zone;
             return "";
+        }
+
+        /// <summary>场合供给侧保底（2026-09-11 车载泡被吃回归的修复）：每炉 Vehicle/Walk 各保 k_MinVehicleCards/k_MinWalkCards 张
+        /// （池里有才保，没有不硬造）。根因链：生产端按市民池分布（夜晚室内占大头），消费端按锚点分布（满街车锚吃 Vehicle），
+        /// 刀①拆除 Any 桥梁+§12 #53 一次性消耗下，Vehicle/Walk 片段入不敷出=车锚全落沉默泡。
+        /// 保底=确定性换坑：从炉计数锚定偏移顺找未选中的对应场合市民，替换室内槽位（室内是夜晚绝对多数派，换得起）。</summary>
+        private static void EnsureOccasionSupply(IReadOnlyList<CitizenContext> entries, List<CitizenContext> picked, uint salt)
+        {
+            EnsureOccasion(entries, picked, salt, Content.BubbleOccasion.Vehicle, k_MinVehicleCards);
+            EnsureOccasion(entries, picked, salt + 7919u, Content.BubbleOccasion.Walk, k_MinWalkCards);
+        }
+
+        /// <summary>单场合保底：picked 里 occ 不足 min 时，用池里未选中的 occ 市民替换室内槽（锚定 salt 顺找，确定性）。</summary>
+        private static void EnsureOccasion(IReadOnlyList<CitizenContext> entries, List<CitizenContext> picked,
+                                           uint salt, Content.BubbleOccasion occ, int min)
+        {
+            var have = 0;
+            var indoorSlots = 0;
+            for (int i = 0; i < picked.Count; i++)
+            {
+                if (picked[i].Occasion == occ) have++;
+                if (picked[i].Occasion == Content.BubbleOccasion.Indoor) indoorSlots++;
+            }
+            for (int i = 0; i < entries.Count && have < min && indoorSlots > 0; i++)
+            {
+                var cand = entries[(int)((salt + (uint)i) % (uint)entries.Count)];
+                if (cand.Occasion != occ)
+                    continue;
+                var already = false;
+                for (int j = 0; j < picked.Count; j++)
+                    if (picked[j].Entity == cand.Entity) { already = true; break; }
+                if (already)
+                    continue;
+                // 从 salt 锚定顺找一个室内槽换掉（确定性）
+                for (var s = 0; s < picked.Count; s++)
+                {
+                    var slot = (int)(((uint)s + salt) % (uint)picked.Count);
+                    if (picked[slot].Occasion == Content.BubbleOccasion.Indoor)
+                    {
+                        picked[slot] = cand;
+                        have++;
+                        indoorSlots--;
+                        break;
+                    }
+                }
+            }
+        }
+
+        /// <summary>本炉场合计数（开炉日志用，与 m_CurrentOccasions 对齐）。</summary>
+        private int[] TallyOccasions()
+        {
+            var t = new int[4];
+            for (int i = 0; i < m_CurrentOccasions.Count; i++)
+                t[(int)m_CurrentOccasions[i]]++;
+            return t;
         }
 
         /// <summary>弱卡判定（刀③，启发式阈值待实机校准）：纯身份无处境/只"呆着"=低信息熵卡——

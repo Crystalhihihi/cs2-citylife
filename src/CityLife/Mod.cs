@@ -63,7 +63,7 @@ namespace CityLife
             Log.Info($"[Settings] 当前值：feedMode={Content.ModSettings.FeedMode} t0Fallback={Content.ModSettings.T0Fallback} " +
                      $"写回={Content.ModSettings.WriteBackTier} 信息流上限={Content.ModSettings.FeedMaxItems}｜" +
                      $"气泡 总开关={Options.BubbleEnabled} 距离倍率 人{Options.BubbleDistHuman:0.##}/车{Options.BubbleDistCar:0.##}/楼{Options.BubbleDistBuilding:0.##} " +
-                     $"密度={Options.BubbleDensity} 底板={Options.BubblePlate}");
+                     $"同屏上限={Options.BubbleVisibleMax} 闲聊={Options.BubbleChatterEnabled} 剧场={Options.BubbleTheaterEnabled} 底板={Options.BubblePlate}");
 
             // M1 CLI 网关装配：日志注入 + 启动后台泵。供给不可用不致命，
             // 请求会走失败重试路径并计数，游戏照常（T0 模板兜底）。

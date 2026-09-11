@@ -33,9 +33,6 @@ namespace CityLife.GameBridge
         /// <summary>信息流组名。</summary>
         public const string kGroupFeed = "Feed";
 
-        /// <summary>气泡密度档（对应采样池 30/60/120，见 BubbleWorldSpikeSystem.LevelCount）。</summary>
-        public enum BubbleDensityLevel { Low, Medium, High }
-
         /// <summary>信息流生成节拍与面板开合的联动（§12 #45 自 settings.json 迁移）：
         /// Always 常开（城市自己在活着）/ OpenOnly 仅展开（收起即停生成，省 token）/ Throttled 节流（收起降频保温）。</summary>
         public enum FeedModeOption { Always, OpenOnly, Throttled }
@@ -68,12 +65,9 @@ namespace CityLife.GameBridge
         [SettingsUISlider(min = 25f, max = 400f, step = 5f, unit = "percentage", scalarMultiplier = 100f)]
         public float BubbleDistBuilding { get; set; } = 1f;
 
-        /// <summary>气泡密度档（默认 High = 采样池 120）。</summary>
-        [SettingsUISection(kTab, kGroupBubble)]
-        public BubbleDensityLevel BubbleDensity { get; set; } = BubbleDensityLevel.High;
-
         /// <summary>同屏气泡上限（默认 6，§12 #53：稀疏默认——"不是满屏冒泡"，玩家自定 2-30）；
-        /// 楼/车各 ≤上限/3、人不限（人为主比例不变）。要爽自己拉高，token 账自负。</summary>
+        /// 楼/车各 ≤上限/3、人不限（人为主比例不变）；采样池自动跟随（上限×4 夹 8-120，§12 #55 单旋钮合并）。
+        /// 要爽自己拉高，token 账自负。</summary>
         [SettingsUISection(kTab, kGroupBubble)]
         [SettingsUISlider(min = 2f, max = 30f, step = 1f, unit = "integer")]
         public int BubbleVisibleMax { get; set; } = 6;
@@ -125,7 +119,6 @@ namespace CityLife.GameBridge
             BubbleDistHuman = 1f;
             BubbleDistCar = 1f;
             BubbleDistBuilding = 1f;
-            BubbleDensity = BubbleDensityLevel.High;
             BubbleVisibleMax = 6;
             BubblePlate = true;
             BubbleAutoHideBuildTool = true;

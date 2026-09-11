@@ -62,8 +62,8 @@ namespace CityLife.GameBridge
     /// 分锚点显隐距离（v4.5，2026-09-09 实机标定）：人 125m / 车 320m / 楼 800m 基础档，
     ///   采样/绘制同用 MaxDistFor 一把尺；玩家倍率滑杆已接设置页（§12 #44/#45，Mod.Options 直读生效）。
     /// 设置页接入（2026-09-09，§12 #45）：总开关 BubbleEnabled（与 Ctrl+9 AND）、三类距离倍率、
-    ///   密度档 BubbleDensity（Low/Medium/High→30/60/120，LevelCount 优先读它）、底板开关 BubblePlate
-    ///   （OnUpdate 每帧同步，改动即时生效）——全部经 Mod.Options 直读，null（主菜单期）回落默认。
+    ///   同屏上限 BubbleVisibleMax（§12 #53 滑杆 2-30 默认 6；§12 #55 起采样池跟随它×4，旧密度三档废止）、
+    ///   底板开关 BubblePlate（OnUpdate 每帧同步，改动即时生效）——全部经 Mod.Options 直读，null（主菜单期）回落默认。
     /// 自动隐藏双闸（v4.6，2026-09-09，§12 #46）：建造工具激活（ToolSystem.activeTool != DefaultToolSystem
     ///   实例；推土机 BulldozeToolSystem 也是独立工具，含在判定内一并隐藏）与拍照模式
     ///   （PhotoModeRenderSystem.Enabled——该系 OnCreate 即置 false，唯一置真路径是
@@ -133,10 +133,9 @@ namespace CityLife.GameBridge
         private const float k_PlateSizeRatio = 1.7f;
         private const float k_PlateYDrop = 1.0f;
 
-        // 密度/重叠治理（§4：同屏上限+防叠）：屏幕矩形互斥（带留白）、近者优先、
-        // 同屏可见上限 = 采样池 ÷ k_VisibleDiv（30/60/120 → 5/10/20）
+        // 密度/重叠治理（§4：同屏上限+防叠）：屏幕矩形互斥（带留白）、滞回三档中选、
+        // 同屏可见上限 = 设置页滑杆（§12 #53/#55；旧"采样池÷6"公式已随旋钮合并废止）
         private const float k_DePad = 1.15f;
-        private const int k_VisibleDiv = 6;
 
         // 执行层排版：13 格/行（CJK 1 格、其余半格）、最多 4 行
         private const float k_WrapCells = 13f;
@@ -420,14 +419,14 @@ namespace CityLife.GameBridge
             Mod.Log.Info($"[BubbleW] 自动隐藏：{reason} → {(on ? "隐藏气泡层" : "恢复显示")}");
         }
 
-        /// <summary>采样池大小：优先读设置页密度档（Low/Medium/High→30/60/120）；null（主菜单期）回落默认档 120。</summary>
+        /// <summary>采样池大小：跟随同屏上限滑杆（§12 #55 单旋钮——密度三档与上限管同一观感，已合并废止）；
+        /// 池 = 上限×4 夹 [8,120]（轮换/剧场/候选的头部余量；上限拉满 30 时=120 与原高档一致）。
+        /// null（主菜单期）回落 24（默认上限 6×4）。</summary>
         private static int LevelCount()
         {
             var opts = Mod.Options;
-            if (opts == null)
-                return 120;
-            return opts.BubbleDensity == CityLifeSetting.BubbleDensityLevel.Low ? 30
-                 : opts.BubbleDensity == CityLifeSetting.BubbleDensityLevel.Medium ? 60 : 120;
+            var cap = opts?.BubbleVisibleMax ?? 6;
+            return math.clamp(cap * 4, 8, 120);
         }
 
         private void Toggle()
@@ -1192,22 +1191,24 @@ namespace CityLife.GameBridge
                 // 换文案时刻天然错相=整屏不一起换）③ 剩余坑位近者优先填满。
                 // 旧版纯"近者优先"帧帧翻盘：人堆里深度微变→胜负手每帧换→泡互顶谁也没读完（2026-09-10 实机实锤）。
                 // 可见端分类比例（§12 #51，"不是所有一起冒"）：楼 ≤cap/3、车 ≤cap/3、人不限（人为主 §12 #48 哲学）；
-                // 剧场泡不受分类上限管（必留档高于一切）。
+                // 剧场泡不受分类上限管（必留档高于一切）；且**不占同屏上限**（§12 #55：cap=6 被普通泡占满时
+                // 剧场连保位档门都进不去——"连续对话被吃掉"实机实锤。上限只闸普通泡，剧场量由 k_MaxActive 自限）
                 m_Candidates.Sort((a, b) => a.Score.CompareTo(b.Score)); // 屏心优先的近者（非纯视深）
                 m_Kept.Clear();
                 m_KeptSet.Clear();
-                // 同屏上限：设置页滑杆优先（§12 #53 稀疏默认 6）；null（主菜单期）回落旧公式 采样池/6
-                var cap = Mod.Options?.BubbleVisibleMax ?? math.max(4, LevelCount() / k_VisibleDiv);
+                // 同屏上限：设置页滑杆（§12 #53 稀疏默认 6）；null（主菜单期）回落默认 6
+                var cap = Mod.Options?.BubbleVisibleMax ?? 6;
                 var kindCap = math.max(1, cap / 3); // 楼/车各 ≤1/3（cap 最小 2 时也保 1 个坑）
+                var keptPlain = 0;   // 普通泡计数（上限只闸它）
                 var keptCar = 0;
                 var keptBuilding = 0;
                 var nowU = UnityEngine.Time.unscaledTime;
                 var theater = Theater;
                 foreach (var c in m_Candidates) // ①② 保位档（候选已近→远排好，保位也近者优先）
                 {
-                    if (m_Kept.Count >= cap)
-                        break;
                     var isTheater = theater != null && theater.HasActiveOn(c.Anchor);
+                    if (!isTheater && keptPlain >= cap)
+                        continue; // 普通泡到顶；剧场泡不限（继续扫，别 break——后面的剧场候选还要进）
                     var hold = nowU < c.NextAt && m_PrevKept.Contains(c.Anchor);
                     if (!isTheater && !hold)
                         continue;
@@ -1220,12 +1221,13 @@ namespace CityLife.GameBridge
                     {
                         m_Kept.Add(c);
                         m_KeptSet.Add(c.Anchor);
-                        if (c.Kind == 1) keptCar++; else if (c.Kind == 2) keptBuilding++;
+                        if (isTheater) { } // 剧场不占计数
+                        else { keptPlain++; if (c.Kind == 1) keptCar++; else if (c.Kind == 2) keptBuilding++; }
                     }
                 }
                 foreach (var c in m_Candidates) // ③ 填坑档
                 {
-                    if (m_Kept.Count >= cap)
+                    if (keptPlain >= cap)
                         break;
                     if (m_KeptSet.Contains(c.Anchor))
                         continue;
@@ -1238,6 +1240,7 @@ namespace CityLife.GameBridge
                     {
                         m_Kept.Add(c);
                         m_KeptSet.Add(c.Anchor);
+                        keptPlain++;
                         if (c.Kind == 1) keptCar++; else if (c.Kind == 2) keptBuilding++;
                     }
                 }

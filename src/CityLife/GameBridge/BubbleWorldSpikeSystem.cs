@@ -361,12 +361,13 @@ namespace CityLife.GameBridge
                 Resample(cam);
             TickLifecycle();
 
-            // 基底材质懒取 + 兜底补烘（取材质失败时 SetBubbleText 的烘焙会被跳过，这里兜住）
+            // 基底材质懒取 + 兜底补烘（取材质失败时 SetBubbleText 的烘焙会被跳过，这里兜住）；
+            // "……"不烘（沉默拍隐身不画，§12 #54 玩家定案：没内容就不该有泡）
             if (m_BaseTextMaterial == null)
                 TryInitMaterial();
             if (m_BaseTextMaterial != null)
                 foreach (var b in m_Bubbles)
-                    if (!m_Cache.ContainsKey((b.Text, b.Kind)))
+                    if (b.Text != "……" && !m_Cache.ContainsKey((b.Text, b.Kind)))
                         EnsureBaked(b.Text, b.Kind);
             if (m_PlateOn && (m_PlateMaterials == null || m_PlateMaterials[0] == null))
                 TryInitPlateMaterial();
@@ -606,10 +607,11 @@ namespace CityLife.GameBridge
                     // S7 小剧场：任一参与者气泡到时换下一条→下一人（剧场内部纯推进，
                     // 再把新台词 RefreshAnchorText 到说话人锚点上）；非剧场锚点空转
                     Theater?.OnAnchorRotated(b.Anchor);
-                    // 换气节奏（§12 #54）：一句说完歇一拍（奇数拍=沉默"……"）——一次性消耗下的节奏阀
-                    // （消耗砍半）+ RimTalk 式"一句一句冒"更像真人；剧场锚点不歇（对戏不能冷场）
+                    // 换气节奏（§12 #54）：一句说完歇一拍（奇数拍="……"隐身，绘制端跳过不画）——
+                    // 一次性消耗下的节奏阀（消耗砍半）+ RimTalk 式"冒出一句→消失→再冒新句"；
+                    // 剧场锚点不歇（对戏不能冷场；"在听"参与者的"……"同样隐身，轮到谁说谁出现）
                     if (b.TextIdx % 2 == 1 && (Theater == null || !Theater.HasActiveOn(b.Anchor)))
-                        b.Text = "……"; // 烘焙由 OnUpdate 末尾的兜底补烘链兜住
+                        b.Text = "……";
                     else
                         SetBubbleText(ref b, b.TextIdx);
                     b.NextAt = now + HoldFor(b.Anchor.Index, b.TextIdx, b.Text.Length);
@@ -643,7 +645,7 @@ namespace CityLife.GameBridge
             }
             if (!TryPickSnippet(b, textIdx, out var text))
             {
-                // 池空兜底（§12 #53 改"沉默泡"：一次性语义下占位句池=重复制造机，退役；宁可"……"也不重复）
+                // 池空兜底（§12 #53/#54）："……"=隐身标记——绘制端见到即跳过（没内容就没泡，宁隐身不重复）
                 text = "……";
             }
             b.Text = text;
@@ -1111,11 +1113,15 @@ namespace CityLife.GameBridge
                     foreach (var list in m_PlateData)
                         list.Clear();
 
-                // 第一遍：收集候选（位置/尺寸/屏幕包围盒），超距/镜头背后剔除
+                // 第一遍：收集候选（位置/尺寸/屏幕包围盒），超距/镜头背后剔除；
+                // 沉默拍（"……"）隐身不画——没内容就没泡（§12 #54 玩家定案，剧场"在听"同理：
+                // 轮到谁说话谁冒泡，轮播对戏反而更清晰）
                 m_Candidates.Clear();
                 foreach (var b in m_Bubbles)
                 {
                     if (!EntityManager.Exists(b.Anchor))
+                        continue;
+                    if (b.Text == "……")
                         continue;
                     if (!m_Cache.TryGetValue((b.Text, b.Kind), out var entry))
                         continue;

@@ -32,6 +32,8 @@ namespace CityLife.Content
         public BubbleOccasion Occasion;
         public string Zone = "";
         public uint BornCycle;
+        /// <summary>上次被取用时刻（unscaledTime 秒；负无穷=从未用过，恒过冷却）。取用即盖戳（S5 冷却制，2026-09-11 玩家定案）。</summary>
+        public float LastUsedAt = float.NegativeInfinity;
     }
 
     /// <summary>
@@ -44,8 +46,8 @@ namespace CityLife.Content
     /// 如何扩展（社区贡献点）：
     ///   · 新场合：BubbleOccasion 加枚举值 + OccasionFromString 加映射 + 闲聊炉 prompt 头
     ///     （PromptBuilder.BuildChatterHead）补一条推导规则——三处必须同炉改，漏一处=新场合静默落 Any；
-    ///   · 新匹配维度（按 Zone/新鲜度取泡等）：加 PickFor 重载，别改既有 PickFor 的确定性语义
-    ///     （同 salt+池状态必同条——气泡换文案要可复现，世界层据此排重）。
+    ///   · 新匹配维度（按 Zone/新鲜度取泡等）：加 PickFor 重载，别改既有 PickFor 的语义契约
+    ///     （同 salt+池状态+冷却状态必同条——气泡换文案要可复现，世界层据此排重）。
     /// </summary>
     public sealed class BubbleSnippetPool
     {
@@ -122,23 +124,36 @@ namespace CityLife.Content
         }
 
         /// <summary>
-        /// S5 取泡口：按场合确定性抽一条（候选 = exact 场合 ∪ Any；同 salt+池状态必同条——气泡换文案要可复现）。
-        /// maxLen 限长（§12 #51 长文稳锚：动的锚点只配短句；入库已 ≤40 字）；限长后无候选回退不限长（宁长勿模板）。
+        /// S5 取泡口：按场合确定性抽一条（候选 = exact 场合 ∪ Any；同 salt+池状态+冷却状态必同条）。
+        /// maxLen 限长（§12 #51 长文稳锚：动的锚点只配短句；入库已 ≤40 字）。
+        /// 冷却制（2026-09-11 玩家定案，治"同一句话反复套在不同人身上"）：nowSec/cooldownSec 给定时，
+        /// 冷却期内的片段先被过滤——短时一次性（同一句冷却期内全城不说第二遍）；冷却过滤后无候选
+        /// 回退无冷却集（保底不饿退，复用的必是最久没用的附近条——salt 定位自然落在旧条目上的概率
+        /// 随冷却占比升高）；再无候选回退不限长。取用成功由调用方 MarkUsed 盖戳（探测不顺延盖戳）。
         /// 池空/无候选返回 null（调用方回退占位文案）。
         /// </summary>
-        public BubbleSnippet? PickFor(BubbleOccasion occasion, uint salt, int maxLen = int.MaxValue)
+        public BubbleSnippet? PickFor(BubbleOccasion occasion, uint salt, int maxLen = int.MaxValue,
+            float nowSec = float.PositiveInfinity, float cooldownSec = 0f)
         {
-            var picked = PickFiltered(occasion, salt, maxLen);
-            return picked ?? (maxLen == int.MaxValue ? null : PickFiltered(occasion, salt, int.MaxValue));
+            var picked = PickFiltered(occasion, salt, maxLen, nowSec, cooldownSec);
+            if (picked == null && cooldownSec > 0f)
+                picked = PickFiltered(occasion, salt, maxLen, float.PositiveInfinity, 0f); // 全冷却→不饿退
+            if (picked == null && maxLen != int.MaxValue)
+                picked = PickFiltered(occasion, salt, int.MaxValue, float.PositiveInfinity, 0f); // 再放开限长
+            return picked;
         }
 
-        /// <summary>限长过滤的确定性抽取（候选计数 → salt 取模定位）。无候选返回 null。</summary>
-        private BubbleSnippet? PickFiltered(BubbleOccasion occasion, uint salt, int maxLen)
+        /// <summary>取用盖戳（冷却制的时间基准）。只有真正采用才调——探测候选不算用。</summary>
+        public void MarkUsed(BubbleSnippet entry, float nowSec) => entry.LastUsedAt = nowSec;
+
+        /// <summary>限长+冷却过滤的确定性抽取（候选计数 → salt 取模定位）。无候选返回 null。</summary>
+        private BubbleSnippet? PickFiltered(BubbleOccasion occasion, uint salt, int maxLen, float nowSec, float cooldownSec)
         {
             var n = 0;
             for (int i = 0; i < m_Entries.Count; i++)
                 if ((m_Entries[i].Occasion == occasion || m_Entries[i].Occasion == BubbleOccasion.Any)
-                    && m_Entries[i].Text.Length <= maxLen)
+                    && m_Entries[i].Text.Length <= maxLen
+                    && nowSec - m_Entries[i].LastUsedAt > cooldownSec)
                     n++;
             if (n == 0)
                 return null;
@@ -149,6 +164,8 @@ namespace CityLife.Content
                 if (e.Occasion != occasion && e.Occasion != BubbleOccasion.Any)
                     continue;
                 if (e.Text.Length > maxLen)
+                    continue;
+                if (nowSec - e.LastUsedAt <= cooldownSec)
                     continue;
                 if (target-- == 0)
                     return e;

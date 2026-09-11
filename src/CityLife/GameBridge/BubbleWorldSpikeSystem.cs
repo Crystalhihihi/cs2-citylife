@@ -476,6 +476,10 @@ namespace CityLife.GameBridge
         // 全是"离屏"但场景明明在眼前；绘制热路径另有镜头背后剔除（sp.z<1f），余量只影响绑定/保留判定）
         private const float k_ScreenMargin = 0.15f;
 
+        /// <summary>片段冷却时长（秒，墙钟）：同一句台词冷却期内全城不说第二遍（2026-09-11 玩家定案
+        /// "短时一次性"——供需差 12 倍纯一次性会饿退回占位池，冷却制拿大头；池深上来后可调长）。</summary>
+        private const float k_SnippetCooldownSec = 180f;
+
         private bool OnScreen(Camera cam, Entity e, byte kind)
         {
             var p = EntityManager.GetComponentData<Transform>(e).m_Position;
@@ -690,14 +694,16 @@ namespace CityLife.GameBridge
                 : b.Speed > 0.6f ? 32
                 : 48;
             var salt = (uint)(b.Anchor.Index + textIdx);
+            var nowSec = UnityEngine.Time.unscaledTime;
             for (uint k = 0; k < 8; k++)
             {
-                var picked = pool.PickFor(occasion, salt + k, maxLen);
+                var picked = pool.PickFor(occasion, salt + k, maxLen, nowSec, k_SnippetCooldownSec);
                 if (picked == null)
                     return false; // 该场合连 Any 候选都没有（理论到不了，纯防御）
                 if (k < 7 && (m_UsedThisFrame.Contains(picked.Text) || m_InUseTexts.Contains(picked.Text)))
                     continue; // 本帧/在显已被别的气泡用，顺探下一条（池浅探尽才接受重复）
                 m_UsedThisFrame.Add(picked.Text);
+                pool.MarkUsed(picked, nowSec); // 取用盖戳（冷却制时间基准）
                 text = picked.Text;
                 if (!m_LoggedSnippetPool)
                 {

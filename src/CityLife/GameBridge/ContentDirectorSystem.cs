@@ -150,7 +150,7 @@ namespace CityLife.GameBridge
                     World.GetOrCreateSystemManaged<BubbleChatterSystem>().OnChatterResult(r);
                     continue;
                 }
-                // 多人小剧场炉（S7）走专线路由：剧本入 BubbleTheaterSystem 复核后开播，不占常规批次位
+                // 小剧场剧本炉（§12 #52 炉→池→放送）走专线路由：产出入 TheaterScriptStock 库存池，不占常规批次位
                 if (r.RequestId != null && r.RequestId.StartsWith("theater:"))
                 {
                     World.GetOrCreateSystemManaged<BubbleTheaterSystem>().OnTheaterResult(r);

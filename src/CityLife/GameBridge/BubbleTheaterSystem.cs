@@ -13,41 +13,52 @@ using Transform = Game.Objects.Transform;
 namespace CityLife.GameBridge
 {
     /// <summary>
-    /// 多人小剧场（S7，§12 #48 多人小剧场段 + §4 M5"多人对话"）：对话锚点成组 + 真名单绑定 + 轮流冒泡。
-    /// 执行层确定性管生命周期（选锚点/绑人/播放/终了），LLM 只写剧本（架构铁律 1：算得准的全给执行层）。
+    /// 多人小剧场（§12 #52"剧本库存+放送时绑定"，推翻 #48 播前绑定段）：炉→池→放送——剧本炉水位触发
+    /// 产库存入 TheaterScriptStock 池，放送时场景+人选成立即从池取匹配剧本绑真名单即时开播。
+    /// 执行层确定性管生命周期（选锚点/绑人/播放/终了），LLM 只写剧本库存（架构铁律 1：算得准的全给执行层）。
+    /// 为什么推翻播前绑定：绑真名单→等 LLM→到货复核开播，thinking 时代 LLM 延迟分钟级，剧本到货时人散了
+    /// →开播中止连发、每中止白烧一炉（2026-09-10 实机实锤）。改抄话题炉/闲聊炉同款"炉→池"缓冲：
+    /// 分钟级延迟被池子吸收，放送零 LLM 等待、绑定即复核。
     ///
     /// 状态机（一拍一拍走，全部锚游戏时间——暂停零成本、倍速同速放大，#48 节拍定案）：
-    /// ① 选锚点：每 3-4-5 游戏分钟评估一次（节拍轮换照抄闲聊炉）。候选只从 BubbleWorldSpikeSystem
-    ///    的可见锚点附近找（采样池天然全是屏内点，离镜头近优先=按锚点离相机距离升序扫）：
+    /// ① 剧本炉（水位触发）：每 3-4-5 游戏分钟评估拍（节拍轮换照抄闲聊炉）查池水位——总库存 &lt;6 且
+    ///    无在飞+网关可用+非 MUTE+设置页开关开 → 发一炉产 4 部（Normal 优先级：thinking 时代低优先级
+    ///    队尾等死，§12 #51 实锤；TTL 300s + 墙钟 TTL+60s 兜底解锁，闲聊炉/S3 同款）。prompt=固定头
+    ///    PromptBuilder.BuildTheaterStockHead（启动拼一次缓存，逐字节稳定纪律）+ 动态尾：各场景标签
+    ///    现存部数（低水位分区多配题）+ 城市快照 + 3-5 张处境卡当灵感池（禁写真名/真店名，只写氛围）。
+    ///    结果走 ContentDirectorSystem 按 "theater:" 前缀转交 OnTheaterResult（不自己 TryDequeueResult
+    ///    ——两个消费者轮询同一队列会互相偷包）；到货只做 JSONL salvage 解析入池。
+    /// ② 放送选锚点（零 token 纯执行层，与播前绑定时代同一套扫描）：候选只从 BubbleWorldSpikeSystem
+    ///    的可见锚点附近找（采样池天然全是屏内点，按锚点离相机距离升序扫）：
     ///    a) 车站候车——EnvironmentDigestSystem.CollectAround 40m 圈扫 static 树，
     ///       WaitingPassengers.m_Count ≥2（候车是计数不是名单，spike §4）；
     ///    b) 公园/景点——圈内带 AttractivenessProvider / SignatureBuildingData 的建筑；
     ///    c) 店内——市民查询按 CurrentBuilding 分组计数 ≥2（剧场级低频全量扫，帧预算内），
     ///       且建筑须落在某个可见锚点 40m 内（离镜头近优先的落点保证）。
-    /// ② 绑真名单（不绑随机路人）：开放场所（车站/公园）= moving 树圈内带 Human+Resident 的行人 agent
-    ///    回指市民（S6 实锤候车行人在树里），按离地点距离升序取 2-4 人，锚点=agent 本体；
-    ///    店内 = CurrentBuilding==该建筑的市民 2-4 人，锚点=建筑本体（室内市民无 agent，
-    ///    多人共锚——气泡轮播剧本台词，见 ④）。参与者已在他组/冷却中的跳过。
-    /// ③ 开炉：场景卡（地点名+环境摘要 BuildDigest）+ 每人一张处境卡（CitizenPoolSystem.DescribeCitizen
-    ///    按实体出卡）→ 一次 LLM 调用产 2-4 轮剧本 JSONL {"speaker":1,"text":...}（speaker=参与者序号，
-    ///    1 起）。固定头 PromptBuilder.BuildTheaterHead 启动拼一次缓存（逐字节稳定纪律）。
-    ///    网关/MUTE/TTL 兜底闸门照抄闲聊炉；feedMode 已解耦（§12 #49），改吃设置页"气泡小剧场"
-    ///    独立开关（默认开，关=零 token）。结果走 ContentDirectorSystem 按 "theater:" 前缀
-    ///    转交 OnTheaterResult（不自己 TryDequeueResult——两个消费者轮询同一队列会互相偷包）。
-    /// ④ 播放：激活前全量复核（任一参与者失效/离开/锚点不可锚=开播中止，全有或全无——speaker 序号
-    ///    与名单绑定，减员不重排）；激活时第一句直接落到其说话人锚点，其余参与者锚点显"……"（在听）。
-    ///    台词带说话人名前缀（§12 #50："安珀尔：……"——多人/共锚分辨说话人，顺带成剧场视觉标识）。
-    ///    轮次推进挂气泡换文案节拍：BubbleWorldSpikeSystem.TickLifecycle 里任一剧场锚点到时
-    ///    → OnAnchorRotated → 下一句写到其说话人锚点 + RefreshAnchorText 立即换文案（上条读完
-    ///    下条接话）；SetBubbleText 的插队分支 TryGetLine 是**纯查询**，绝不推轮次。
+    /// ③ 绑真名单+取剧本（不绑随机路人）：开放场所（车站/公园）= moving 树圈内带 Human+Resident 的
+    ///    行人 agent 回指市民（S6 实锤候车行人在树里），按离地点距离升序取 2-4 人，锚点=agent 本体；
+    ///    店内 = CurrentBuilding==该建筑的市民 2-4 人，锚点=建筑本体（室内市民无 agent，多人共锚）。
+    ///    参与者已在他组的跳过。场景标签映射：车站候车→station、公园/景点→park、商店→shop、
+    ///    住宅区→home；其余室内类型（学校/医院/办公楼等）无标签=本拍跳过。候选成立 →
+    ///    stock.TryTake(标签, 名单人数)：场景严格相符+cast≤人数确定性取一条；无匹配=本拍跳过
+    ///    （不打炉！炉只由水位触发，放送侧绝不开炉）。
+    /// ④ 开播：取到剧本即绑名单建剧场——Participants/Lines 初始化其余锚点显"……"（在听）+
+    ///    第一句带名字前缀落到说话人锚点（§12 #50："安珀尔：……"——多人/共锚分辨说话人，顺带成
+    ///    剧场视觉标识）+ Anchors/m_ByAnchor 登记 + EnsureAnchor 五道闸。<b>剧本开播才消耗</b>：
+    ///    任一锚点不可锚=开播中止+剧本 Return 退回池+不上冷却（#52：冷却只在终了后上——中止
+    ///    不是地点的锅）；全过=RefreshAnchorText 全锚点立即换文案开播。轮次推进挂气泡换文案节拍：
+    ///    BubbleWorldSpikeSystem.TickLifecycle 里任一剧场锚点到时 → OnAnchorRotated → 下一句写到
+    ///    其说话人锚点 + RefreshAnchorText 立即换文案（上条读完下条接话）；SetBubbleText 的插队
+    ///    分支 TryGetLine 是**纯查询**，绝不推轮次。
     /// ⑤ 终了：剧本播完 / 任一参与者实体失效 / 任一锚点离屏（气泡系统 Resample 裁掉即检测不到）
-    ///    / 地点实体失效（车站被拆）——锚点失效即锁（#28）：终了即给地点上冷却 ≈3 炉节拍防连开。
+    ///    / 地点实体失效（车站被拆）——锚点失效即锁（#28）：终了即给地点上冷却 ≈3 炉节拍防连开；
+    ///    播过的剧本即弃不退池。
     ///
-    /// 上限与降级：同屏活剧场 ≤2（k_MaxActive）；同时在飞最多一炉；剧本池空/供给不可用=不开
-    /// （不致命，单人吐槽管道照常）；有效剧本 &lt;2 句作废。只在评估/收炉低频点查树与扫市民，
-    /// 不进任何每帧/渲染热路径；只读模拟数据不写。
-    /// 日志纪律 `[剧场]`：开组（地点+人数+名单）、开炉（人数×轮数）、剧本入库（N 句开播）、
-    /// 终了（原因+播到第几句）各一行，失败/中止同前缀一行。
+    /// 上限与降级：同屏活剧场 ≤2（k_MaxActive）；同时在飞最多一炉剧本炉；池空/供给不可用=不开
+    /// （不致命，单人吐槽管道照常）。只在评估/收炉低频点查树与扫市民，不进任何每帧/渲染热路径；
+    /// 只读模拟数据不写。开关闸（§12 #49）：设置页"气泡小剧场"独立开关同时闸住剧本炉与放送——关=零 token 也零播出。
+    /// 日志纪律 `[剧场]`：剧本炉开炉（池存数）、剧本入库（N 部池存 M）、开播（地点+人数+名单）、
+    /// 终了（原因+播到第几句）、开播中止（原因+退回池）各一行。
     /// </summary>
     public partial class BubbleTheaterSystem : GameSystemBase
     {
@@ -60,49 +71,40 @@ namespace CityLife.GameBridge
         private const int k_MaxAnchorScan = 8;   // 每拍最多扫几个可见锚点（帧预算闸）
         private const int k_MinWaiting = 2;      // 车站候车人气门槛（#48"≥2 人"）
         private const uint k_CooldownMinutes = 12; // 锚点冷却 ≈3 炉节拍（3-4-5 分钟轮换 ×3），防连开
+        private const int k_StockLowWater = 6;   // 剧本池水位线：总库存 <6 触发剧本炉（§12 #52）
+        private const int k_ForgeBatch = 4;      // 一炉产几部剧本（§12 #52）
 
         private EntityQuery m_CitizenQuery = default!;
         private EntityQuery m_IndoorQuery = default!;
         private TopicRadarSystem m_Radar = default!;
+        private CitizenPoolSystem m_CitizenPool = default!; // 剧本炉灵感池：处境卡抽样（只借氛围）
         private SimulationSystem m_SimulationSystem = default!;
-        private EnvironmentDigestSystem m_Environment = default!; // S6 半径收集/环境摘要共用口
+        private EnvironmentDigestSystem m_Environment = default!; // S6 半径收集共用口
         private CameraUpdateSystem m_CameraUpdate = default!;
         private BubbleWorldSpikeSystem? m_BubbleWorld;  // 惰性：主菜单世界可能不存在
-        private Game.UI.NameSystem? m_NameSystem;       // 惰性：真实地名/人名（CitizenPoolSystem 同款先例）
+        private Game.UI.NameSystem? m_NameSystem;       // 惰性：真名（CitizenPoolSystem 同款先例）
 
+        private readonly Content.TheaterScriptStock m_Stock = new(); // 剧本池（§12 #52：炉→池→放送的池）
         private string m_Head = "";
         private uint m_EvalCount;              // 评估拍计数：3-4-5 分钟轮换的锚
         private uint m_NextEvalAt;             // 下一评估拍游戏时刻（tick）
         private bool m_ClockInitialized;
-        private uint m_ForgeCount;             // 炉计数：轮数轮换 / requestId 的锚
+        private uint m_ForgeCount;             // 剧本炉计数：灵感卡抽样的锚 / requestId 后缀
         private bool m_ForgePending;           // 在飞标志（同时在飞最多一炉）
         private DateTime m_ForgeSince;         // 发炉墙钟（UTC）：网关过期丢弃不回包，TTL+60s 兜底解锁
 
-        private Casting? m_Casting;                       // 在飞剧组（剧本回来前名单先锁）
         private readonly List<Theater> m_Active = new();  // 活剧场（≤k_MaxActive）
         private readonly Dictionary<Entity, Theater> m_ByAnchor = new(); // 锚点→剧场（插队查询主键）
         private readonly Dictionary<Entity, uint> m_CooldownUntil = new(); // 地点→解禁时刻（tick）
         private readonly List<(Entity Anchor, byte Kind, float3 Pos)> m_AnchorSnap = new(); // 可见锚点快照（复用）
 
-        /// <summary>一名参与者：真名单市民 + 气泡锚点（室外=行人 agent，室内=建筑本体）+ 显示名（日志用）。</summary>
+        /// <summary>一名参与者：真名单市民 + 气泡锚点（室外=行人 agent，室内=建筑本体）+ 显示名（日志/台词前缀用）。</summary>
         private sealed class Participant
         {
             public Entity Citizen;
             public Entity Anchor;
             public string Name = "";
             public bool Indoor; // true=锚点是建筑（多人共锚）；false=锚点是行人 agent
-        }
-
-        /// <summary>在飞剧组：名单+地点+任务规格，剧本回来时全量复核后才激活。</summary>
-        private sealed class Casting
-        {
-            public Entity Location;
-            public float3 Pos;
-            public string SceneName = "";
-            public string KindLabel = "";
-            public int Rounds;
-            public int Lines; // 请求句数（收炉解析上限对齐用）
-            public readonly List<Participant> Participants = new();
         }
 
         /// <summary>一个活剧场：名单 + 剧本队列 + 当前各锚点在显的台词。</summary>
@@ -118,12 +120,13 @@ namespace CityLife.GameBridge
             public readonly Dictionary<Entity, string> Lines = new(); // 锚点→当前台词（共锚=最新一句）
         }
 
-        /// <summary>选锚点候选：地点实体 + 已绑名单（≥2 人才算候选成立）。</summary>
+        /// <summary>选锚点候选：地点实体 + 已绑名单（≥2 人才算候选成立）+ 剧本场景标签（取件主键）。</summary>
         private sealed class Candidate
         {
             public Entity Location;
             public float3 Pos;
             public string KindLabel = "";
+            public string SceneTag = "";     // 剧本池场景标签（station/park/shop/home）；""=无标签（本拍不可用）
             public float DistToCam;
             public readonly List<(Entity Citizen, Entity Anchor, bool Indoor)> Roster = new();
         }
@@ -151,10 +154,11 @@ namespace CityLife.GameBridge
                 ComponentType.Exclude<Game.Tools.Temp>());
             RequireForUpdate(m_CitizenQuery);
             m_Radar = World.GetOrCreateSystemManaged<TopicRadarSystem>();
+            m_CitizenPool = World.GetOrCreateSystemManaged<CitizenPoolSystem>();
             m_SimulationSystem = World.GetOrCreateSystemManaged<SimulationSystem>();
             m_Environment = World.GetOrCreateSystemManaged<EnvironmentDigestSystem>();
             m_CameraUpdate = World.GetOrCreateSystemManaged<CameraUpdateSystem>();
-            m_Head = Content.PromptBuilder.BuildTheaterHead(); // 固定头拼一次缓存复用（逐字节稳定纪律）
+            m_Head = Content.PromptBuilder.BuildTheaterStockHead(); // 固定头拼一次缓存复用（逐字节稳定纪律）
         }
 
         public override int GetUpdateInterval(SystemUpdatePhase phase) => 128; // 2 的幂；只是节拍检查粒度
@@ -171,12 +175,9 @@ namespace CityLife.GameBridge
                 m_ClockInitialized = true;
             }
 
-            // 在飞兜底解锁：网关过期丢弃不回包（闲聊炉/S3 同款墙钟兜底）——剧组解散不设冷却（不是地点的锅）
+            // 在飞兜底解锁：网关过期丢弃不回包（闲聊炉/S3 同款墙钟兜底）
             if (m_ForgePending && (DateTime.UtcNow - m_ForgeSince).TotalSeconds > k_ForgeTtl + 60)
-            {
                 m_ForgePending = false;
-                m_Casting = null;
-            }
 
             SweepTheaters(); // 终了判定每拍都查（播完/失效/离屏不等评估节拍）
 
@@ -186,27 +187,72 @@ namespace CityLife.GameBridge
             m_NextEvalAt = Now + (3u + m_EvalCount % 3u) * TicksPerMinute;
             m_EvalCount++;
 
-            if (m_Active.Count >= k_MaxActive || m_ForgePending)
-                return;
-            if (Mod.Gateway == null || Llm.CliGateway.Mute)
-                return; // MUTE 静默零成本：连扫描都不做（供给不可用=不开，不致命）
-
-            // 开关闸（§12 #49）：同闲聊炉口径——独立于 feedMode 的设置页开关，默认开；关=零 token
+            // 开关闸（§12 #49 + #52）：独立于 feedMode 的设置页开关，默认开；一闸同时闸住剧本炉与放送——关=零 token 也零播出
             if (!Content.ModSettings.BubbleTheaterEnabled)
                 return;
 
-            var snapshot = m_Radar.Latest;
-            if (snapshot.Citizens == 0)
-                return; // 雷达还没采到样
+            // ① 剧本炉水位补给：总库存 <6 且无在飞+网关可用+非 MUTE 才烧 token（池是缓冲，放送侧绝不开炉）
+            if (m_Stock.Count < k_StockLowWater && !m_ForgePending && Mod.Gateway != null && !Llm.CliGateway.Mute)
+            {
+                var snapshot = m_Radar.Latest;
+                if (snapshot.Citizens != 0) // 雷达还没采到样则本拍不开炉（快照要进 prompt）
+                    FireStockForge(snapshot);
+            }
 
-            TryCast(snapshot);
+            // ② 放送评估：纯执行层零 token——扫描绑人成立即从池取匹配剧本即时开播
+            if (m_Active.Count >= k_MaxActive)
+                return;
+            TryCast();
         }
 
-        // —— ①② 选锚点 + 绑名单 ——
+        // —— ① 剧本炉（水位触发，产库存入池） ——
 
-        /// <summary>评估拍主流程：可见锚点快照 → 室外候选（车站/公园景点，按离镜头近扫）+ 店内候选
-        /// （CurrentBuilding 分组），取离镜头最近且绑得够 2 人的开炉；一个都绑不成=本拍放弃（下拍再试）。</summary>
-        private void TryCast(in Content.CitySnapshot snapshot)
+        /// <summary>剧本炉开炉：固定头 + 动态尾（各场景库存数低水位多配题 + 城市快照 + 3-5 张处境卡灵感池，
+        /// 禁写真名/真店名只写氛围——剧本是库存货不针对具体市民，#52 代价明账：味道靠场景标签+城市热点+灵感卡保）。
+        /// 灵感卡从市民池跨步抽样（炉计数锚定，确定性——同炉次+同池状态必同批卡）。</summary>
+        private void FireStockForge(in Content.CitySnapshot snapshot)
+        {
+            var entries = m_CitizenPool.Entries;
+            var cards = new List<string>(5);
+            if (entries.Count > 0)
+            {
+                var count = Math.Min(3 + (int)(m_ForgeCount % 3u), entries.Count); // 3-5 张
+                var stride = Math.Max(1, entries.Count / count);
+                var start = (int)(m_ForgeCount % (uint)entries.Count);
+                for (var k = 0; k < count; k++)
+                    cards.Add(entries[(start + k * stride) % entries.Count].Context);
+            }
+            var prompt = Content.PromptBuilder.BuildTheaterStockPrompt(m_Head, snapshot, m_Stock, cards, k_ForgeBatch);
+            Mod.Gateway!.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Normal, k_ForgeTtl, "theater:" + m_ForgeCount)); // Normal 不 Low：thinking 时代低优先级在队尾等死（§12 #51 实机）
+            m_ForgePending = true;
+            m_ForgeSince = DateTime.UtcNow;
+            Mod.Log.Info($"[剧场] 剧本炉开炉：池存 {m_Stock.Count}（第 {m_ForgeCount + 1} 炉，产 {k_ForgeBatch} 部）");
+            m_ForgeCount++;
+        }
+
+        /// <summary>
+        /// 剧本炉结果处理（ContentDirectorSystem 按 "theater:" 前缀转交，闲聊炉同款路由纪律）：
+        /// JSONL salvage 解析入池（坏行跳过计数，解析口径全在 TheaterScriptStock.ParseBatch）。
+        /// 失败只记日志不致命——水位低了下一评估拍自然会再开炉。
+        /// </summary>
+        public void OnTheaterResult(Llm.CliCompletedResult r)
+        {
+            m_ForgePending = false;
+            if (!r.Result.Success)
+            {
+                Mod.Log.Info($"[剧场] 剧本炉一炉失败：{r.Result.Error}（下拍再试）");
+                return;
+            }
+            var added = m_Stock.AddBatch(r.Result.Text, out var skipped);
+            Mod.Log.Info($"[剧场] 剧本入库 {added} 部（解析丢 {skipped} 行，池存 {m_Stock.Count}）");
+        }
+
+        // —— ② 放送选锚点 ——
+
+        /// <summary>放送评估拍主流程：可见锚点快照 → 室外候选（车站/公园景点，按离镜头近扫）+ 店内候选
+        /// （CurrentBuilding 分组），取离镜头最近且绑得够 2 人的 → 按场景标签向剧本池取件：无匹配剧本=
+        /// 本拍跳过（不打炉！炉只由水位触发）；取到即绑名单开播（零 LLM 等待，绑定即复核）。</summary>
+        private void TryCast()
         {
             m_BubbleWorld ??= World.GetExistingSystemManaged<BubbleWorldSpikeSystem>();
             if (m_BubbleWorld == null)
@@ -243,7 +289,16 @@ namespace CityLife.GameBridge
 
             if (best == null)
                 return; // 本拍无候选（城市安静/都在冷却），下拍自然再试
-            FireForge(best, snapshot);
+            if (best.SceneTag.Length == 0)
+                return; // 该场景类型无剧本标签（学校/医院/办公楼等室内）——池无此分区，本拍跳过
+            var script = m_Stock.TryTake(best.SceneTag, best.Roster.Count);
+            if (script == null)
+            {
+                // 无匹配剧本=本拍跳过（不打炉！炉只由水位触发）——一行日志供验收区分"没扫到人"与"池里没货"
+                Mod.Log.Info($"[剧场] 候选成立但池无匹配剧本：{best.KindLabel}（标签 {best.SceneTag}，{best.Roster.Count} 人，池存 {m_Stock.Count}），本拍跳过");
+                return;
+            }
+            StartTheater(best, script);
         }
 
         /// <summary>室外候选：以一个可见锚点为圆心扫 40m 圈——车站（候车 ≥2）优先，其次公园/景点；
@@ -289,8 +344,9 @@ namespace CityLife.GameBridge
             Entity loc;
             float3 locPos;
             string label;
-            if (station != Entity.Null) { loc = station; locPos = stationPos; label = "车站候车"; }
-            else if (park != Entity.Null) { loc = park; locPos = parkPos; label = parkIsSignature ? "景点" : "公园"; }
+            string tag; // 剧本池场景标签（TheaterScriptStock 四值）
+            if (station != Entity.Null) { loc = station; locPos = stationPos; label = "车站候车"; tag = Content.TheaterScriptStock.Station; }
+            else if (park != Entity.Null) { loc = park; locPos = parkPos; label = parkIsSignature ? "景点" : "公园"; tag = Content.TheaterScriptStock.Park; }
             else return null;
             if (OnCooldown(loc) || LocationInUse(loc))
                 return null;
@@ -300,6 +356,7 @@ namespace CityLife.GameBridge
                 Location = loc,
                 Pos = locPos,
                 KindLabel = label,
+                SceneTag = tag,
                 DistToCam = math.distance(camPos, locPos),
             };
             BindOutdoorRoster(locPos, movers, cand.Roster);
@@ -385,6 +442,7 @@ namespace CityLife.GameBridge
                     Location = b,
                     Pos = pos,
                     KindLabel = (kind ?? "建筑") + "内",
+                    SceneTag = IndoorSceneTag(kind), // 商店→shop、住宅区→home；其余室内类型无标签=本拍跳过
                     DistToCam = dist,
                 };
                 foreach (var m in kv.Value.Members)
@@ -407,114 +465,51 @@ namespace CityLife.GameBridge
             return false;
         }
 
-        // —— ③ 开炉 ——
+        // —— ③ 取件开播（放送时绑定，绑定即复核） ——
 
-        /// <summary>组合卡开炉：场景卡（地点名+环境摘要）+ 每人一张处境卡 → 一炉产 人数×2-4轮 句剧本。
-        /// 出卡此刻才做（DescribeCitizen 按实体）——绑人时只验实体，卡无效者此刻丢；丢完 &lt;2 人=组炉放弃。</summary>
-        private void FireForge(Candidate cand, in Content.CitySnapshot snapshot)
+        /// <summary>室内建筑类型词 → 剧本场景标签（§12 #52 定案只四类分区）：商店→shop、住宅区→home；
+        /// 学校/医院/工厂/办公楼/未分类 → ""（池无此分区，候选本拍跳过——扩新分区见 TheaterScriptStock 头注释，三处同改）。</summary>
+        private static string IndoorSceneTag(string? kind) => kind switch
         {
-            var participants = new List<Participant>(cand.Roster.Count);
-            var cards = new List<string>(cand.Roster.Count);
-            var names = new List<string>(cand.Roster.Count);
-            foreach (var (citizen, anchor, indoor) in cand.Roster)
-            {
-                var card = CitizenPoolSystem.DescribeCitizen(EntityManager, citizen);
-                if (card == null)
-                    continue; // 儿童/MovingAway/实体刚死——跳过该参与者
-                var name = m_NameSystem != null ? m_NameSystem.GetRenderedLabelName(citizen) : null;
-                participants.Add(new Participant { Citizen = citizen, Anchor = anchor, Name = string.IsNullOrEmpty(name) ? "市民" : name, Indoor = indoor });
-                cards.Add(card);
-                names.Add(participants[participants.Count - 1].Name);
-            }
-            if (participants.Count < k_MinParticipants)
-            {
-                Mod.Log.Info("[剧场] 组炉放弃：有效参与者不足 2 人（出卡后减员）");
-                return;
-            }
+            "商店" => Content.TheaterScriptStock.Shop,
+            "住宅区" => Content.TheaterScriptStock.Home,
+            _ => "",
+        };
 
-            var rounds = 2 + (int)(m_ForgeCount % 3u); // 2-4 轮（炉计数轮换，确定性）
-            var lines = participants.Count * rounds;   // 每人每轮一句
-            var sceneName = SceneNameOf(cand);
-            var scene = sceneName + "（" + cand.KindLabel + "）";
-            var digest = m_Environment.BuildDigest(cand.Pos); // 环境摘要（S6 同款蒸馏，≤3 条）
-            if (digest.Length > 0)
-                scene += "｜旁边：" + digest;
-            var prompt = Content.PromptBuilder.BuildTheaterPrompt(m_Head, snapshot, scene, cards, lines);
-            Mod.Gateway!.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Normal, k_ForgeTtl, "theater:" + m_ForgeCount)); // Normal 不 Low：thinking 时代低优先级在队尾等死，剧本晚到=锚点已散=开播中止（2026-09-10 实机）
-
-            var casting = new Casting
-            {
-                Location = cand.Location,
-                Pos = cand.Pos,
-                SceneName = sceneName,
-                KindLabel = cand.KindLabel,
-                Rounds = rounds,
-                Lines = lines,
-            };
-            casting.Participants.AddRange(participants);
-            m_Casting = casting;
-            m_ForgePending = true;
-            m_ForgeSince = DateTime.UtcNow;
-            Mod.Log.Info($"[剧场] 开组：{sceneName}（{cand.KindLabel}），{participants.Count} 人：{string.Join("、", names)}");
-            Mod.Log.Info($"[剧场] 开炉：{participants.Count} 人 × {rounds} 轮 = {lines} 句（第 {m_ForgeCount + 1} 炉）");
-            m_ForgeCount++;
-        }
-
-        /// <summary>场景地点名：店内=店名（租户公司名优先），车站/公园=渲染名；读不到 → 类型词兜底（不硬造）。</summary>
-        private string SceneNameOf(Candidate cand)
+        /// <summary>取到剧本即开播：绑名单（roster 前 script.Cast 人——室外已按离地点升序，室内=楼内市民；
+        /// 名单是这一拍刚扫出来的活人，绑定即复核，无飞行窗口）→ Participants/Lines 初始化（其余锚点"……"在听，
+        /// 第一句带名字前缀落说话人锚点，§12 #50）→ Anchors/m_ByAnchor 登记 → EnsureAnchor 五道闸。
+        /// 剧本开播才消耗：任一锚点不可锚=回滚登记+Return 退回池+日志开播中止，不上冷却（#52：冷却只在终了后上）。</summary>
+        private void StartTheater(Candidate cand, Content.TheaterScript script)
         {
-            string? name = cand.KindLabel.EndsWith("内")
-                ? EnvironmentDigestSystem.ShopNameOf(EntityManager, m_NameSystem, cand.Location)
-                : EnvironmentDigestSystem.RenderedName(m_NameSystem, cand.Location);
-            return name ?? cand.KindLabel;
-        }
-
-        /// <summary>
-        /// 小剧场炉结果处理（ContentDirectorSystem 按 "theater:" 前缀转交，闲聊炉同款路由纪律）：
-        /// JSONL salvage 解析（坏行跳过计数，speaker 超界/文本空/超 40 字都丢）→ 有效 &lt;2 句作废 →
-        /// 激活全量复核（锚点失效即锁，全有或全无）→ 建组开播。失败只记日志不致命，下拍自然会再评。
-        /// </summary>
-        public void OnTheaterResult(Llm.CliCompletedResult r)
-        {
-            m_ForgePending = false;
-            var cast = m_Casting;
-            m_Casting = null;
-            if (cast == null)
-                return; // 兜底解锁时已解散
-            if (!r.Result.Success)
-            {
-                Mod.Log.Info($"[剧场] 一炉失败：{r.Result.Error}（下拍再试）");
-                return;
-            }
-            var script = ParseScript(r.Result.Text, cast.Participants.Count, cast.Lines, out var skipped);
-            if (script.Count < 2)
-            {
-                Mod.Log.Info($"[剧场] 剧本作废：有效 {script.Count} 句（解析丢 {skipped} 条），不开播");
-                SetCooldown(cast.Location);
-                return;
-            }
-
-            // 激活复核：名单/地点在飞行窗口里可能已变（锚点失效即锁 #28）
-            var fail = ValidateCasting(cast);
             m_BubbleWorld ??= World.GetExistingSystemManaged<BubbleWorldSpikeSystem>();
             var bubbles = m_BubbleWorld; // 局部变量落地——编译器 nullable 流分析认局部不认字段
-            if (fail == null && bubbles == null)
-                fail = "气泡系统未就绪";
-            if (fail != null || bubbles == null)
+            if (bubbles == null)
             {
-                Mod.Log.Info($"[剧场] 开播中止：{cast.SceneName}（{fail}）");
-                SetCooldown(cast.Location);
+                m_Stock.Return(script); // 气泡层未就绪——退回池不消耗
                 return;
             }
 
-            // 建剧场：锚点→台词表先就位（插队分支即刻生效），第一句直接落到说话人锚点，其余"……"（在听）
-            var t = new Theater { Location = cast.Location, SceneName = cast.SceneName };
-            t.Participants.AddRange(cast.Participants);
-            t.Script.AddRange(script);
+            var sceneName = SceneNameOf(cand);
+            var t = new Theater { Location = cand.Location, SceneName = sceneName };
+            var names = new List<string>(script.Cast);
+            for (var i = 0; i < script.Cast && i < cand.Roster.Count; i++) // TryTake 已保证 cast ≤ roster.Count，双上界纯防御
+            {
+                var (citizen, anchor, indoor) = cand.Roster[i];
+                var name = m_NameSystem != null ? m_NameSystem.GetRenderedLabelName(citizen) : null;
+                t.Participants.Add(new Participant { Citizen = citizen, Anchor = anchor, Name = string.IsNullOrEmpty(name) ? "市民" : name, Indoor = indoor });
+                names.Add(t.Participants[t.Participants.Count - 1].Name);
+            }
+            if (t.Participants.Count < script.Cast)
+            {
+                m_Stock.Return(script); // 理论到不了，纯防御——名单不足退回不消耗
+                return;
+            }
+            t.Script.AddRange(script.Lines);
             foreach (var p in t.Participants)
                 if (!t.Lines.ContainsKey(p.Anchor))
                 {
-                    t.Lines[p.Anchor] = "……";
+                    t.Lines[p.Anchor] = "……"; // 在听
                     t.Anchors.Add(p.Anchor);
                 }
             var (s0, t0) = t.Script[0];
@@ -526,7 +521,7 @@ namespace CityLife.GameBridge
             foreach (var a in t.Anchors)
                 m_ByAnchor[a] = t;
 
-            // 锚点建组（五道闸在 EnsureAnchor 里）；任一不可锚=开播中止（回滚登记，冷却地点）
+            // 锚点建组（五道闸在 EnsureAnchor 里）；任一不可锚=开播中止（回滚登记，剧本退回池，不上冷却）
             foreach (var a in t.Anchors)
             {
                 if (!bubbles.EnsureAnchor(a, AnchorKindOf(t, a)))
@@ -534,37 +529,24 @@ namespace CityLife.GameBridge
                     foreach (var x in t.Anchors)
                         m_ByAnchor.Remove(x);
                     m_Active.Remove(t);
-                    Mod.Log.Info($"[剧场] 开播中止：{cast.SceneName}（锚点不可锚：离屏/层关/容量满）");
-                    SetCooldown(cast.Location);
+                    m_Stock.Return(script);
+                    Mod.Log.Info($"[剧场] 开播中止：{sceneName}（锚点不可锚：离屏/层关/容量满），剧本退回池（池存 {m_Stock.Count}）");
                     return;
                 }
             }
             // 立即换文案开播（不等各锚点自己的时钟——第一拍就全是剧场台词）
             foreach (var a in t.Anchors)
                 bubbles.RefreshAnchorText(a);
-            Mod.Log.Info($"[剧场] 剧本入库：{cast.SceneName}，{t.Script.Count} 句（{cast.Rounds} 轮）开播");
+            Mod.Log.Info($"[剧场] 开播：{sceneName}（{cand.KindLabel}），{t.Participants.Count} 人 {t.Script.Count} 句：{string.Join("、", names)}");
         }
 
-        /// <summary>激活复核（飞行窗口全量重验）：地点在、参与者在、室内参与者还在该建筑内、
-        /// 室外参与者的 agent 还在且可定位。全有或全无——任一不过返回原因串，全过返回 null。</summary>
-        private string? ValidateCasting(Casting cast)
+        /// <summary>场景地点名：店内=店名（租户公司名优先），车站/公园=渲染名；读不到 → 类型词兜底（不硬造）。</summary>
+        private string SceneNameOf(Candidate cand)
         {
-            if (!EntityManager.Exists(cast.Location))
-                return "地点失效";
-            foreach (var p in cast.Participants)
-            {
-                if (!EntityManager.Exists(p.Citizen))
-                    return "参与者失效（" + p.Name + "）";
-                if (p.Indoor)
-                {
-                    if (!EntityManager.HasComponent<CurrentBuilding>(p.Citizen)
-                        || EntityManager.GetComponentData<CurrentBuilding>(p.Citizen).m_CurrentBuilding != cast.Location)
-                        return "参与者已离开（" + p.Name + "）";
-                }
-                else if (!EntityManager.Exists(p.Anchor) || !EntityManager.HasComponent<Transform>(p.Anchor))
-                    return "参与者离开画面（" + p.Name + "）";
-            }
-            return null;
+            string? name = cand.KindLabel.EndsWith("内")
+                ? EnvironmentDigestSystem.ShopNameOf(EntityManager, m_NameSystem, cand.Location)
+                : EnvironmentDigestSystem.RenderedName(m_NameSystem, cand.Location);
+            return name ?? cand.KindLabel;
         }
 
         // —— ④ 播放（气泡系统的两个回调口）——
@@ -650,40 +632,6 @@ namespace CityLife.GameBridge
 
         // —— 工具 ——
 
-        /// <summary>剧本 JSONL salvage 解析（BubbleSnippetPool.ParseBatch 同纪律——LLM 输出非法 JSON 是最高频故障）：
-        /// 逐行 {"speaker":1,"text":..}；speaker∈1..人数（转 0 基）、text 非空 ≤40 字（气泡排版硬顶
-        /// 同片段池口径），坏行跳过计数；超 maxLines 截断。返回序保持模型输出序（即剧本时间序）。</summary>
-        private static List<(int Speaker, string Text)> ParseScript(string jsonl, int participants, int maxLines, out int skipped)
-        {
-            var list = new List<(int, string)>();
-            skipped = 0;
-            if (string.IsNullOrWhiteSpace(jsonl))
-                return list;
-            foreach (var raw in jsonl.Split('\n'))
-            {
-                if (list.Count >= maxLines)
-                    break;
-                var line = raw.Trim();
-                if (line.Length == 0 || line.StartsWith("#") || line.StartsWith("//"))
-                    continue;
-                var speaker = Util.JsonMini.GetInt(line, "speaker");
-                var text = Util.JsonMini.GetStr(line, "text");
-                if (speaker == null || speaker.Value < 1 || speaker.Value > participants || string.IsNullOrWhiteSpace(text))
-                {
-                    skipped++;
-                    continue;
-                }
-                text = text!.Trim();
-                if (text.Length > 40)
-                {
-                    skipped++;
-                    continue;
-                }
-                list.Add((speaker.Value - 1, text));
-            }
-            return list;
-        }
-
         /// <summary>锚点类型：室内参与者的锚点是建筑（kind 2），室外是行人 agent（kind 0）。</summary>
         private static byte AnchorKindOf(Theater t, Entity anchor)
         {
@@ -693,7 +641,8 @@ namespace CityLife.GameBridge
             return 0; // 理论到不了，纯防御
         }
 
-        /// <summary>地点冷却（锚点失效即锁 #28：终了/作废/中止都给地点上 ≈3 炉节拍的冷却，防连开）。</summary>
+        /// <summary>地点冷却（锚点失效即锁 #28 + §12 #52：只在终了后上 ≈3 炉节拍冷却防连开；
+        /// 开播中止不上冷却——中止是锚点侧问题不是地点的锅，剧本已退回池）。</summary>
         private void SetCooldown(Entity loc) => m_CooldownUntil[loc] = Now + k_CooldownMinutes * TicksPerMinute;
 
         /// <summary>地点是否在冷却中（过期条目顺带清，表恒小）。</summary>
@@ -707,24 +656,18 @@ namespace CityLife.GameBridge
             return false;
         }
 
-        /// <summary>地点是否已被占用（在飞剧组或活剧场）。</summary>
+        /// <summary>地点是否已被占用（活剧场在演）。</summary>
         private bool LocationInUse(Entity loc)
         {
-            if (m_Casting != null && m_Casting.Location == loc)
-                return true;
             foreach (var t in m_Active)
                 if (t.Location == loc)
                     return true;
             return false;
         }
 
-        /// <summary>市民是否已在剧组里（在飞/在演都算——真名单不串场）。</summary>
+        /// <summary>市民是否已在剧组里（在演——真名单不串场）。</summary>
         private bool InUse(Entity citizen)
         {
-            if (m_Casting != null)
-                foreach (var p in m_Casting.Participants)
-                    if (p.Citizen == citizen)
-                        return true;
             foreach (var t in m_Active)
                 foreach (var p in t.Participants)
                     if (p.Citizen == citizen)

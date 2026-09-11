@@ -115,8 +115,9 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>
-        /// 对任意市民实体出处境卡（S7 小剧场绑名单后按实体调用；与池采样同一条产线同一口径，
-        /// 一处定义别复制粘贴）。无 Citizen 组件/儿童/MovingAway → null（调用方跳过该参与者）。
+        /// 对任意市民实体出处境卡（与池采样同一条产线同一口径，一处定义别复制粘贴）。
+        /// 按实体出卡的公共口：S7 剧场按人开炉曾用，§12 #52 改库存剧本后当前无调用方，
+        /// 保留给 backlog 的定班底剧场等后续形态。无 Citizen 组件/儿童/MovingAway → null（调用方跳过）。
         /// 名字不在此处取——NameSystem 归调用方（EnvironmentDigestSystem 同款惰性解析先例）。
         /// </summary>
         internal static string? DescribeCitizen(EntityManager em, Entity e)
@@ -137,7 +138,7 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>处境卡组装："退休大爷，在公园里溜达" / "手头紧的上班族，坐公交下班回家路上（去住宅区）" / "学生，打车上学路上（去学校）"。读不到的维度整段省略。
-        /// static + 显式 EntityManager：池采样（OnUpdate）与小剧场按实体出卡（DescribeCitizen）共用。</summary>
+        /// static + 显式 EntityManager：池采样（OnUpdate）与按实体出卡口（DescribeCitizen）共用。</summary>
         private static string Describe(EntityManager em, Entity e, Citizen citizen, CitizenAge age, Purpose purpose)
         {
             // —— 身份（谁）——

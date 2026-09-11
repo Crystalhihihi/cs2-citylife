@@ -606,7 +606,12 @@ namespace CityLife.GameBridge
                     // S7 小剧场：任一参与者气泡到时换下一条→下一人（剧场内部纯推进，
                     // 再把新台词 RefreshAnchorText 到说话人锚点上）；非剧场锚点空转
                     Theater?.OnAnchorRotated(b.Anchor);
-                    SetBubbleText(ref b, b.TextIdx);
+                    // 换气节奏（§12 #54）：一句说完歇一拍（奇数拍=沉默"……"）——一次性消耗下的节奏阀
+                    // （消耗砍半）+ RimTalk 式"一句一句冒"更像真人；剧场锚点不歇（对戏不能冷场）
+                    if (b.TextIdx % 2 == 1 && (Theater == null || !Theater.HasActiveOn(b.Anchor)))
+                        b.Text = "……"; // 烘焙由 OnUpdate 末尾的兜底补烘链兜住
+                    else
+                        SetBubbleText(ref b, b.TextIdx);
                     b.NextAt = now + HoldFor(b.Anchor.Index, b.TextIdx, b.Text.Length);
                     m_Bubbles[i] = b;
                 }
@@ -684,15 +689,13 @@ namespace CityLife.GameBridge
             var salt = (uint)(b.Anchor.Index + textIdx);
             for (uint k = 0; k < 8; k++)
             {
-                var picked = pool.PickFor(occasion, salt + k, maxLen); // 取用即消耗（§12 #53 真一次性）
+                var picked = pool.PickFor(occasion, salt + k, maxLen); // 纯探测（§12 #53：采用才 Consume）
                 if (picked == null)
                     return false; // 池已空/该场合无候选——调用方落"……"沉默泡
                 if (k < 7 && (m_UsedThisFrame.Contains(picked.Text) || m_InUseTexts.Contains(picked.Text)))
-                {
-                    // 在显冲突（同帧另一泡刚消耗了它）：该条已消耗不可再生，顺探下一条
-                    continue;
-                }
+                    continue; // 在显冲突顺探下一条（探测不消耗，库存零浪费）
                 m_UsedThisFrame.Add(picked.Text);
+                pool.Consume(picked); // 真一次性：采用即从池删除
                 text = picked.Text;
                 if (!m_LoggedSnippetPool)
                 {

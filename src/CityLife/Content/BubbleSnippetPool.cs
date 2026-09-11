@@ -126,7 +126,8 @@ namespace CityLife.Content
         /// <summary>
         /// S5 取泡口：按场合确定性抽一条（候选 = exact 场合 ∪ Any；同 salt+池状态必同条）。
         /// maxLen 限长（§12 #51 长文稳锚：动的锚点只配短句；入库已 ≤40 字）；限长后无候选回退不限长。
-        /// **取用即消耗**（§12 #53 真一次性：抽中即从池删除，同一句话全城只说一遍）。
+        /// **纯探测不消耗**——顺探被拒的候选不能白烧；真正采用时调用方必须紧跟 <see cref="Consume"/>
+        /// （§12 #53 真一次性：取用即消耗=从池删除，同一句话全城只说一遍）。
         /// 池空/无候选返回 null（调用方落"……"沉默泡，宁沉默不重复）。
         /// </summary>
         public BubbleSnippet? PickFor(BubbleOccasion occasion, uint salt, int maxLen = int.MaxValue)
@@ -134,10 +135,11 @@ namespace CityLife.Content
             var picked = PickFiltered(occasion, salt, maxLen);
             if (picked == null && maxLen != int.MaxValue)
                 picked = PickFiltered(occasion, salt, int.MaxValue);
-            if (picked != null)
-                m_Entries.Remove(picked); // 一次性：取用即消耗
             return picked;
         }
+
+        /// <summary>取用消耗（§12 #53）：从池删除该条。只有真正采用才调——探测候选不算用。</summary>
+        public void Consume(BubbleSnippet entry) => m_Entries.Remove(entry);
 
         /// <summary>限长过滤的确定性抽取（候选计数 → salt 取模定位）。无候选返回 null。</summary>
         private BubbleSnippet? PickFiltered(BubbleOccasion occasion, uint salt, int maxLen)

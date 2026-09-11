@@ -100,6 +100,8 @@ namespace CityLife
             // 内容引擎：话题雷达（读侧蒸馏快照）+ 内容导演（一炉出串/滴灌/T0 兜底）。
             updateSystem.UpdateAt<GameBridge.TopicRadarSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<GameBridge.ContentDirectorSystem>(SystemUpdatePhase.GameSimulation);
+            // LLM 结果快速收炉泵（64 帧一拍，接管网关出队——导演自身 4096 帧节拍只管业务节奏了）
+            updateSystem.UpdateAt<GameBridge.LlmResultPumpSystem>(SystemUpdatePhase.GameSimulation);
 
             // 实体级话题源：EventJournal 突发新闻 + 建筑/街道锚点采样
             updateSystem.UpdateAt<GameBridge.EventNewsSystem>(SystemUpdatePhase.GameSimulation);

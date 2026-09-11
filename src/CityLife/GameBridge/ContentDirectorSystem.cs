@@ -94,10 +94,13 @@ namespace CityLife.GameBridge
 
         public override int GetUpdateInterval(SystemUpdatePhase phase) => 4096;
 
-        protected override void OnUpdate()
+        /// <summary>LLM 结果路由（唯一出口，LlmResultPumpSystem 逐条调用，主线程）：按 requestId 前缀分发
+        /// 各炉处理器（breaking:/thread:/ad-reply:/ad:/mayor-reply:/intent:/topic:/chatter:/theater:），
+        /// 无前缀=主炉批次（HandleMainBatch）。伪循环包 if 链=一次性块惯用法（分支 continue 即路由完毕，
+        /// 比重写九处 return 稳）。绝不阻塞模拟线程。</summary>
+        public void RouteResult(Llm.CliCompletedResult r)
         {
-            // ① 收炉：LLM 结果 → 解析打捞 → 查重兜底 → 入池（锚点实体+评论串随帖入池，绝不阻塞模拟线程）
-            while (Mod.Gateway != null && Mod.Gateway.TryDequeueResult(out var r))
+            for (int once = 0; once < 1; once++)
             {
                 // 突发快讯炉走专线路由："城市快讯"账号单帖，requestId 带锚点实体（不占常规批次位）
                 if (r.RequestId != null && r.RequestId.StartsWith("breaking:"))
@@ -157,6 +160,15 @@ namespace CityLife.GameBridge
                     continue;
                 }
 
+                HandleMainBatch(r); // 无前缀 = 主炉批次
+            }
+        }
+
+        /// <summary>主炉批次收炉（无前缀结果）：解析打捞 → 查重兜底 → 入池（锚点实体+评论串随帖入池）
+        /// → 连续剧推进。外层块仅为承接原收炉 while 体的缩进，零逻辑改动。</summary>
+        private void HandleMainBatch(Llm.CliCompletedResult r)
+        {
+            {
                 m_BatchPending = false;
                 if (r.Result.Success)
                 {
@@ -218,7 +230,13 @@ namespace CityLife.GameBridge
                     Mod.Log.Info($"[LLM] 一炉失败：{r.Result.Error}（T0 模板顶着）");
                 }
             }
+        }
 
+        protected override void OnUpdate()
+        {
+            // ① 收炉已迁 LlmResultPumpSystem（64 帧≈1.6s 一收）——4096 帧节拍≈100s 的收炉等待在
+            // 一次性消耗语义下=省略号海实锤（2026-09-11）。队列唯一消费者=泵；路由逻辑留在 RouteResult。
+            // 本节拍只做业务：发帖/补炉/话题炉水位/续热炉
             var snapshot = m_Radar.Latest;
             if (snapshot.Citizens == 0)
                 return; // 雷达还没采到样

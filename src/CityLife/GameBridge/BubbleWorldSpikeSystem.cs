@@ -91,6 +91,12 @@ namespace CityLife.GameBridge
     ///   剧场侧再把新台词经 RefreshAnchorText 推到说话人锚点上（上条读完下条立即接话）。
     ///   供剧场系统的最小 internal 口：HasAnchor（验活）/SnapshotAnchors（选锚点低频快照）/
     ///   EnsureAnchor（绑名单建组，带层开关+存在性+Transform+屏内+容量五道闸）/RefreshAnchorText。
+    /// 事件快反层（v5.5，§12 #58，2026-09-11"着火了还在说无关的事"实机实锤定案）：气泡自挂
+    ///   OnFire/AccidentSite 只读查询（分类学口径照 EventNewsSystem，勿复探），128 帧错峰刷活动
+    ///   事件表（≤8 条，溢出按离相机近优先）；换文案时锚点在事件点 60m 内 → 强制播事件反应模板
+    ///   （火灾/车祸/犯罪各一小池，salt=锚点.Index+textIdx 确定性轮换，驻留节奏不变）。
+    ///   优先级定案：剧场 > 事件快反 > 片段 > 隐身。0 token——感叹句不需要 AI；
+    ///   模板非一次性片段：不进池、不消耗、跨事件允许重复；事件消失后下次换文案自然回退片段池。
     /// 扩展口（正式版待办）：按 BornCycle 新鲜度衰减取泡。（共位小剧场已落地 S7；连续剧串场归 S8）
     /// </summary>
     public partial class BubbleWorldSpikeSystem : GameSystemBase
@@ -200,6 +206,54 @@ namespace CityLife.GameBridge
         // 轮次回调在 TickLifecycle——OnRender 渲染热路径依旧零查询
         private BubbleTheaterSystem? m_Theater;
 
+        // —— 事件快反层（v5.5，§12 #58）：活动事件表+反应模板。查询 OnCreate 缓存、128 帧错峰刷新、
+        //    距离判定只发生在换文案时刻（低频路径），OnRender 热路径零查询 ——
+        private const float k_EventRadius = 60f;   // 事件影响半径（锚点在此范围内换文案即被覆盖）
+        private const int k_MaxActiveEvents = 8;   // 活动事件表上限（溢出口径见 RefreshActiveEvents）
+        private EntityQuery m_FireQuery = default!;
+        private EntityQuery m_AccidentQuery = default!;
+        private readonly List<ActiveEvent> m_ActiveEvents = new(k_MaxActiveEvents);
+        private readonly HashSet<Entity> m_LoggedEvents = new();   // 已打"新事件"日志的源实体（防抖：同实体不重复打）
+        private readonly List<Entity> m_LoggedPruneScratch = new();
+
+        /// <summary>活动事件类型（反应模板分池键）。</summary>
+        private enum BubbleEventKind : byte { Fire, Traffic, Crime }
+
+        /// <summary>活动事件表条目：类型 + 世界坐标 + 源实体（日志防抖用）。</summary>
+        private struct ActiveEvent
+        {
+            public BubbleEventKind Kind;
+            public float3 Pos;
+            public Entity Source;
+        }
+
+        // 反应模板小池（§12 #58）：路人惊呼口吻、感叹句、≤12 字为主。非一次性语义——
+        // 不进片段池不消耗，跨事件允许重复（"着火了"在哪个火灾现场喊都成立）；
+        // salt=锚点.Index+textIdx 确定性轮换（沿用片段池同泡不重样语义），驻留节奏复用 HoldFor。
+        // 如何扩展：直接往对应数组里加句即可，轮换/折行/烘焙全自动。
+        private static readonly string[] k_FireReactions =
+        {
+            "着火了！快报警！",
+            "好大的火！快躲开！",
+            "那边烧起来了！",
+            "听！消防车来了！",
+            "烟好大！别过去！",
+        };
+        private static readonly string[] k_TrafficReactions =
+        {
+            "出车祸了！",
+            "撞车了！吓我一跳！",
+            "撞得好惨！慢点开！",
+            "前面全堵死了！",
+        };
+        private static readonly string[] k_CrimeReactions =
+        {
+            "抓小偷啊！",
+            "警察都来了！",
+            "光天化日的！",
+            "这治安怎么了！",
+        };
+
         // 底板管线（通知图标管线：贴图/网格/缓冲是程序化内容 OnCreate 即建；材质懒取游戏图标材质）
         private bool m_PlateOn = true;
         private Material[] m_PlateMaterials = null!;    // 每档一份 clone：共享一份材质轮换绑缓冲，
@@ -305,6 +359,19 @@ namespace CityLife.GameBridge
                 ComponentType.Exclude<Game.Tools.Temp>());
             m_ConfigQuery = GetEntityQuery(ComponentType.ReadOnly<OverlayConfigurationData>());
             m_IconConfigQuery = GetEntityQuery(ComponentType.ReadOnly<IconConfigurationData>());
+            // 事件快反层（§12 #58）：只读查询 OnCreate 缓存、排除 Temp/Deleted，口径照 EventNewsSystem
+            // （分类学实锤勿复探）——火灾=OnFire 挂燃烧中的建筑本体（自带 Transform 定位）；
+            // 车祸/犯罪=AccidentSite.m_Flags 位标志（位置在刷新时按本体→m_Event 逐级取，查询不强求 Transform）
+            m_FireQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Events.OnFire>(),
+                ComponentType.ReadOnly<Game.Buildings.Building>(),
+                ComponentType.ReadOnly<Transform>(),
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
+            m_AccidentQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Events.AccidentSite>(),
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
             m_InstanceBufferID = Shader.PropertyToID("instanceBuffer"); // shader 侧结构化缓冲名（TLE 实锤）
             // 设置页初值（§12 #45）：总开关/底板开关联 Mod.Options（null=主菜单期回落默认）。
             // m_Active 是 Ctrl+9 会话开关，权威总闸在 MasterOn（每次绘制/采样都现读设置页）
@@ -370,6 +437,11 @@ namespace CityLife.GameBridge
             m_InUseTexts.Clear();
             foreach (var b in m_Bubbles)
                 m_InUseTexts.Add(b.Text);
+
+            // 事件快反表刷新：128 帧错峰（本系 GetUpdateInterval=1 逐帧跑，手动分频；相位 64
+            // 与 Resample 的 %512==0 错开，别每帧全扫）
+            if (m_Frame % 128 == 64)
+                RefreshActiveEvents(cam);
 
             // 重采样：周期兜底 + 视角大幅移动即触发（节流 30 帧——快移视角气泡跟不上的根治）
             var camMoved = (cam.transform.position - m_LastSamplePos).sqrMagnitude > 40f * 40f
@@ -669,7 +741,8 @@ namespace CityLife.GameBridge
                     Theater?.OnAnchorRotated(b.Anchor);
                     // 换气节奏（§12 #54）：一句说完歇一拍（奇数拍="……"隐身，绘制端跳过不画）——
                     // 一次性消耗下的节奏阀（消耗砍半）+ RimTalk 式"冒出一句→消失→再冒新句"；
-                    // 剧场锚点不歇（对戏不能冷场；"在听"参与者的"……"同样隐身，轮到谁说谁出现）
+                    // 剧场锚点不歇（对戏不能冷场；"在听"参与者的"……"同样隐身，轮到谁说谁出现）；
+                    // 事件快反期间照常走换气（§12 #58 定案：惊呼也轮播，不为事件搞特殊节拍）
                     if (b.TextIdx % 2 == 1 && (Theater == null || !Theater.HasActiveOn(b.Anchor)))
                         b.Text = "……";
                     else
@@ -682,13 +755,19 @@ namespace CityLife.GameBridge
 
         /// <summary>换文案唯一入口（采样建组/生命周期轮换/剧场建组与推轮都走这）：
         /// 最先小剧场插队（v5.1：锚点挂活剧场 → 剧本台词，纯查询不推轮次），
-        /// 其次闲聊炉片段池（v5.0 主源），取不到回退占位文案池（池空兜底——开局炉未出时气泡仍有话）。</summary>
+        /// 其次事件快反覆盖（v5.5，§12 #58：锚点在活动事件点 60m 内 → 反应模板），
+        /// 再次闲聊炉片段池（v5.0 主源），取不到回退占位文案池（池空兜底——开局炉未出时气泡仍有话）。
+        /// 优先级定案（§12 #58）：剧场 > 事件快反 > 片段 > 隐身（"……"沉默拍）。</summary>
         private void SetBubbleText(ref TrackedBubble b, int textIdx)
         {
             // 实测移速（§12 #51 长文稳锚）：换文案间隔位移/时长的点估计；读不到位置维持旧值
+            float3 anchorPos = default;
+            var hasPos = false;
             if (EntityManager.HasComponent<Transform>(b.Anchor))
             {
                 var pos = EntityManager.GetComponentData<Transform>(b.Anchor).m_Position;
+                anchorPos = pos;
+                hasPos = true;
                 var nowS = UnityEngine.Time.unscaledTime;
                 if (b.LastSetAt > 0f && nowS - b.LastSetAt > 0.5f)
                     b.Speed = math.distance(pos, b.LastPos) / (nowS - b.LastSetAt);
@@ -699,6 +778,16 @@ namespace CityLife.GameBridge
             if (theater != null && theater.TryGetLine(b.Anchor, out var theaterLine))
             {
                 b.Text = theaterLine;
+                if (m_BaseTextMaterial != null)
+                    EnsureBaked(b.Text, b.Kind);
+                return;
+            }
+            // 事件快反（§12 #58）：锚点在活动事件点 k_EventRadius 内 → 该事件类型反应模板覆盖
+            // （不进片段池、不消耗一次性片段）；事件消失后下次换文案自然落回下方片段池路径，
+            // 无需特殊处理。锚点读不到位置（无 Transform）时不判，直接走片段池
+            if (hasPos && TryPickEventReaction(b, textIdx, anchorPos, out var reaction))
+            {
+                b.Text = reaction;
                 if (m_BaseTextMaterial != null)
                     EnsureBaked(b.Text, b.Kind);
                 return;
@@ -768,6 +857,109 @@ namespace CityLife.GameBridge
             }
             return false; // 理论到不了，纯防御
         }
+
+        // —— 事件快反层（v5.5，§12 #58）：活动事件表刷新 + 反应模板选取 ——
+
+        /// <summary>低频刷新活动事件表（OnUpdate 128 帧错峰调用，别每帧全扫）。
+        /// 口径照 EventNewsSystem 分类学实锤：火灾=OnFire 挂燃烧建筑本体（读 Transform 定位）；
+        /// 车祸/犯罪=AccidentSite.m_Flags 位标志（TrafficAccident=8 / CrimeScene=4，
+        /// CrimeFinished=16 已结案的跳过不算活动）。上限 k_MaxActiveEvents 条——
+        /// 溢出按离相机近优先（玩家看得见的事件才配抢话；远处事件挤掉近处=白覆盖）。</summary>
+        private void RefreshActiveEvents(Camera cam)
+        {
+            m_ActiveEvents.Clear();
+            var fires = m_FireQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
+            foreach (var e in fires)
+            {
+                var p = EntityManager.GetComponentData<Transform>(e).m_Position;
+                m_ActiveEvents.Add(new ActiveEvent { Kind = BubbleEventKind.Fire, Pos = p, Source = e });
+            }
+            fires.Dispose();
+            var sites = m_AccidentQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
+            foreach (var e in sites)
+            {
+                var site = EntityManager.GetComponentData<Game.Events.AccidentSite>(e);
+                if ((site.m_Flags & Game.Events.AccidentSiteFlags.CrimeFinished) != 0)
+                    continue; // 已结案的旧现场不算活动（EventNewsSystem 同口径）
+                var isCrime = (site.m_Flags & Game.Events.AccidentSiteFlags.CrimeScene) != 0;
+                var isTraffic = (site.m_Flags & Game.Events.AccidentSiteFlags.TrafficAccident) != 0;
+                if (!isCrime && !isTraffic)
+                    continue;
+                if (!TryGetSitePos(e, site, out var p))
+                    continue; // 拿不到位置的现场无法做距离判定，不收
+                m_ActiveEvents.Add(new ActiveEvent
+                    { Kind = isCrime ? BubbleEventKind.Crime : BubbleEventKind.Traffic, Pos = p, Source = e });
+            }
+            sites.Dispose();
+
+            // 超上限：离相机近优先（N 很小，每 128 帧一次排序开销可忽略）
+            if (m_ActiveEvents.Count > k_MaxActiveEvents)
+            {
+                var camPos = (float3)cam.transform.position;
+                m_ActiveEvents.Sort((x, y) => math.distancesq(x.Pos, camPos).CompareTo(math.distancesq(y.Pos, camPos)));
+                m_ActiveEvents.RemoveRange(k_MaxActiveEvents, m_ActiveEvents.Count - k_MaxActiveEvents);
+            }
+
+            // 新事件一行一次性 INFO（防抖：同实体不重复打；被上限裁掉的不打，哪天挤进表再打）
+            foreach (var ev in m_ActiveEvents)
+                if (m_LoggedEvents.Add(ev.Source))
+                    Mod.Log.Info($"[BubbleW] 事件快反：{KindName(ev.Kind)} @({ev.Pos.x:F0},{ev.Pos.z:F0})（活动 {m_ActiveEvents.Count} 条）");
+
+            // 防抖集合清理：源实体不存在（火灭/现场撤除）即移除，防无限涨（EventNewsSystem.PruneReported 同款）
+            m_LoggedPruneScratch.Clear();
+            foreach (var e in m_LoggedEvents)
+                if (!EntityManager.Exists(e))
+                    m_LoggedPruneScratch.Add(e);
+            foreach (var e in m_LoggedPruneScratch)
+                m_LoggedEvents.Remove(e);
+        }
+
+        /// <summary>事故现场取位置：本体 Transform → m_Event 的 Transform → 放弃
+        /// （EventNewsSystem.DirectionOfSite 同路径——AccidentSite 现场实体自身未必有 Transform）。</summary>
+        private bool TryGetSitePos(Entity siteEntity, Game.Events.AccidentSite site, out float3 pos)
+        {
+            if (EntityManager.HasComponent<Transform>(siteEntity))
+            {
+                pos = EntityManager.GetComponentData<Transform>(siteEntity).m_Position;
+                return true;
+            }
+            if (site.m_Event != Entity.Null && EntityManager.Exists(site.m_Event)
+                && EntityManager.HasComponent<Transform>(site.m_Event))
+            {
+                pos = EntityManager.GetComponentData<Transform>(site.m_Event).m_Position;
+                return true;
+            }
+            pos = default;
+            return false;
+        }
+
+        /// <summary>事件快反选取（SetBubbleText 低频路径专用）：锚点在任一活动事件点 k_EventRadius 内 →
+        /// 该事件类型的反应模板（多个命中取最近）。salt=锚点.Index+textIdx 确定性轮换——同泡连换两条
+        /// 不重样（池深>1 时），驻留时长仍走 HoldFor 原节奏（模板不复用一次性语义，跨事件允许重复）。
+        /// 无命中返回 false（调用方继续走片段池）。</summary>
+        private bool TryPickEventReaction(TrackedBubble b, int textIdx, float3 anchorPos, out string text)
+        {
+            text = "";
+            if (m_ActiveEvents.Count == 0)
+                return false;
+            var best = -1;
+            var bestSq = k_EventRadius * k_EventRadius;
+            for (int i = 0; i < m_ActiveEvents.Count; i++)
+            {
+                var d2 = math.distancesq(m_ActiveEvents[i].Pos, anchorPos);
+                if (d2 <= bestSq) { bestSq = d2; best = i; }
+            }
+            if (best < 0)
+                return false;
+            var pool = m_ActiveEvents[best].Kind == BubbleEventKind.Fire ? k_FireReactions
+                : m_ActiveEvents[best].Kind == BubbleEventKind.Traffic ? k_TrafficReactions
+                : k_CrimeReactions;
+            text = pool[(b.Anchor.Index + textIdx) % pool.Length];
+            return true;
+        }
+
+        private static string KindName(BubbleEventKind kind)
+            => kind == BubbleEventKind.Fire ? "fire" : kind == BubbleEventKind.Traffic ? "traffic" : "crime";
 
         /// <summary>气泡驻留时长：阅读时间 4s 起、每字 +0.28s、封顶 30s（话痨段落让人读完），
         /// 再叠 0-4s 确定性抖动（实体×集数散列——全屏绝不同时切换）。

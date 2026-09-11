@@ -2,6 +2,8 @@ using Colossal.IO.AssetDatabase;
 using Colossal.Logging;
 using Game;
 using Game.Modding;
+using LlmFastProviderOption = CityLife.GameBridge.CityLifeSetting.LlmFastProviderOption;
+using LlmProviderOption = CityLife.GameBridge.CityLifeSetting.LlmProviderOption;
 
 namespace CityLife
 {
@@ -17,8 +19,13 @@ namespace CityLife
         /// <summary>全局日志。按 mod 名分频道；发布版保持 ShowsErrorsInUI=false，错误不弹窗打扰玩家。</summary>
         public static ILog Log { get; } = LogManager.GetLogger(nameof(CityLife)).SetShowsErrorsInUI(false);
 
-        /// <summary>LLM 网关（后台线程泵，全 one-shot）。MUTE 开关走 CliGateway.Mute 静态属性。</summary>
+        /// <summary>LLM 慢轨网关（§12 #59：thinking 默认开，服务主炉帖子/话题炉/剧场剧本/续热/市长/广告——要质量）。
+        /// MUTE 开关走 CliGateway.Mute 静态属性（快慢两轨共用一个总闸）。</summary>
         public static Llm.CliGateway? Gateway { get; private set; }
+
+        /// <summary>LLM 快轨网关（§12 #59：thinking 默认关，服务闲聊炉——量大句短，收益主在省 token）。
+        /// 配置默认"同慢轨"（同 baseUrl/密钥，模型可另填）。</summary>
+        public static Llm.CliGateway? FastGateway { get; private set; }
 
         /// <summary>游戏内设置页实例（选项→Mods→CityLife，玩家配置主源 §12 #45）。
         /// null = 未初始化/已 Dispose（主菜单期消费处一律回落默认值）。</summary>
@@ -65,23 +72,14 @@ namespace CityLife
                      $"气泡 总开关={Options.BubbleEnabled} 距离倍率 人{Options.BubbleDistHuman:0.##}/车{Options.BubbleDistCar:0.##}/楼{Options.BubbleDistBuilding:0.##} " +
                      $"同屏上限={Options.BubbleVisibleMax} 闲聊={Options.BubbleChatterEnabled} 剧场={Options.BubbleTheaterEnabled} 底板={Options.BubblePlate}");
 
-            // M1 CLI 网关装配：日志注入 + 启动后台泵。供给不可用不致命，
-            // 请求会走失败重试路径并计数，游戏照常（T0 模板兜底）。
+            // LLM 快慢双轨装配（§12 #59）：慢轨（Gateway）+ 快轨（FastGateway）各带泵组，两网关都 Start。
+            // 配置主源=游戏内设置页（kGroupLlm 组）；llm.json 降级为首次迁移种子（SeedLlmFromJson）。
+            // 供给不可用不致命，请求会走失败重试路径并计数，游戏照常（T0 模板兜底）。
             Llm.CliGateway.Log = msg => Log.Info(msg);
             Llm.KimiCliProvider.Log = msg => Log.Info(msg);
             Llm.OpenAiCompatibleProvider.Log = msg => Log.Info(msg);
-            // 供给选择（双轨，§12 #18）：llm.json 指定 openai-compatible 走 API 计费轨，
-            // 否则默认 KimiCli 订阅轨。配置文件在游戏用户目录，API key 不进仓库。
-            var cfgPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(
-                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
-                @"..\LocalLow\Colossal Order\Cities Skylines II\ModsSettings\CityLife\llm.json"));
-            var cfg = Llm.ProviderConfig.Load(cfgPath, msg => Log.Info(msg));
-            Llm.ICliProvider provider = cfg.Provider == "openai-compatible"
-                ? new Llm.OpenAiCompatibleProvider(cfg.BaseUrl, cfg.ApiKey, cfg.Model, cfg.Thinking)
-                : (Llm.ICliProvider)new Llm.KimiCliProvider();
-            Gateway = new Llm.CliGateway(provider);
-            Gateway.Start();
-            Log.Info($"[LLM] 网关已启动，{provider.Name} 可用={provider.IsAvailable()}");
+            SeedLlmFromJson();
+            AssembleGateways();
 
             // M0 读侧探针：只读不写，验证 ECS 读取链路。
             // 后续系统登记位置约定（实现到时复核）：
@@ -145,11 +143,263 @@ namespace CityLife
 
         public void OnDispose()
         {
+            s_LlmAssembled = false;
             // 网关后台线程随 Dispose 回收（进行中的 one-shot 最多等 2s，见 CliGateway.Stop）
             Gateway?.Dispose();
             Gateway = null;
+            FastGateway?.Dispose();
+            FastGateway = null;
             ChirpChannel = null;
             Options = null;
         }
+
+        // ------------------------------------------------------------------
+        // LLM 快慢双轨：装配 / llm.json 迁移种子 / 设置页热切换（§12 #59）
+        // 热切换链路：游戏 UI 每次提交改动都走 Setting.ApplyAndSave→Apply
+        // （AutomaticSettings 逐字段实锤，2026-09-11 ilspy）→ CityLifeSetting.Apply
+        // → OnOptionsApplied 比对供给签名 → 变了的那轨热重建。
+        // ------------------------------------------------------------------
+
+        /// <summary>双轨装配完成标记。Apply 钩子在装配完成前也可能触发（迁移种子自己的 ApplyAndSave 就是），必须挡掉。</summary>
+        private static bool s_LlmAssembled;
+
+        /// <summary>慢轨/快轨当前供给签名（供给相关字段拼接，仅内存比对；含密钥原文，绝不进日志）。</summary>
+        private static string s_SlowSig = "";
+        private static string s_FastSig = "";
+
+        /// <summary>一轨的供给参数快照（装配 provider 的最小集）。</summary>
+        private struct TrackParts
+        {
+            /// <summary>true=KimiCli 本机 CLI 订阅轨；false=OpenAI 兼容 HTTP 轨。</summary>
+            public bool IsKimi;
+            public string BaseUrl;
+            public string Key;
+            public string Model;
+            /// <summary>true=深度思考开（请求体不带 thinking 字段）；false=关（带 thinking.disabled）。KimiCli 轨忽略。</summary>
+            public bool Thinking;
+        }
+
+        /// <summary>
+        /// llm.json → 设置页的一次性迁移（§12 #59：llm.json 降级为首次迁移种子）。
+        /// 口径：LlmSeededFromJson=false 时读一次（文件不存在也置 true——只迁移一次，此后设置页为唯一主源）；
+        /// openai-compatible 按 baseUrl 归并到硅基流动/DeepSeek 预设，归并不了落自定义；
+        /// kimi-cli 保持默认 KimiCli 预设（无字段可迁）。迁移结果立即 ApplyAndSave 持久化。
+        /// </summary>
+        private static void SeedLlmFromJson()
+        {
+            var o = Options;
+            if (o == null || o.LlmSeededFromJson)
+            {
+                return;
+            }
+            o.LlmSeededFromJson = true;
+            try
+            {
+                // 配置文件在游戏用户目录（仓库外，API key 绝不进 git）
+                var cfgPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(
+                    System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                    @"..\LocalLow\Colossal Order\Cities Skylines II\ModsSettings\CityLife\llm.json"));
+                if (System.IO.File.Exists(cfgPath))
+                {
+                    var cfg = Llm.ProviderConfig.Load(cfgPath, msg => Log.Info(msg));
+                    if (cfg.Provider == "openai-compatible")
+                    {
+                        o.LlmSlowProvider = cfg.BaseUrl.Contains("siliconflow")
+                            ? LlmProviderOption.SiliconFlow
+                            : cfg.BaseUrl.Contains("deepseek")
+                                ? LlmProviderOption.DeepSeek
+                                : LlmProviderOption.CustomOpenAi;
+                        o.LlmSlowBaseUrl = cfg.BaseUrl;
+                        o.LlmSlowModel = cfg.Model;
+                        o.LlmSlowApiKey = cfg.ApiKey;
+                        o.LlmSlowThinking = cfg.Thinking != "disabled";
+                    }
+                    Log.Info("[LLM] 已从 llm.json 迁移供给配置进设置页（仅此一次，此后 llm.json 不再读取）");
+                }
+                o.ApplyAndSave(); // 持久化迁移结果+标记位（此刻 s_LlmAssembled=false，Apply 回调空转安全）
+            }
+            catch (System.Exception e)
+            {
+                Log.Warn($"[LLM] llm.json 迁移种子失败（按设置页当前值继续）：{e.Message}");
+            }
+        }
+
+        /// <summary>按设置页当前值装配双轨网关并 Start。启动日志慢轨/快轨各一行（供给+thinking 状态）。</summary>
+        private static void AssembleGateways()
+        {
+            var o = Options!;
+
+            var slowParts = ResolveSlowParts(o);
+            Gateway = new Llm.CliGateway(BuildProvider(slowParts));
+            Gateway.Start();
+            s_SlowSig = SlowSignature(o);
+            Log.Info($"[LLM] 慢轨网关已启动：{Describe(slowParts)}");
+
+            var fastParts = ResolveFastParts(o, slowParts);
+            FastGateway = new Llm.CliGateway(BuildProvider(fastParts));
+            FastGateway.Start();
+            s_FastSig = FastSignature(o);
+            Log.Info($"[LLM] 快轨网关已启动：{Describe(fastParts)}");
+
+            s_LlmAssembled = true;
+        }
+
+        /// <summary>设置页回调（CityLifeSetting.Apply 转调）：比对供给签名，只热重建变了的那轨。
+        /// 任何字段（含气泡滑杆）变更都会进这里，签名 diff 是廉价字符串比较。</summary>
+        internal static void OnOptionsApplied()
+        {
+            if (!s_LlmAssembled || Options == null)
+            {
+                return;
+            }
+            var o = Options;
+            if (SlowSignature(o) != s_SlowSig)
+            {
+                SwapGateway(slowTrack: true);
+            }
+            // 快轨签名含慢轨前缀（SameAsSlow 语义下慢轨变更必须连带重建快轨），慢轨换血后这里自然跟着换
+            if (FastSignature(o) != s_FastSig)
+            {
+                SwapGateway(slowTrack: false);
+            }
+        }
+
+        /// <summary>热重建一轨：先建+Start 新网关再原子换引用（读侧无空窗），旧网关后台 Stop（join 不卡 UI 线程）。</summary>
+        private static void SwapGateway(bool slowTrack)
+        {
+            var o = Options;
+            if (o == null)
+            {
+                return;
+            }
+            try
+            {
+                var parts = slowTrack ? ResolveSlowParts(o) : ResolveFastParts(o, ResolveSlowParts(o));
+                var fresh = new Llm.CliGateway(BuildProvider(parts));
+                fresh.Start();
+                var old = slowTrack ? Gateway : FastGateway;
+                if (slowTrack)
+                {
+                    Gateway = fresh;
+                    s_SlowSig = SlowSignature(o);
+                }
+                else
+                {
+                    FastGateway = fresh;
+                    s_FastSig = FastSignature(o);
+                }
+                Log.Info($"[LLM] {(slowTrack ? "慢轨" : "快轨")}供给已热切换：{Describe(parts)}");
+                if (old != null)
+                {
+                    // 旧网关后台回收：Stop 带 ≤2s/线程 join；在飞请求取消即弃（one-shot 无副作用，AI 内容宁缺毋滥）
+                    System.Threading.Tasks.Task.Run(() => old.Dispose());
+                }
+            }
+            catch (System.Exception e)
+            {
+                Log.Warn($"[LLM] {(slowTrack ? "慢轨" : "快轨")}热切换失败（保持旧供给）：{e.Message}");
+            }
+        }
+
+        // \x1/\x2 作分隔符防字段内容粘连串扰；签名只进内存比对，密钥原文绝不写日志
+        private static string SlowSignature(GameBridge.CityLifeSetting o)
+            => string.Join("\x1", (int)o.LlmSlowProvider, o.LlmSlowBaseUrl, o.LlmSlowModel, o.LlmSlowApiKey, o.LlmSlowThinking);
+
+        private static string FastSignature(GameBridge.CityLifeSetting o)
+            => SlowSignature(o) + "\x2" + string.Join("\x1",
+                (int)o.LlmFastProvider, o.LlmFastBaseUrl, o.LlmFastModel, o.LlmFastApiKey, o.LlmFastThinking);
+
+        /// <summary>慢轨供给参数解析：KimiCli 无参数；DeepSeek/硅基流动 baseUrl 内置、模型空=推荐；自定义全取文本框。</summary>
+        private static TrackParts ResolveSlowParts(GameBridge.CityLifeSetting o)
+        {
+            var p = new TrackParts { Thinking = o.LlmSlowThinking };
+            switch (o.LlmSlowProvider)
+            {
+                case LlmProviderOption.KimiCli:
+                    p.IsKimi = true;
+                    break;
+                case LlmProviderOption.CustomOpenAi:
+                    p.BaseUrl = (o.LlmSlowBaseUrl ?? "").Trim();
+                    p.Key = (o.LlmSlowApiKey ?? "").Trim();
+                    p.Model = (o.LlmSlowModel ?? "").Trim();
+                    break;
+                default: // DeepSeek / SiliconFlow
+                    p.BaseUrl = PresetBaseUrl(o.LlmSlowProvider);
+                    p.Key = (o.LlmSlowApiKey ?? "").Trim();
+                    var m = (o.LlmSlowModel ?? "").Trim();
+                    p.Model = m.Length > 0 ? m : PresetDefaultModel(o.LlmSlowProvider);
+                    break;
+            }
+            return p;
+        }
+
+        /// <summary>快轨供给参数解析：SameAsSlow 继承慢轨 baseUrl/密钥/模型（模型可另填分叉），thinking 走自己的开关。</summary>
+        private static TrackParts ResolveFastParts(GameBridge.CityLifeSetting o, TrackParts slow)
+        {
+            var p = new TrackParts { Thinking = o.LlmFastThinking };
+            switch (o.LlmFastProvider)
+            {
+                case LlmFastProviderOption.SameAsSlow:
+                    p = slow;
+                    p.Thinking = o.LlmFastThinking;
+                    var fork = (o.LlmFastModel ?? "").Trim();
+                    if (fork.Length > 0)
+                    {
+                        p.Model = fork;
+                    }
+                    break;
+                case LlmFastProviderOption.KimiCli:
+                    p.IsKimi = true;
+                    break;
+                case LlmFastProviderOption.CustomOpenAi:
+                    p.BaseUrl = (o.LlmFastBaseUrl ?? "").Trim();
+                    p.Key = (o.LlmFastApiKey ?? "").Trim();
+                    p.Model = (o.LlmFastModel ?? "").Trim();
+                    break;
+                default: // DeepSeek / SiliconFlow
+                    var preset = o.LlmFastProvider == LlmFastProviderOption.DeepSeek
+                        ? LlmProviderOption.DeepSeek
+                        : LlmProviderOption.SiliconFlow;
+                    p.BaseUrl = PresetBaseUrl(preset);
+                    p.Key = (o.LlmFastApiKey ?? "").Trim();
+                    var m = (o.LlmFastModel ?? "").Trim();
+                    p.Model = m.Length > 0 ? m : PresetDefaultModel(preset);
+                    break;
+            }
+            return p;
+        }
+
+        private static Llm.ICliProvider BuildProvider(TrackParts p)
+            => p.IsKimi
+                ? (Llm.ICliProvider)new Llm.KimiCliProvider()
+                : new Llm.OpenAiCompatibleProvider(p.BaseUrl, p.Key, p.Model, p.Thinking ? "" : "disabled");
+
+        /// <summary>预设内置端点（仅 DeepSeek/硅基流动；其余返回空）。</summary>
+        private static string PresetBaseUrl(LlmProviderOption p)
+        {
+            switch (p)
+            {
+                case LlmProviderOption.DeepSeek: return "https://api.deepseek.com/v1";
+                case LlmProviderOption.SiliconFlow: return "https://api.siliconflow.cn/v1";
+                default: return "";
+            }
+        }
+
+        /// <summary>预设推荐模型（设置页留空时的兜底；仅 DeepSeek/硅基流动）。</summary>
+        private static string PresetDefaultModel(LlmProviderOption p)
+        {
+            switch (p)
+            {
+                case LlmProviderOption.DeepSeek: return "deepseek-chat";
+                case LlmProviderOption.SiliconFlow: return "deepseek-ai/DeepSeek-R1";
+                default: return "";
+            }
+        }
+
+        /// <summary>日志描述（密钥永不进日志）。</summary>
+        private static string Describe(TrackParts p)
+            => p.IsKimi
+                ? "KimiCli（本机 CLI 订阅轨）"
+                : $"OpenAiCompat 端点={p.BaseUrl} 模型={p.Model} thinking={(p.Thinking ? "开" : "关")}";
     }
 }

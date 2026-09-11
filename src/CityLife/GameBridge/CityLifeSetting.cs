@@ -12,6 +12,10 @@ namespace CityLife.GameBridge
     /// 持久化走游戏 SettingAsset（.coc）；FileLocation 让落点在 ModsSettings/CityLife 配置目录旁。
     /// 显示名/说明走正规本地化（CityLifeLocalization 中英字典），不用 SettingsUIDisplayName 硬编码。
     /// 消费处直读 <c>Mod.Options?.属性 ?? 默认值</c>——必须容忍 null（主菜单期/未初始化）。
+    /// LLM 供给组（kGroupLlm，§12 #59 快慢双轨）：配置主源在此，llm.json 仅在首次启动时
+    /// 被读一次做迁移种子（LlmSeededFromJson 标记位，见 Mod.SeedLlmFromJson）。
+    /// 热切换：游戏 UI 每次提交改动都走 ApplyAndSave→Apply（AutomaticSettings 逐字段实锤），
+    /// 本类重写 Apply 回调 Mod.OnOptionsApplied()，由 Mod 比对供给签名决定是否热重建网关。
     ///
     /// 如何扩展（加一个选项）：
     /// 1. 这里加一个带 [SettingsUISection(kTab, kGroupXxx)] 的公共属性（bool=开关、enum=下拉、
@@ -22,8 +26,8 @@ namespace CityLife.GameBridge
     /// 4. 消费处直读，无需接线——UI 改的是同一个实例，读取即时生效。
     /// </summary>
     [FileLocation("ModsSettings/CityLife")]
-    [SettingsUIGroupOrder(kGroupBubble, kGroupFeed)]
-    [SettingsUIShowGroupName(kGroupBubble, kGroupFeed)] // 组名"对话气泡/信息流"显示为分组标题（无此标注 UI 不显示组名）
+    [SettingsUIGroupOrder(kGroupBubble, kGroupFeed, kGroupLlm)]
+    [SettingsUIShowGroupName(kGroupBubble, kGroupFeed, kGroupLlm)] // 组名"对话气泡/信息流/LLM 供给"显示为分组标题（无此标注 UI 不显示组名）
     public class CityLifeSetting : ModSetting
     {
         /// <summary>设置页 tab 名（全部选项收在一个 tab）。</summary>
@@ -32,6 +36,8 @@ namespace CityLife.GameBridge
         public const string kGroupBubble = "Bubble";
         /// <summary>信息流组名。</summary>
         public const string kGroupFeed = "Feed";
+        /// <summary>LLM 供给组名（§12 #59）。</summary>
+        public const string kGroupLlm = "Llm";
 
         /// <summary>信息流生成节拍与面板开合的联动（§12 #45 自 settings.json 迁移）：
         /// Always 常开（城市自己在活着）/ OpenOnly 仅展开（收起即停生成，省 token）/ Throttled 节流（收起降频保温）。</summary>
@@ -39,6 +45,15 @@ namespace CityLife.GameBridge
 
         /// <summary>写回强度档（§6 红线）：Mild 体验档 ×0.5 / Normal 正常档 ×1.0 / Crazy 疯狂档 ×2.0（带警示）。</summary>
         public enum WriteBackTierOption { Mild, Normal, Crazy }
+
+        /// <summary>LLM 供给预设（§12 #59）。KimiCli=本机 Kimi Code CLI 订阅轨（无需密钥）；
+        /// DeepSeek/ SiliconFlow=对应官方端点（baseUrl 内置，只需密钥+模型）；
+        /// CustomOpenAi=自定义 OpenAI 兼容端点（baseUrl 用文本框里的值）。</summary>
+        public enum LlmProviderOption { KimiCli, DeepSeek, SiliconFlow, CustomOpenAi }
+
+        /// <summary>快轨供给预设。SameAsSlow（默认）=与慢轨同一家（同 baseUrl/密钥，模型可另填），
+        /// 其余取值语义同 <see cref="LlmProviderOption"/>。</summary>
+        public enum LlmFastProviderOption { SameAsSlow, KimiCli, DeepSeek, SiliconFlow, CustomOpenAi }
 
         public CityLifeSetting(IMod mod) : base(mod)
         {
@@ -118,6 +133,70 @@ namespace CityLife.GameBridge
         [SettingsUISlider(min = 20f, max = 500f, step = 10f, unit = "integer")]
         public int FeedMaxItems { get; set; } = 100;
 
+        // —— LLM 供给组（§12 #59 快慢双轨：慢轨要质量 thinking 默认开，快轨量大句短 thinking 默认关） ——
+        // 文本输入控件已经 ilspy 实锤（string 读写属性 + [SettingsUITextInput] → StringInputField）。
+        // 密钥明文存 .coc，与 llm.json 同安全级（仅本地 ModsSettings 目录），说明里已注明。
+
+        /// <summary>慢轨供给预设（默认 KimiCli 本机 CLI 订阅轨）。慢轨服务主炉帖子/话题炉/剧场剧本/续热/市长/广告（要质量）。</summary>
+        [SettingsUISection(kTab, kGroupLlm)]
+        public LlmProviderOption LlmSlowProvider { get; set; } = LlmProviderOption.KimiCli;
+
+        /// <summary>慢轨模型名（留空=预设推荐：DeepSeek→deepseek-chat，硅基流动→deepseek-ai/DeepSeek-R1；自定义必填）。</summary>
+        [SettingsUISection(kTab, kGroupLlm)]
+        [SettingsUITextInput]
+        public string LlmSlowModel { get; set; } = "";
+
+        /// <summary>慢轨自定义 baseUrl（仅预设=CustomOpenAi 时生效，如 https://api.siliconflow.cn/v1）。</summary>
+        [SettingsUISection(kTab, kGroupLlm)]
+        [SettingsUITextInput]
+        public string LlmSlowBaseUrl { get; set; } = "";
+
+        /// <summary>慢轨 API 密钥（KimiCli 预设不需要）。仅本地保存（与 llm.json 同级，明文在本机 ModsSettings 目录）。</summary>
+        [SettingsUISection(kTab, kGroupLlm)]
+        [SettingsUITextInput]
+        public string LlmSlowApiKey { get; set; } = "";
+
+        /// <summary>慢轨深度思考（默认开）。关=请求体带 thinking.disabled（支持的厂商生效），省 token 大头但降质量。</summary>
+        [SettingsUISection(kTab, kGroupLlm)]
+        public bool LlmSlowThinking { get; set; } = true;
+
+        /// <summary>快轨供给预设（默认 SameAsSlow 同慢轨一家）。快轨服务气泡闲聊炉（量大句短，~5-10s 要的是省 token）。</summary>
+        [SettingsUISection(kTab, kGroupLlm)]
+        public LlmFastProviderOption LlmFastProvider { get; set; } = LlmFastProviderOption.SameAsSlow;
+
+        /// <summary>快轨模型名（留空=同慢轨模型/预设推荐；可另填快模型分叉）。</summary>
+        [SettingsUISection(kTab, kGroupLlm)]
+        [SettingsUITextInput]
+        public string LlmFastModel { get; set; } = "";
+
+        /// <summary>快轨自定义 baseUrl（仅预设=CustomOpenAi 时生效）。</summary>
+        [SettingsUISection(kTab, kGroupLlm)]
+        [SettingsUITextInput]
+        public string LlmFastBaseUrl { get; set; } = "";
+
+        /// <summary>快轨 API 密钥（仅当快轨预设为 DeepSeek/硅基流动/自定义时生效；SameAsSlow 复用慢轨密钥）。仅本地保存。</summary>
+        [SettingsUISection(kTab, kGroupLlm)]
+        [SettingsUITextInput]
+        public string LlmFastApiKey { get; set; } = "";
+
+        /// <summary>快轨深度思考（默认关——快轨收益主在省 token，思考链对短句是浪费；§12 #59）。</summary>
+        [SettingsUISection(kTab, kGroupLlm)]
+        public bool LlmFastThinking { get; set; } = false;
+
+        /// <summary>llm.json 迁移种子已消费标记（隐藏字段不进 UI，只随 .coc 持久化）。
+        /// false → Mod.OnLoad 读一次 llm.json 写进上面的字段并置 true（此后 llm.json 不再读取，设置页为唯一主源）。</summary>
+        [SettingsUIHidden]
+        public bool LlmSeededFromJson { get; set; } = false;
+
+        /// <summary>设置变更回调（UI 每次提交都走 ApplyAndSave→Apply，AutomaticSettings 实锤）：
+        /// 转调 Mod.OnOptionsApplied()，由 Mod 比对供给签名热重建网关（§12 #59 热切换不重启）。
+        /// 注意本方法对任何字段（含气泡滑杆拖动）都会触发，签名 diff 是廉价的字符串比较。</summary>
+        public override void Apply()
+        {
+            base.Apply();
+            Mod.OnOptionsApplied();
+        }
+
         /// <summary>恢复默认（游戏设置页"重置"入口调用；与属性初始化器保持同一份默认值）。</summary>
         public override void SetDefaults()
         {
@@ -136,6 +215,16 @@ namespace CityLife.GameBridge
             T0Fallback = false;
             WriteBackTier = WriteBackTierOption.Normal;
             FeedMaxItems = 100;
+            LlmSlowProvider = LlmProviderOption.KimiCli;
+            LlmSlowModel = "";
+            LlmSlowBaseUrl = "";
+            LlmSlowApiKey = "";
+            LlmSlowThinking = true;
+            LlmFastProvider = LlmFastProviderOption.SameAsSlow;
+            LlmFastModel = "";
+            LlmFastBaseUrl = "";
+            LlmFastApiKey = "";
+            LlmFastThinking = false;
         }
     }
 }

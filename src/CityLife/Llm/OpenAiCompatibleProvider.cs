@@ -14,7 +14,8 @@ namespace CityLife.Llm
     /// - 响应带 usage → 精确 token 记账（填 CliResult.PromptTokens/ResponseTokens 预留字段，
     ///   网关统计自动从字符估算升级为精确值）；
     /// - 缓存纪律不变：prompt 固定前缀+动态尾部（§4 M3 / §12 #18），厂商服务端缓存才有得吃；
-    /// - key 只来自 ProviderConfig（游戏用户目录 llm.json），绝不进仓库、绝不进日志。
+    /// - key 只来自游戏内设置页（kGroupLlm 组，.coc 明文仅本地保存；llm.json 为一次性迁移种子，
+    ///   见 Mod.SeedLlmFromJson），绝不进仓库、绝不进日志。
     /// </summary>
     public sealed class OpenAiCompatibleProvider : ICliProvider
     {

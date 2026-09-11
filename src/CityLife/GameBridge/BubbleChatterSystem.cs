@@ -27,9 +27,10 @@ namespace CityLife.GameBridge
     /// 设置页"气泡 AI 闲聊"开关（默认开，关=零 token）+ MUTE 静默（连 prompt 都不拼，零成本）
     /// + 网关可用 + 无在飞。在飞标志 + 墙钟 TTL+60s 兜底解锁（S3 同款：网关过期丢弃不回包，绝不能死等）。
     ///
-    /// 结果路由：网关结果由 ContentDirectorSystem 统一出队，按 requestId "chatter:" 前缀转交
-    /// OnChatterResult（"ad:"→ShopAdSystem 同款先例——本系统不能自己 TryDequeueResult，
-    /// 两个消费者轮询同一队列会互相偷包）。
+    /// 结果路由：本炉发快轨网关（§12 #59 快慢双轨——闲聊炉量大句短，thinking 关省 token，
+    /// 是快轨 V1 唯一搬家户），结果由 LlmResultPumpSystem 统一出队（快慢两网关都泵），
+    /// 按 requestId "chatter:" 前缀经 ContentDirectorSystem.RouteResult 转交 OnChatterResult
+    /// （"ad:"→ShopAdSystem 同款先例——本系统不能自己 TryDequeueResult，多消费者会互相偷包）。
     ///
     /// 读侧纪律：只读 CitizenPoolSystem.Entries / TopicRadarSystem.Latest / ContentDirectorSystem.Topics
     /// （均主线程只读视图）；自身市民查询仅做空城/主菜单闸（RequireForUpdate），只读不写。
@@ -95,8 +96,8 @@ namespace CityLife.GameBridge
 
             if ((int)(Now - m_NextForgeAt) < 0)
                 return; // 还没到点（uint 差值比较，tick 回绕安全）
-            if (m_ForgePending || Mod.Gateway == null || Llm.CliGateway.Mute)
-                return; // MUTE 静默零成本：连 prompt 都不拼
+            if (m_ForgePending || Mod.FastGateway == null || Llm.CliGateway.Mute)
+                return; // MUTE 静默零成本：连 prompt 都不拼（MUTE 是两轨共用的静态总闸）
 
             // 开关闸（§12 #49）：气泡不看面板也在显示，故不随 feedMode 停——独立开关，默认开；关=零 token
             if (!Content.ModSettings.BubbleChatterEnabled)
@@ -141,7 +142,7 @@ namespace CityLife.GameBridge
 
             m_Pool.CurrentCycle = m_ForgeCount; // BornCycle 基准锚本炉
             var prompt = Content.PromptBuilder.BuildChatterPrompt(m_Head, snapshot, cards, topics);
-            Mod.Gateway.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Low, k_ForgeTtl, "chatter:" + m_ForgeCount));
+            Mod.FastGateway!.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Low, k_ForgeTtl, "chatter:" + m_ForgeCount)); // 快轨（§12 #59）
             m_ForgePending = true;
             m_ForgeSince = DateTime.UtcNow;
             Mod.Log.Info($"[闲聊炉] 开炉：处境卡 {count} 张（第 {m_ForgeCount + 1} 炉，池存 {m_Pool.Count}）");

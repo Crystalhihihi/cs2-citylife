@@ -24,6 +24,7 @@ namespace CityLife.GameBridge
         private const string kTab = "Options.TAB[" + kId + "." + CityLifeSetting.kTab + "]";
         private const string kGroupBubble = "Options.GROUP[" + kId + "." + CityLifeSetting.kGroupBubble + "]";
         private const string kGroupFeed = "Options.GROUP[" + kId + "." + CityLifeSetting.kGroupFeed + "]";
+        private const string kGroupLlm = "Options.GROUP[" + kId + "." + CityLifeSetting.kGroupLlm + "]";
 
         /// <summary>拼选项键（name/description 共一条前缀规则）。</summary>
         private static string Opt(string prop) => "Options.OPTION[" + kId + ".CityLifeSetting." + prop + "]";
@@ -38,6 +39,7 @@ namespace CityLife.GameBridge
             { kTab, "CityLife" },
             { kGroupBubble, "Bubble" },
             { kGroupFeed, "Feed" },
+            { kGroupLlm, "LLM supply" },
 
             { Opt(nameof(CityLifeSetting.BubbleEnabled)), "Dialogue bubbles" },
             { OptDesc(nameof(CityLifeSetting.BubbleEnabled)), "Master switch for street dialogue bubbles. Ctrl+9 is an in-session quick toggle AND-ed with this switch." },
@@ -71,12 +73,42 @@ namespace CityLife.GameBridge
             { Opt(nameof(CityLifeSetting.FeedMaxItems)), "Feed capacity" },
             { OptDesc(nameof(CityLifeSetting.FeedMaxItems)), "Max posts kept in the feed store (20-500; above 500 full pushes start to cost performance)." },
 
+            { Opt(nameof(CityLifeSetting.LlmSlowProvider)), "Slow track · provider" },
+            { OptDesc(nameof(CityLifeSetting.LlmSlowProvider)), "Slow track serves posts/topics/mini-theater/mayor/ads (quality first, deep thinking on by default). KimiCli = local Kimi Code CLI subscription (no key needed); DeepSeek / SiliconFlow = official endpoints (baseUrl built in); Custom = any OpenAI-compatible endpoint. Changes hot-swap the gateway without restart." },
+            { Opt(nameof(CityLifeSetting.LlmSlowModel)), "Slow track · model" },
+            { OptDesc(nameof(CityLifeSetting.LlmSlowModel)), "Empty = preset recommendation (DeepSeek → deepseek-chat, SiliconFlow → deepseek-ai/DeepSeek-R1). Required for Custom." },
+            { Opt(nameof(CityLifeSetting.LlmSlowBaseUrl)), "Slow track · custom baseUrl" },
+            { OptDesc(nameof(CityLifeSetting.LlmSlowBaseUrl)), "Only used when provider = Custom OpenAI-compatible, e.g. https://api.siliconflow.cn/v1 (no trailing slash needed)." },
+            { Opt(nameof(CityLifeSetting.LlmSlowApiKey)), "Slow track · API key" },
+            { OptDesc(nameof(CityLifeSetting.LlmSlowApiKey)), "Not needed for KimiCli. Stored locally only (plain text in this machine's ModsSettings folder, same level as llm.json)." },
+            { Opt(nameof(CityLifeSetting.LlmSlowThinking)), "Slow track · deep thinking" },
+            { OptDesc(nameof(CityLifeSetting.LlmSlowThinking)), "Default on. Off = requests carry thinking.disabled (where the vendor supports it) — saves the bulk of tokens at some quality cost." },
+            { Opt(nameof(CityLifeSetting.LlmFastProvider)), "Fast track · provider" },
+            { OptDesc(nameof(CityLifeSetting.LlmFastProvider)), "Fast track serves bubble chatter (short lines, high volume, ~5-10s; thinking off by default to save tokens). SameAsSlow (default) = reuse the slow track's endpoint and key, with its own model/thinking below. Quick-response providers (e.g. SiliconFlow) make good fast-track candidates." },
+            { Opt(nameof(CityLifeSetting.LlmFastModel)), "Fast track · model" },
+            { OptDesc(nameof(CityLifeSetting.LlmFastModel)), "Empty = same model as the slow track (or the preset recommendation). Fill in to fork a faster model." },
+            { Opt(nameof(CityLifeSetting.LlmFastBaseUrl)), "Fast track · custom baseUrl" },
+            { OptDesc(nameof(CityLifeSetting.LlmFastBaseUrl)), "Only used when fast-track provider = Custom OpenAI-compatible." },
+            { Opt(nameof(CityLifeSetting.LlmFastApiKey)), "Fast track · API key" },
+            { OptDesc(nameof(CityLifeSetting.LlmFastApiKey)), "Only used when the fast track has its own DeepSeek/SiliconFlow/Custom provider (SameAsSlow reuses the slow key). Stored locally only (plain text in this machine's ModsSettings folder, same level as llm.json)." },
+            { Opt(nameof(CityLifeSetting.LlmFastThinking)), "Fast track · deep thinking" },
+            { OptDesc(nameof(CityLifeSetting.LlmFastThinking)), "Default off — the fast track's payoff is saved tokens; chains of thought are wasted on one-liners. Turn on for slow-track quality at slow-track cost." },
+
             { EnumVal("FEEDMODEOPTION", "Always"), "Always on" },
             { EnumVal("FEEDMODEOPTION", "OpenOnly"), "Only while open" },
             { EnumVal("FEEDMODEOPTION", "Throttled"), "Throttled" },
             { EnumVal("WRITEBACKTIEROPTION", "Mild"), "Mild" },
             { EnumVal("WRITEBACKTIEROPTION", "Normal"), "Normal" },
             { EnumVal("WRITEBACKTIEROPTION", "Crazy"), "Crazy" },
+            { EnumVal("LLMPROVIDEROPTION", "KimiCli"), "Kimi Code CLI (local subscription)" },
+            { EnumVal("LLMPROVIDEROPTION", "DeepSeek"), "DeepSeek" },
+            { EnumVal("LLMPROVIDEROPTION", "SiliconFlow"), "SiliconFlow" },
+            { EnumVal("LLMPROVIDEROPTION", "CustomOpenAi"), "Custom (OpenAI-compatible)" },
+            { EnumVal("LLMFASTPROVIDEROPTION", "SameAsSlow"), "Same as slow track" },
+            { EnumVal("LLMFASTPROVIDEROPTION", "KimiCli"), "Kimi Code CLI (local subscription)" },
+            { EnumVal("LLMFASTPROVIDEROPTION", "DeepSeek"), "DeepSeek" },
+            { EnumVal("LLMFASTPROVIDEROPTION", "SiliconFlow"), "SiliconFlow" },
+            { EnumVal("LLMFASTPROVIDEROPTION", "CustomOpenAi"), "Custom (OpenAI-compatible)" },
         };
 
         /// <summary>中文字典（同时注册 "zh-HANS" 与 "zh-CN" 保险）。</summary>
@@ -86,6 +118,7 @@ namespace CityLife.GameBridge
             { kTab, "市民圈" },
             { kGroupBubble, "对话气泡" },
             { kGroupFeed, "信息流" },
+            { kGroupLlm, "LLM 供给" },
 
             { Opt(nameof(CityLifeSetting.BubbleEnabled)), "对话气泡总开关" },
             { OptDesc(nameof(CityLifeSetting.BubbleEnabled)), "街头对话气泡的权威总闸；Ctrl+9 会话内快速开关与本开关为 AND 关系。" },
@@ -119,12 +152,42 @@ namespace CityLife.GameBridge
             { Opt(nameof(CityLifeSetting.FeedMaxItems)), "信息流容量" },
             { OptDesc(nameof(CityLifeSetting.FeedMaxItems)), "信息流仓库最多保留的帖子条数（20-500；超 500 全量推送开始亏性能）。" },
 
+            { Opt(nameof(CityLifeSetting.LlmSlowProvider)), "慢轨·供给预设" },
+            { OptDesc(nameof(CityLifeSetting.LlmSlowProvider)), "慢轨服务主炉帖子/话题炉/剧场剧本/续热/市长/广告（要质量，深度思考默认开）。KimiCli=本机 Kimi Code CLI 订阅轨（无需密钥）；DeepSeek/硅基流动=官方端点（baseUrl 内置，只需密钥+模型）；自定义=任意 OpenAI 兼容端点。改动即时热切换网关，无需重启。" },
+            { Opt(nameof(CityLifeSetting.LlmSlowModel)), "慢轨·模型" },
+            { OptDesc(nameof(CityLifeSetting.LlmSlowModel)), "留空=预设推荐（DeepSeek→deepseek-chat，硅基流动→deepseek-ai/DeepSeek-R1）；自定义端点必填。" },
+            { Opt(nameof(CityLifeSetting.LlmSlowBaseUrl)), "慢轨·自定义 baseUrl" },
+            { OptDesc(nameof(CityLifeSetting.LlmSlowBaseUrl)), "仅当预设=自定义 OpenAI 兼容时生效，如 https://api.siliconflow.cn/v1（末尾斜杠有无均可）。" },
+            { Opt(nameof(CityLifeSetting.LlmSlowApiKey)), "慢轨·API 密钥" },
+            { OptDesc(nameof(CityLifeSetting.LlmSlowApiKey)), "KimiCli 预设不需要。仅本地保存（与 llm.json 同级，明文存放于本机 ModsSettings 目录）。" },
+            { Opt(nameof(CityLifeSetting.LlmSlowThinking)), "慢轨·深度思考" },
+            { OptDesc(nameof(CityLifeSetting.LlmSlowThinking)), "默认开。关=请求体带 thinking.disabled（支持的厂商生效），省 token 大头但降质量。" },
+            { Opt(nameof(CityLifeSetting.LlmFastProvider)), "快轨·供给预设" },
+            { OptDesc(nameof(CityLifeSetting.LlmFastProvider)), "快轨服务气泡闲聊炉（量大句短，~5-10 秒；思考链对短句是浪费，默认关）。同慢轨（默认）=复用慢轨的端点与密钥，模型/思考开关可单独分叉。硅基流动等快响应供给适合当快轨试验田。" },
+            { Opt(nameof(CityLifeSetting.LlmFastModel)), "快轨·模型" },
+            { OptDesc(nameof(CityLifeSetting.LlmFastModel)), "留空=同慢轨模型（或预设推荐）；另填可分叉出更快的模型。" },
+            { Opt(nameof(CityLifeSetting.LlmFastBaseUrl)), "快轨·自定义 baseUrl" },
+            { OptDesc(nameof(CityLifeSetting.LlmFastBaseUrl)), "仅当快轨预设=自定义 OpenAI 兼容时生效。" },
+            { Opt(nameof(CityLifeSetting.LlmFastApiKey)), "快轨·API 密钥" },
+            { OptDesc(nameof(CityLifeSetting.LlmFastApiKey)), "仅当快轨单设 DeepSeek/硅基流动/自定义时生效（同慢轨复用慢轨密钥）。仅本地保存（与 llm.json 同级，明文存放于本机 ModsSettings 目录）。" },
+            { Opt(nameof(CityLifeSetting.LlmFastThinking)), "快轨·深度思考" },
+            { OptDesc(nameof(CityLifeSetting.LlmFastThinking)), "默认关——快轨收益主在省 token。开=与慢轨同质量，但更慢更贵。" },
+
             { EnumVal("FEEDMODEOPTION", "Always"), "常开" },
             { EnumVal("FEEDMODEOPTION", "OpenOnly"), "仅展开" },
             { EnumVal("FEEDMODEOPTION", "Throttled"), "节流" },
             { EnumVal("WRITEBACKTIEROPTION", "Mild"), "体验" },
             { EnumVal("WRITEBACKTIEROPTION", "Normal"), "正常" },
             { EnumVal("WRITEBACKTIEROPTION", "Crazy"), "疯狂" },
+            { EnumVal("LLMPROVIDEROPTION", "KimiCli"), "Kimi Code CLI（本机订阅）" },
+            { EnumVal("LLMPROVIDEROPTION", "DeepSeek"), "DeepSeek" },
+            { EnumVal("LLMPROVIDEROPTION", "SiliconFlow"), "硅基流动" },
+            { EnumVal("LLMPROVIDEROPTION", "CustomOpenAi"), "自定义（OpenAI 兼容）" },
+            { EnumVal("LLMFASTPROVIDEROPTION", "SameAsSlow"), "同慢轨" },
+            { EnumVal("LLMFASTPROVIDEROPTION", "KimiCli"), "Kimi Code CLI（本机订阅）" },
+            { EnumVal("LLMFASTPROVIDEROPTION", "DeepSeek"), "DeepSeek" },
+            { EnumVal("LLMFASTPROVIDEROPTION", "SiliconFlow"), "硅基流动" },
+            { EnumVal("LLMFASTPROVIDEROPTION", "CustomOpenAi"), "自定义（OpenAI 兼容）" },
         };
     }
 }

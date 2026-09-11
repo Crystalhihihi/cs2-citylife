@@ -105,6 +105,12 @@ namespace CityLife.GameBridge
                  : k_MaxDistBuilding * (opts?.BubbleDistBuilding ?? 1f);
         }
         private const float k_TargetPixels = 26f;    // 文字目标屏占高（像素/行——多行按行数叠）
+        // 锚点 Y 偏移（人头/车顶/楼顶，估值——正式版按包围盒）：绘制/屏内判定/采样三处同用这一组，
+        // 判定必须按"气泡实际显示位置"投影（2026-09-11 实机：按地基判屏，俯视近楼时地基在屏外屋顶在屏内
+        // → 剧场绑锚误杀/开播 2 秒即终了）
+        private const float k_YOffHuman = 2.6f;
+        private const float k_YOffCar = 2.8f;
+        private const float k_YOffBuilding = 12f;
         private const float k_MinWorldH = 0.35f;     // 单行世界高下限（街景不至于糊脸上）
         private const float k_MaxWorldH = 5f;        // 单行上限（远看不成区名牌）
         private const int k_CacheCap = 48;           // 文字网格缓存上限（LRU 逐出，防漏）
@@ -180,6 +186,7 @@ namespace CityLife.GameBridge
         private bool m_LoggedSnippetPool;  // "片段池接通" INFO 只打一次
         private bool m_LoggedPoolEmpty;    // "池空回退" INFO 只打一次（防每帧刷）
         private readonly HashSet<string> m_UsedThisFrame = new(); // 本帧已用片段（同帧去重，帧尾清）
+        private readonly HashSet<string> m_InUseTexts = new();    // 当前全部在显文案（跨泡去重：同一句不同时在两个泡上，池浅时重复观感实锤 2026-09-11）
 
         // 小剧场（v5.1，S7，§12 #48）：句柄懒解析判空（同片段池纪律）；插队取词在 SetBubbleText，
         // 轮次回调在 TickLifecycle——OnRender 渲染热路径依旧零查询
@@ -221,6 +228,7 @@ namespace CityLife.GameBridge
             public Entity Anchor;   // 滞回：上帧在画判定
             public float NextAt;    // 驻留期满时刻（unscaledTime，与 TrackedBubble 同时钟）
             public byte Kind;       // 0 人 1 车 2 楼——可见端分类比例上限用（§12 #51）
+            public float Score;     // 中选排序键：视深 × 屏缘惩罚（屏心优先，2026-09-11 玩家定案）
         }
 
         /// <summary>一个被追踪的气泡：锚点实体 + 当前文案 + 独立生命周期 + 实测移速（长文稳锚用，§12 #51）。</summary>
@@ -347,6 +355,11 @@ namespace CityLife.GameBridge
                 return;
             }
 
+            // 在显文案集（跨泡去重用，取泡前重建）：同一句台词不同时在两个泡头上
+            m_InUseTexts.Clear();
+            foreach (var b in m_Bubbles)
+                m_InUseTexts.Add(b.Text);
+
             // 重采样：周期兜底 + 视角大幅移动即触发（节流 30 帧——快移视角气泡跟不上的根治）
             var camMoved = (cam.transform.position - m_LastSamplePos).sqrMagnitude > 40f * 40f
                 || Vector3.Angle(m_LastSampleFwd, cam.transform.forward) > 12f;
@@ -466,6 +479,7 @@ namespace CityLife.GameBridge
         private bool OnScreen(Camera cam, Entity e, byte kind)
         {
             var p = EntityManager.GetComponentData<Transform>(e).m_Position;
+            p.y += kind == 0 ? k_YOffHuman : kind == 1 ? k_YOffCar : k_YOffBuilding; // 按气泡显示位置判（人头/车顶/楼顶）
             var s = cam.WorldToScreenPoint(p);
             var mx = Screen.width * k_ScreenMargin;
             var my = Screen.height * k_ScreenMargin;
@@ -485,6 +499,7 @@ namespace CityLife.GameBridge
                 if (HasAnchor(e))
                     continue;
                 var p = EntityManager.GetComponentData<Transform>(e).m_Position;
+                p.y += kind == 0 ? k_YOffHuman : kind == 1 ? k_YOffCar : k_YOffBuilding; // 按气泡显示位置判（同 OnScreen 口径）
                 var s = cam.WorldToScreenPoint(p);
                 if (s.z < 5f || s.z > MaxDistFor(kind))
                     continue;
@@ -680,8 +695,8 @@ namespace CityLife.GameBridge
                 var picked = pool.PickFor(occasion, salt + k, maxLen);
                 if (picked == null)
                     return false; // 该场合连 Any 候选都没有（理论到不了，纯防御）
-                if (k < 7 && m_UsedThisFrame.Contains(picked.Text))
-                    continue; // 本帧已被别的气泡用，顺探下一条
+                if (k < 7 && (m_UsedThisFrame.Contains(picked.Text) || m_InUseTexts.Contains(picked.Text)))
+                    continue; // 本帧/在显已被别的气泡用，顺探下一条（池浅探尽才接受重复）
                 m_UsedThisFrame.Add(picked.Text);
                 text = picked.Text;
                 if (!m_LoggedSnippetPool)
@@ -1114,9 +1129,12 @@ namespace CityLife.GameBridge
                         p = EntityManager.GetComponentData<Transform>(b.Anchor).m_Position;
                     else
                         continue;
-                    p.y += b.Kind == 0 ? 2.6f : b.Kind == 1 ? 2.8f : 12f; // 人头/车顶/楼顶（估值，正式版按包围盒）
+                    p.y += b.Kind == 0 ? k_YOffHuman : b.Kind == 1 ? k_YOffCar : k_YOffBuilding; // 人头/车顶/楼顶
                     var dist = math.distance(camPos, p);
-                    if (dist > MaxDistFor(b.Kind))
+                    // 距离阈值滞回（2026-09-11 实机：锚点在可视边界上每帧进出=疯狂闪烁）——
+                    // 新泡严格按 MaxDistFor，上帧在画的泡给 12% 越界宽限（只在边界带抖动才吃到）
+                    var maxD = MaxDistFor(b.Kind);
+                    if (dist > maxD && !(m_PrevKept.Contains(b.Anchor) && dist <= maxD * 1.12f))
                         continue;
 
                     // 恒定屏占按"行"：单行世界高 = 2·dist·tan(fov/2)·目标像素/屏高，夹 [0.35, 5]m；
@@ -1144,6 +1162,11 @@ namespace CityLife.GameBridge
                     var pxPerM = cam.pixelHeight / (2f * sp.z * tanHalfFov);
                     var w = plateH * k_PlateAspects[bucket] * pxPerM * k_DePad;
                     var h = plateH * pxPerM * k_DePad;
+                    // 屏缘惩罚（屏心优先）：归一化离屏心距离（0=屏心 1=角落外），排序键=视深×(1+1.5·edge)——
+                    // 屏心泡 100m 仍赢屏缘泡 50m；"中央区域占大头"由权重自然涌现，不写死配比
+                    var ex = (sp.x - Screen.width * 0.5f) / (Screen.width * 0.5f);
+                    var ey = (sp.y - Screen.height * 0.5f) / (Screen.height * 0.5f);
+                    var edge = math.min(1f, (ex * ex + ey * ey) * 0.5f);
                     m_Candidates.Add(new DrawCandidate
                     {
                         Entry = entry,
@@ -1156,6 +1179,7 @@ namespace CityLife.GameBridge
                         Anchor = b.Anchor,
                         NextAt = b.NextAt,
                         Kind = b.Kind,
+                        Score = dist * (1f + edge * 1.5f),
                     });
                 }
 
@@ -1165,7 +1189,7 @@ namespace CityLife.GameBridge
                 // 旧版纯"近者优先"帧帧翻盘：人堆里深度微变→胜负手每帧换→泡互顶谁也没读完（2026-09-10 实机实锤）。
                 // 可见端分类比例（§12 #51，"不是所有一起冒"）：楼 ≤cap/3、车 ≤cap/3、人不限（人为主 §12 #48 哲学）；
                 // 剧场泡不受分类上限管（必留档高于一切）。
-                m_Candidates.Sort((a, b) => a.Dist.CompareTo(b.Dist));
+                m_Candidates.Sort((a, b) => a.Score.CompareTo(b.Score)); // 屏心优先的近者（非纯视深）
                 m_Kept.Clear();
                 m_KeptSet.Clear();
                 var cap = math.max(4, LevelCount() / k_VisibleDiv);

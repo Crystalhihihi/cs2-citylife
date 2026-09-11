@@ -8,18 +8,22 @@ namespace CityLife.GameBridge
 {
     /// <summary>一条真实市民语境：显示名 + 处境卡（"手头紧的上班族，坐公交下班回家路上（去住宅区）"）+ 采样时的市民实体。
     /// 内容导演按席位分配给模型当写作处境。Entity 是 S6 环境圈摘要的定位锚（采样时实体就在手上顺带存下；
-    /// 市民会死/搬走，消费前必须 EntityManager.Exists 兜底——版本代际自动防复用，见 spike §7）。</summary>
+    /// 市民会死/搬走，消费前必须 EntityManager.Exists 兜底——版本代际自动防复用，见 spike §7）。
+    /// Occasion=气泡场合（§12 #60 刀① Plan B：乘车/在建筑/走路是采样时已确定事实，执行层随卡盖章，
+    /// LLM 只报 card 归属不再判场合——错位率归零，Any 只剩卡号缺失/越界的 salvage 兜底）。</summary>
     public readonly struct CitizenContext
     {
         public readonly string Name;
         public readonly string Context;
         public readonly Entity Entity;
+        public readonly Content.BubbleOccasion Occasion;
 
-        public CitizenContext(string name, string context, Entity entity)
+        public CitizenContext(string name, string context, Entity entity, Content.BubbleOccasion occasion)
         {
             Name = name;
             Context = context;
             Entity = entity;
+            Occasion = occasion;
         }
     }
 
@@ -101,7 +105,7 @@ namespace CityLife.GameBridge
                 var name = m_NameSystem.GetRenderedLabelName(e);
                 if (string.IsNullOrEmpty(name))
                     continue;
-                m_Entries.Add(new CitizenContext(name, Describe(EntityManager, e, citizen, age, purpose), e));
+                m_Entries.Add(new CitizenContext(name, Describe(EntityManager, e, citizen, age, purpose, out var occasion), e, occasion));
             }
             m_Offset++;
             m_Cycle++;
@@ -119,9 +123,11 @@ namespace CityLife.GameBridge
         /// 按实体出卡的公共口：S7 剧场按人开炉曾用，§12 #52 改库存剧本后当前无调用方，
         /// 保留给 backlog 的定班底剧场等后续形态。无 Citizen 组件/儿童/MovingAway → null（调用方跳过）。
         /// 名字不在此处取——NameSystem 归调用方（EnvironmentDigestSystem 同款惰性解析先例）。
+        /// 场合随卡盖章（§12 #60 刀①），失败路径落 Any。
         /// </summary>
-        internal static string? DescribeCitizen(EntityManager em, Entity e)
+        internal static string? DescribeCitizen(EntityManager em, Entity e, out Content.BubbleOccasion occasion)
         {
+            occasion = Content.BubbleOccasion.Any;
             if (e == Entity.Null || !em.Exists(e) || !em.HasComponent<Citizen>(e))
                 return null;
             var citizen = em.GetComponentData<Citizen>(e);
@@ -134,12 +140,13 @@ namespace CityLife.GameBridge
                 : Purpose.None;
             if (purpose == Purpose.MovingAway)
                 return null;
-            return Describe(em, e, citizen, age, purpose);
+            return Describe(em, e, citizen, age, purpose, out occasion);
         }
 
         /// <summary>处境卡组装："退休大爷，在公园里溜达" / "手头紧的上班族，坐公交下班回家路上（去住宅区）" / "学生，打车上学路上（去学校）"。读不到的维度整段省略。
+        /// 场合随组装一并盖章（§12 #60 刀① Plan B——是事实不是判断，不再劳烦 LLM 推）。
         /// static + 显式 EntityManager：池采样（OnUpdate）与按实体出卡口（DescribeCitizen）共用。</summary>
-        private static string Describe(EntityManager em, Entity e, Citizen citizen, CitizenAge age, Purpose purpose)
+        private static string Describe(EntityManager em, Entity e, Citizen citizen, CitizenAge age, Purpose purpose, out Content.BubbleOccasion occasion)
         {
             // —— 身份（谁）——
             var tourist = (citizen.m_State & CitizenFlags.Tourist) != 0;
@@ -167,17 +174,20 @@ namespace CityLife.GameBridge
             }
 
             // —— 处境（在哪/在干嘛/乘什么/去哪）——
-            var situation = DescribeSituation(em, e, purpose);
+            var situation = DescribeSituation(em, e, purpose, out occasion);
             return situation.Length > 0 ? $"{identity}，{situation}" : identity;
         }
 
-        /// <summary>处境半句：在室内→"在 XX（里）+动作"；在途中→"乘什么+路程短语+（去 XX）"。</summary>
-        private static string DescribeSituation(EntityManager em, Entity e, Purpose purpose)
+        /// <summary>处境半句：在室内→"在 XX（里）+动作"；在途中→"乘什么+路程短语+（去 XX）"。
+        /// 场合随路盖章（§12 #60 刀①）：室内=Indoor（公园/景点是开放空间=Walk，#57 公园归人）；
+        /// 途中乘真载具=Vehicle，否则走路=Walk——采样时已确定的事实，LLM 不再推。</summary>
+        private static string DescribeSituation(EntityManager em, Entity e, Purpose purpose, out Content.BubbleOccasion occasion)
         {
             // 室内：CurrentBuilding 在挂=在建筑内（行程分发时移除，spike §1）
             if (em.HasComponent<CurrentBuilding>(e))
             {
                 var place = ClassifyBuilding(em, em.GetComponentData<CurrentBuilding>(e).m_CurrentBuilding);
+                occasion = place is "公园" or "景点" ? Content.BubbleOccasion.Walk : Content.BubbleOccasion.Indoor;
                 if (place != null)
                 {
                     // "在商店里上班" vs "在住宅区呆着"：片区/开放场所不加"里"
@@ -189,6 +199,7 @@ namespace CityLife.GameBridge
             }
 
             // 在途中：乘什么（步行/未分类=省略）+ 路程短语 + 目的地括注
+            occasion = RealVehicleOrNull(em, e) != Entity.Null ? Content.BubbleOccasion.Vehicle : Content.BubbleOccasion.Walk;
             var s = TransportPhrase(em, e) + JourneyPhrase(purpose);
             var dest = DestinationPlace(em, e);
             if (dest != null)
@@ -199,16 +210,23 @@ namespace CityLife.GameBridge
         /// <summary>乘什么：开私家车/打车/坐公交/开货车；步行（行人 agent，无 Vehicle 组件）与未分类载具一律省略。</summary>
         private static string TransportPhrase(EntityManager em, Entity e)
         {
-            if (!em.HasComponent<CurrentTransport>(e))
-                return ""; // 室内/无载具
-            var vehicle = em.GetComponentData<CurrentTransport>(e).m_CurrentTransport;
-            if (vehicle == Entity.Null || !em.HasComponent<Game.Vehicles.Vehicle>(vehicle))
-                return ""; // 步行：CurrentTransport 指向行人 agent（spike §3：判 Vehicle 是必须前置）
+            var vehicle = RealVehicleOrNull(em, e);
+            if (vehicle == Entity.Null)
+                return "";
             if (em.HasComponent<Game.Vehicles.PersonalCar>(vehicle)) return "开私家车";
             if (em.HasComponent<Game.Vehicles.Taxi>(vehicle)) return "打车";
             if (em.HasComponent<Game.Vehicles.PublicTransport>(vehicle)) return "坐公交";
             if (em.HasComponent<Game.Vehicles.DeliveryTruck>(vehicle)) return "开货车";
             return ""; // 服务车等其他载具：v1 不分类，省略
+        }
+
+        /// <summary>真载具或 Null：CurrentTransport 指向行人 agent（步行）时无 Vehicle 组件（spike §3 必须前置判）。</summary>
+        private static Entity RealVehicleOrNull(EntityManager em, Entity e)
+        {
+            if (!em.HasComponent<CurrentTransport>(e))
+                return Entity.Null;
+            var vehicle = em.GetComponentData<CurrentTransport>(e).m_CurrentTransport;
+            return vehicle != Entity.Null && em.HasComponent<Game.Vehicles.Vehicle>(vehicle) ? vehicle : Entity.Null;
         }
 
         /// <summary>目的地建筑类型词（"商店"）；无 Target/非建筑/未分类 → null（该维度省略）。</summary>

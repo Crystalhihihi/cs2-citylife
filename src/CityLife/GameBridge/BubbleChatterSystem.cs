@@ -54,7 +54,8 @@ namespace CityLife.GameBridge
         private bool m_ClockInitialized;
         private bool m_ForgePending;          // 在飞标志（同时在飞最多一炉）
         private DateTime m_ForgeSince;        // 发炉墙钟（UTC）：网关过期丢弃不回包，TTL+60s 兜底解锁
-        private readonly List<string> m_CurrentZones = new(); // 在飞炉的话题分区（与处境卡序对齐，收炉回填 Zone 用）
+        private readonly List<string> m_CurrentZones = new(); // 在飞炉的话题分区（与处境卡序对齐，收炉按 card 回填 Zone 用）
+        private readonly List<Content.BubbleOccasion> m_CurrentOccasions = new(); // 在飞炉的场合（与处境卡序对齐，§12 #60 刀①执行层盖章，收炉按 card 回填）
 
         /// <summary>气泡片段池（S5 展示层取泡口；主线程只读）。</summary>
         public Content.BubbleSnippetPool Snippets => m_Pool;
@@ -115,6 +116,7 @@ namespace CityLife.GameBridge
             var cards = new List<string>(count);
             var topics = new List<string>(count);
             m_CurrentZones.Clear();
+            m_CurrentOccasions.Clear();
             var stride = Math.Max(1, entries.Count / count);
             var start = (int)(m_ForgeCount % (uint)entries.Count);
             var digested = 0; // 本炉带环境摘要的卡数（[环境圈] 每炉一行计数用）
@@ -135,9 +137,10 @@ namespace CityLife.GameBridge
                     }
                 }
                 cards.Add(card);
+                m_CurrentOccasions.Add(entry.Occasion); // 场合随卡盖章（§12 #60 刀①：采样时已确定，收炉按 card 回填）
                 var topic = m_Director.Topics.TopicFor(m_ForgeCount, k); // 每张配一题（话题库分区轮转+新鲜度加权）
                 topics.Add(topic);
-                m_CurrentZones.Add(ZoneOf(topic)); // 分区回填备收炉对齐（执行层查表，不赌模型复述）
+                m_CurrentZones.Add(ZoneOf(topic)); // 分区回填备收炉按 card 对齐（执行层查表，不赌模型复述）
             }
 
             m_Pool.CurrentCycle = m_ForgeCount; // BornCycle 基准锚本炉
@@ -154,8 +157,9 @@ namespace CityLife.GameBridge
 
         /// <summary>
         /// 闲聊炉结果处理（ContentDirectorSystem 按 "chatter:" 前缀转交）：
-        /// JSONL salvage 解析（坏行跳过计数）→ 话题分区按序对齐回填（好行数≠派卡数说明模型
-        /// 掉行/加行，整批 Zone 留空——宁缺勿错配）→ 入 BubbleSnippetPool（池内同文本去重）。
+        /// JSONL salvage 解析（坏行跳过计数）→ 场合/话题分区按 card 号逐条回填（§12 #60 刀①：
+        /// 场合采样时已盖章、分区执行层查表，模型只报归属；card 缺失/越界的孤儿行落 Any/留空，
+        /// 不再整批连坐）→ 入 BubbleSnippetPool（池内同文本去重）。
         /// 失败只记日志不致命，下一炉自然会再产。
         /// </summary>
         public void OnChatterResult(Llm.CliCompletedResult r)
@@ -167,12 +171,25 @@ namespace CityLife.GameBridge
                 return;
             }
             var parsed = Content.BubbleSnippetPool.ParseBatch(r.Result.Text, out var skipped);
-            var alignZone = parsed.Count == m_CurrentZones.Count;
             var added = 0;
-            for (int i = 0; i < parsed.Count; i++)
-                if (m_Pool.Add(parsed[i].Text, parsed[i].Occasion, alignZone ? m_CurrentZones[i] : null))
+            var orphan = 0;
+            foreach (var (text, card) in parsed)
+            {
+                var occasion = Content.BubbleOccasion.Any;
+                string? zone = null;
+                if (card >= 1 && card <= m_CurrentOccasions.Count)
+                {
+                    occasion = m_CurrentOccasions[card - 1];
+                    zone = m_CurrentZones[card - 1];
+                }
+                else
+                {
+                    orphan++;
+                }
+                if (m_Pool.Add(text, occasion, zone))
                     added++;
-            Mod.Log.Info($"[闲聊炉] 入库 {added} 条（解析丢 {skipped} 条，去重丢 {parsed.Count - added} 条，池现 {m_Pool.Count} 条{(alignZone ? "" : "，行数不齐 Zone 整批留空")}）");
+            }
+            Mod.Log.Info($"[闲聊炉] 入库 {added} 条（解析丢 {skipped} 条，去重丢 {parsed.Count - added} 条，无归属 {orphan} 条，池现 {m_Pool.Count} 条）");
         }
 
         /// <summary>题面 → 话题分区（TopicReservoir.Entries 线性查表，取首个同题面条目；查不到返回 ""）。</summary>

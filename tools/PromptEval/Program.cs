@@ -55,6 +55,19 @@ internal static class Program
         "青年，走路去商店路上",
     };
 
+    // 具卡的场合真值（§12 #60 刀①后实机场合由 CitizenPoolSystem 盖章；具在此模拟盖章结果，验证 card→场合映射）
+    private static readonly BubbleOccasion[] k_CollapsedOcc =
+    {
+        BubbleOccasion.Indoor, BubbleOccasion.Indoor, BubbleOccasion.Indoor, BubbleOccasion.Indoor,
+        BubbleOccasion.Walk, BubbleOccasion.Indoor, BubbleOccasion.Indoor, BubbleOccasion.Indoor,
+    };
+
+    private static readonly BubbleOccasion[] k_DiverseOcc =
+    {
+        BubbleOccasion.Vehicle, BubbleOccasion.Vehicle, BubbleOccasion.Vehicle, BubbleOccasion.Walk,
+        BubbleOccasion.Walk, BubbleOccasion.Indoor, BubbleOccasion.Vehicle, BubbleOccasion.Walk,
+    };
+
     // 猫灾关键词（中文语料最安全万能题材，密度=卡片信息熵的晴雨表）
     private static readonly string[] k_CatWords = { "猫", "狗", "宠物", "喵", "汪" };
 
@@ -102,9 +115,9 @@ internal static class Program
         if (scenario is "chatter" or "all")
         {
             if (setSel is "collapsed" or "both")
-                exit |= await RunChatter(provider, reservoir, "collapsed", k_Collapsed, 100u, k, report);
+                exit |= await RunChatter(provider, reservoir, "collapsed", k_Collapsed, k_CollapsedOcc, 100u, k, report);
             if (setSel is "diverse" or "both")
-                exit |= await RunChatter(provider, reservoir, "diverse", k_Diverse, 200u, k, report);
+                exit |= await RunChatter(provider, reservoir, "diverse", k_Diverse, k_DiverseOcc, 200u, k, report);
         }
         if (scenario is "topics" or "all")
             exit |= await RunTopics(provider, reservoir, topicCount, k, report);
@@ -116,13 +129,14 @@ internal static class Program
         return exit;
     }
 
-    /// <summary>闲聊炉场景：真实 BuildChatterPrompt 发 K 炉，ParseBatch 解析后打分。</summary>
+    /// <summary>闲聊炉场景：真实 BuildChatterPrompt 发 K 炉，ParseBatch 解析后打分。
+    /// occs=具卡场合真值（§12 #60 刀①后实机由 CitizenPoolSystem 盖章）——按 card 号映射验证归属质量。</summary>
     private static async Task<int> RunChatter(ICliProvider provider, TopicReservoir reservoir,
-                                              string setName, string[] cards, uint batchBase, int k,
-                                              StringBuilder report)
+                                              string setName, string[] cards, BubbleOccasion[] occs,
+                                              uint batchBase, int k, StringBuilder report)
     {
         var head = PromptBuilder.BuildChatterHead();
-        var all = new List<(string Text, BubbleOccasion Occasion)>();
+        var all = new List<(string Text, int Card)>();
         var raws = new List<(int Batch, string Raw, long Ms, int? Pt, int? Rt)>();
         var totalSkipped = 0;
         for (var b = 0; b < k; b++)
@@ -147,22 +161,42 @@ internal static class Program
         // —— 指标 ——
         var n = Math.Max(1, all.Count);
         var catHits = all.Count(e => k_CatWords.Any(w => e.Text.Contains(w)));
-        var occ = all.GroupBy(e => e.Occasion).ToDictionary(g => g.Key, g => g.Count());
+        // card→场合映射（模拟实机盖章回填）；卡号缺失/越界=无归属落 Any
+        var occ = new Dictionary<BubbleOccasion, int>();
+        var orphan = 0;
+        var perCard = new int[cards.Length];
+        foreach (var e in all)
+        {
+            if (e.Card >= 1 && e.Card <= cards.Length)
+            {
+                var o = occs[e.Card - 1];
+                occ[o] = occ.GetValueOrDefault(o) + 1;
+                perCard[e.Card - 1]++;
+            }
+            else
+            {
+                occ[BubbleOccasion.Any] = occ.GetValueOrDefault(BubbleOccasion.Any) + 1;
+                orphan++;
+            }
+        }
         var lens = all.Select(e => e.Text.Length).ToArray();
         var (mean, std) = MeanStd(lens);
         var (dupPairs, dupSample) = NearDup(all.Select(e => e.Text).ToArray());
+        var zeroCards = perCard.Count(c => c == 0);
 
         Console.WriteLine($"\n== chatter/{setName} 汇总（{all.Count} 条，解析丢 {totalSkipped}）==");
         Console.WriteLine($"  猫密度     : {catHits}/{all.Count} = {Pct(catHits, n)}");
-        Console.WriteLine($"  场合分布   : {string.Join("  ", Enum.GetValues<BubbleOccasion>().Select(o => $"{o}={occ.GetValueOrDefault(o)}"))}  Any率={Pct(occ.GetValueOrDefault(BubbleOccasion.Any), n)}");
+        Console.WriteLine($"  场合映射   : {string.Join("  ", Enum.GetValues<BubbleOccasion>().Select(o => $"{o}={occ.GetValueOrDefault(o)}"))}  无归属={Pct(orphan, n)}");
         Console.WriteLine($"  句长       : 均值 {mean:0.0} 字，标准差 {std:0.0}，≤15字 {Pct(lens.Count(l => l <= 15), n)}，>20字 {Pct(lens.Count(l => l > 20), n)}");
+        Console.WriteLine($"  卡覆盖     : 空卡 {zeroCards}/{cards.Length}，每卡每炉 {perCard.Min() / (double)Math.Max(1, k):0.0}-{perCard.Max() / (double)Math.Max(1, k):0.0} 条（应 2-3 且铺满）");
         Console.WriteLine($"  近重复     : {dupPairs} 对（Jaccard≥0.7）{(dupSample != null ? " 例：" + dupSample : "")}");
 
         report.Append("## chatter / ").Append(setName).Append("\n\n");
         report.Append("- 条数：").Append(all.Count).Append("（解析丢 ").Append(totalSkipped).Append("）\n");
         report.Append("- 猫密度：").Append(Pct(catHits, n)).Append($" ({catHits}/{all.Count})\n");
-        report.Append("- 场合：").Append(string.Join("  ", Enum.GetValues<BubbleOccasion>().Select(o => $"{o}={occ.GetValueOrDefault(o)}"))).Append("\n");
+        report.Append("- 场合映射：").Append(string.Join("  ", Enum.GetValues<BubbleOccasion>().Select(o => $"{o}={occ.GetValueOrDefault(o)}"))).Append($"，无归属 {Pct(orphan, n)}\n");
         report.Append($"- 句长：均值 {mean:0.0}，标准差 {std:0.0}，≤15字 {Pct(lens.Count(l => l <= 15), n)}，>20字 {Pct(lens.Count(l => l > 20), n)}\n");
+        report.Append($"- 卡覆盖：空卡 {zeroCards}/{cards.Length}，每卡每炉 {perCard.Min() / (double)Math.Max(1, k):0.0}-{perCard.Max() / (double)Math.Max(1, k):0.0} 条\n");
         report.Append("- 近重复：").Append(dupPairs).Append(" 对").Append(dupSample != null ? "（" + dupSample + "）" : "").Append("\n\n");
         foreach (var raw in raws)
         {

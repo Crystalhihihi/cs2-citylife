@@ -141,8 +141,8 @@ namespace CityLife.Content
         /// 缓存纪律同主头（BubbleChatterSystem.OnCreate 拼一次复用，逐字节稳定：禁时间戳/随机内容，动态全压尾部）。
         /// 语域定案：第一人称、≤20 字、必须是从这个人嘴里能说出来的话；禁 hashtag/禁@/禁"家人们"直播腔。
         /// 正例 > 禁令（2026-08-20 治僵硬主药，主头同款）：样子只学语气，内容物件不许照抄。
-        /// occasion 推导规则写死在【场合】段（乘什么→vehicle；在建筑/场所内→indoor；走路→walk；其余 any）
-        /// ——与 BubbleOccasion 枚举/OccasionFromString 映射三处同炉改（扩展纪律见 BubbleSnippetPool 头注释）。
+        /// 场合不再由模型判（§12 #60 刀① Plan B）：乘车/在建筑/走路是采样时已确定事实，
+        /// CitizenPoolSystem 组卡时执行层盖章；模型只报 card 归属，收炉按 card 回填场合。
         /// </summary>
         public static string BuildChatterHead()
         {
@@ -156,9 +156,8 @@ namespace CityLife.Content
             sb.Append("- 公交再不来我真走回去了\n");
             sb.Append("- 面又涨两块，快吃不起了\n");
             sb.Append("- 这花开得还行，拍一张\n");
-            sb.Append("【写法】每张处境卡写 2-3 条（长短句搭配，别全一个长度）：就照这个人的处境和配给他的话头写，必须是从这个人嘴里能说出来的话；可以顺势吐槽【城市此刻】里的天气/通勤/物价。卡里若带\"｜旁边：\"（S6 环境圈摘要），是这人边上此刻真实有的东西，可以顺手当话料，没有就是没有。\n");
-            sb.Append("【场合】每条按处境卡推场合写进 occasion：卡里乘了车（开私家车/打车/坐公交/开货车）→\"vehicle\"；卡里在建筑或场所内（\"在…里\"上班上课逛街等，不在路上）→\"indoor\"；卡里在路上但没乘车（走路/赶路）→\"walk\"；拿不准→\"any\"。\n");
-            sb.Append("【输出】只输出 JSONL：一行一条 {\"text\":\"话\",\"occasion\":\"walk|vehicle|indoor|any\"}；禁止 markdown 围栏、禁止解释、禁止序号。\n");
+            sb.Append("【写法】每张处境卡写 2-3 条（长短句搭配，别全一个长度）：就照这个人的处境和配给他的话头写，必须是从这个人嘴里能说出来的话；每条必须带 card 标明出自哪张处境卡（1 起）。可以顺势吐槽【城市此刻】里的天气/通勤/物价。卡里若带\"｜旁边：\"（S6 环境圈摘要），是这人边上此刻真实有的东西，可以顺手当话料，没有就是没有。\n");
+            sb.Append("【输出】只输出 JSONL：一行一条 {\"text\":\"话\",\"card\":卡号}；禁止 markdown 围栏、禁止解释、禁止序号。\n");
             return sb.ToString();
         }
 

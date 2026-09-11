@@ -72,6 +72,12 @@ namespace CityLife.GameBridge
         [SettingsUISlider(min = 2f, max = 30f, step = 1f, unit = "integer")]
         public int BubbleVisibleMax { get; set; } = 6;
 
+        /// <summary>气泡驻留时长倍率（默认 1.5×，2026-09-11 玩家实机"更换太快"）：乘在阅读时长
+        /// （4s+0.28s/字+抖动）和 30s 封顶上；换气拍的沉默时长同比例拉长。0.5-3× 滑杆。</summary>
+        [SettingsUISection(kTab, kGroupBubble)]
+        [SettingsUISlider(min = 50f, max = 300f, step = 25f, unit = "percentage", scalarMultiplier = 100f)]
+        public float BubbleHoldScale { get; set; } = 1.5f;
+
         /// <summary>气泡底板开关（默认开）：文字下垫深色圆角底板。</summary>
         [SettingsUISection(kTab, kGroupBubble)]
         public bool BubblePlate { get; set; } = true;
@@ -120,6 +126,7 @@ namespace CityLife.GameBridge
             BubbleDistCar = 1f;
             BubbleDistBuilding = 1f;
             BubbleVisibleMax = 6;
+            BubbleHoldScale = 1.5f;
             BubblePlate = true;
             BubbleAutoHideBuildTool = true;
             BubbleAutoHidePhotoMode = true;

@@ -710,12 +710,14 @@ namespace CityLife.GameBridge
 
         /// <summary>气泡驻留时长：阅读时间 4s 起、每字 +0.28s、封顶 30s（话痨段落让人读完），
         /// 再叠 0-4s 确定性抖动（实体×集数散列——全屏绝不同时切换）。
-        /// 墙钟语义（§12 #49）：配 unscaledTime 消费——倍速只加速模拟，不加速人阅读。</summary>
+        /// 墙钟语义（§12 #49）：配 unscaledTime 消费——倍速只加速模拟，不加速人阅读。
+        /// 时长倍率读设置页 BubbleHoldScale（默认 1.5×，2026-09-11 玩家实机"更换太快"；封顶同步乘）。</summary>
         private static float HoldFor(int entityIndex, int textIdx, int textLen)
         {
             var read = 4f + textLen * 0.28f;
             var jitter = ((entityIndex * 7919 + textIdx * 104729) % 400) / 100f;
-            return math.min(read + jitter, 30f);
+            var scale = Mod.Options?.BubbleHoldScale ?? 1f;
+            return math.min((read + jitter) * scale, 30f * scale);
         }
 
         private static Color KindColor(byte kind)

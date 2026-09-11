@@ -80,12 +80,12 @@ namespace CityLife.GameBridge
         [SettingsUISlider(min = 25f, max = 400f, step = 5f, unit = "percentage", scalarMultiplier = 100f)]
         public float BubbleDistBuilding { get; set; } = 1f;
 
-        /// <summary>同屏气泡上限（默认 6，§12 #53：稀疏默认——"不是满屏冒泡"，玩家自定 2-30）；
+        /// <summary>同屏气泡上限（默认 4，§12 #53：稀疏默认——"不是满屏冒泡"；2026-09-11 玩家实机"有些阅读不过来"6→4，玩家自定 2-30）；
         /// 楼/车各 ≤上限/3、人不限（人为主比例不变）；采样池自动跟随（上限×4 夹 8-120，§12 #55 单旋钮合并）。
         /// 要爽自己拉高，token 账自负。</summary>
         [SettingsUISection(kTab, kGroupBubble)]
         [SettingsUISlider(min = 2f, max = 30f, step = 1f, unit = "integer")]
-        public int BubbleVisibleMax { get; set; } = 6;
+        public int BubbleVisibleMax { get; set; } = 4;
 
         /// <summary>气泡驻留时长倍率（默认 1.5×，2026-09-11 玩家实机"更换太快"）：乘在阅读时长
         /// （4s+0.28s/字+抖动）和 30s 封顶上；换气拍的沉默时长同比例拉长。0.5-3× 滑杆。</summary>
@@ -204,7 +204,7 @@ namespace CityLife.GameBridge
             BubbleDistHuman = 1f;
             BubbleDistCar = 1f;
             BubbleDistBuilding = 1f;
-            BubbleVisibleMax = 6;
+            BubbleVisibleMax = 4; // 2026-09-11 玩家实机"有些阅读不过来"：稀疏默认 6→4
             BubbleHoldScale = 1.5f;
             BubblePlate = true;
             BubbleAutoHideBuildTool = true;

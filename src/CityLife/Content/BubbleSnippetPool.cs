@@ -56,6 +56,11 @@ namespace CityLife.Content
         /// <summary>池容上限：超出先进先出逐出最旧片段。</summary>
         public int MaxCapacity = 200;
 
+        // 猫密度闸（2026-09-11 玩家实机"宠物占比太高"）：模型先验爱写猫——prompt 配额（闲聊炉头【配额】）是劝，
+        // 这里是拦。含猫词的片段在池内猫占比 ≥k_CatShareCap 时确定性半数拒收（不删猫，限流）
+        private const double k_CatShareCap = 0.05;
+        private static readonly string[] k_CatWords = { "猫", "狗", "宠物", "喵", "汪" };
+
         /// <summary>当前炉次（闲聊炉炉计数同步；BornCycle 的基准）。</summary>
         public uint CurrentCycle;
 
@@ -65,12 +70,15 @@ namespace CityLife.Content
         /// <summary>当前条数。</summary>
         public int Count => m_Entries.Count;
 
-        /// <summary>入库一条：空文本/与池内同文本直接丢弃（返回 false）；超容先进先出逐出。返回是否真入。</summary>
+        /// <summary>入库一条：空文本/与池内同文本直接丢弃（返回 false）；超容先进先出逐出；
+        /// 含猫词且池内猫占比超 k_CatShareCap 的确定性半数拒收（猫密度闸）。返回是否真入。</summary>
         public bool Add(string text, BubbleOccasion occasion, string? zone = null)
         {
             if (string.IsNullOrWhiteSpace(text))
                 return false;
             text = text.Trim();
+            if (OverCatCap(text))
+                return false;
             for (int i = 0; i < m_Entries.Count; i++)
                 if (m_Entries[i].Text == text)
                     return false; // 同文本去重
@@ -78,6 +86,25 @@ namespace CityLife.Content
             while (m_Entries.Count > MaxCapacity)
                 m_Entries.RemoveAt(0); // FIFO 逐出最旧
             return true;
+        }
+
+        /// <summary>猫密度闸：text 含猫词且池内猫占比已超 k_CatShareCap → FNV 哈希+CurrentCycle 确定性半数拒收。</summary>
+        private bool OverCatCap(string text)
+        {
+            var hit = false;
+            foreach (var w in k_CatWords)
+                if (text.Contains(w)) { hit = true; break; }
+            if (!hit || m_Entries.Count == 0)
+                return false;
+            var cats = 0;
+            foreach (var e in m_Entries)
+                foreach (var w in k_CatWords)
+                    if (e.Text.Contains(w)) { cats++; break; }
+            if ((double)cats / m_Entries.Count < k_CatShareCap)
+                return false;
+            uint h = 2166136261u; // FNV-1a（跨进程稳定，不依赖 string.GetHashCode）
+            foreach (var c in text) { h ^= c; h *= 16777619u; }
+            return (h + CurrentCycle) % 2 == 0;
         }
 
         /// <summary>

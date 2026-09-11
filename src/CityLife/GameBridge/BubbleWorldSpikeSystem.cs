@@ -459,12 +459,18 @@ namespace CityLife.GameBridge
             Collect(cam, m_HumanQuery, want, 0);
         }
 
+        // 屏内判定带 15% 溢出余量（2026-09-11 实机：绑锚/终了被"刚好出屏一点点"误杀——开播中止六连
+        // 全是"离屏"但场景明明在眼前；绘制热路径另有镜头背后剔除（sp.z<1f），余量只影响绑定/保留判定）
+        private const float k_ScreenMargin = 0.15f;
+
         private bool OnScreen(Camera cam, Entity e, byte kind)
         {
             var p = EntityManager.GetComponentData<Transform>(e).m_Position;
             var s = cam.WorldToScreenPoint(p);
+            var mx = Screen.width * k_ScreenMargin;
+            var my = Screen.height * k_ScreenMargin;
             return s.z > 5f && s.z <= MaxDistFor(kind)
-                && s.x >= 0 && s.x <= Screen.width && s.y >= 0 && s.y <= Screen.height;
+                && s.x >= -mx && s.x <= Screen.width + mx && s.y >= -my && s.y <= Screen.height + my;
         }
 
         private void Collect(Camera cam, EntityQuery query, int cap, byte kind)

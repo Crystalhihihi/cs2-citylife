@@ -540,13 +540,15 @@ namespace CityLife.GameBridge
             Mod.Log.Info($"[剧场] 开播：{sceneName}（{cand.KindLabel}），{t.Participants.Count} 人 {t.Script.Count} 句：{string.Join("、", names)}");
         }
 
-        /// <summary>场景地点名：店内=店名（租户公司名优先），车站/公园=渲染名；读不到 → 类型词兜底（不硬造）。</summary>
+        /// <summary>场景地点名：店内=店名（租户公司名优先），车站/公园=渲染名；读不到或拿到未本地化的
+        /// 资源键（"Assets.NAME[...]"——部分资产无本地化名的实机实锤，2026-09-11 Commercial_ChemicalStore）
+        /// → 类型词兜底（不硬造，脏键绝不进 prompt）。</summary>
         private string SceneNameOf(Candidate cand)
         {
             string? name = cand.KindLabel.EndsWith("内")
                 ? EnvironmentDigestSystem.ShopNameOf(EntityManager, m_NameSystem, cand.Location)
                 : EnvironmentDigestSystem.RenderedName(m_NameSystem, cand.Location);
-            return name ?? cand.KindLabel;
+            return name == null || name.Contains("Assets.") ? cand.KindLabel : name;
         }
 
         // —— ④ 播放（气泡系统的两个回调口）——

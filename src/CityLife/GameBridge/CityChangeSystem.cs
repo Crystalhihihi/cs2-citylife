@@ -235,7 +235,10 @@ namespace CityLife.GameBridge
         }
 
         private string? RenderedName(Entity entity)
-            => m_NameSystem?.GetRenderedLabelName(entity);
+        {
+            var name = m_NameSystem?.GetRenderedLabelName(entity);
+            return EnvironmentDigestSystem.IsUglyName(name) ? null : name; // 脏键视同无名（走"一家新店"降级，IsUglyName 实锤见其注释）
+        }
 
         private void Enqueue(Anchor anchor)
         {

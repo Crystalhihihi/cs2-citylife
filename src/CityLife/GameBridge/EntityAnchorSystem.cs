@@ -188,8 +188,7 @@ namespace CityLife.GameBridge
             if (m_NameSystem != null)
             {
                 var name = m_NameSystem.GetRenderedLabelName(company);
-                if (!string.IsNullOrEmpty(name)
-                    && !name.StartsWith("Assets.NAME[", System.StringComparison.Ordinal))
+                if (!EnvironmentDigestSystem.IsUglyName(name)) // 脏键（空名/Assets.NAME[...] 原始资产 ID）视同无名——署名乱码源头，2026-09-09 实锤
                     return name + RoadSuffix(building);
             }
             return TryGetAddressLabel(building, out var addr)
@@ -204,7 +203,7 @@ namespace CityLife.GameBridge
             if (m_NameSystem != null)
             {
                 var name = m_NameSystem.GetRenderedLabelName(building);
-                if (!string.IsNullOrEmpty(name))
+                if (!EnvironmentDigestSystem.IsUglyName(name))
                     return name + RoadSuffix(building);
             }
             return TryGetAddressLabel(building, out var addr)
@@ -212,7 +211,7 @@ namespace CityLife.GameBridge
                 : Geo.DirectionOf(pos) + fallback;
         }
 
-        /// <summary>所在路名后缀"（神太街）"：建筑 m_RoadEdge 的渲染名；拿不到就空串（不硬造）。</summary>
+        /// <summary>所在路名后缀"（神太街）"：建筑 m_RoadEdge 的渲染名；拿不到/脏键就空串（不硬造）。</summary>
         private string RoadSuffix(Entity building)
         {
             if (m_NameSystem == null || !EntityManager.HasComponent<Game.Buildings.Building>(building))
@@ -221,7 +220,7 @@ namespace CityLife.GameBridge
             if (road == Entity.Null)
                 return "";
             var name = m_NameSystem.GetRenderedLabelName(road);
-            return string.IsNullOrEmpty(name) ? "" : $"（{name}）";
+            return EnvironmentDigestSystem.IsUglyName(name) ? "" : $"（{name}）";
         }
 
         /// <summary>真路名地址（"115冬青街"，§12 #60 刀⑤）：游戏公共静态方法 BuildingUtils.GetAddress 现算
@@ -239,7 +238,7 @@ namespace CityLife.GameBridge
                 && road != Entity.Null)
             {
                 var roadName = m_NameSystem.GetRenderedLabelName(road);
-                if (!string.IsNullOrEmpty(roadName))
+                if (!EnvironmentDigestSystem.IsUglyName(roadName))
                 {
                     label = $"{number}{roadName}"; // zh 客户端 "Assets.ADDRESS_NAME_FORMAT={NUMBER}{ROAD}" 同款
                     return true;

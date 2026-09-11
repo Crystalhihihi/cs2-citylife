@@ -272,19 +272,25 @@ namespace CityLife.GameBridge
                 for (int i = 0; i < renters.Length; i++)
                 {
                     var name = nameSystem.GetRenderedLabelName(renters[i].m_Renter);
-                    if (!string.IsNullOrEmpty(name))
+                    if (!IsUglyName(name)) // 脏键跳过：继续找下一个租户，不行才落建筑名（IsUglyName 实锤见该方法注释）
                         return name;
                 }
             }
             return RenderedName(nameSystem, building);
         }
 
-        /// <summary>渲染名兜底（NameSystem 缺席/空名 → null，不硬造）。internal static：S7 场景卡共用。</summary>
+        /// <summary>渲染名兜底（NameSystem 缺席/空名/未本地化脏键 → null，不硬造）。internal static：S7 场景卡共用。</summary>
         internal static string? RenderedName(Game.UI.NameSystem? nameSystem, Entity entity)
         {
             var name = nameSystem?.GetRenderedLabelName(entity);
-            return string.IsNullOrEmpty(name) ? null : name;
+            return IsUglyName(name) ? null : name;
         }
+
+        /// <summary>脏键判定（一处定义全桥共用）：null/空/未本地化原始资产键（"Assets.NAME[...]"/"Assets.xxx"——
+        /// 部分资产无本地化名，实机实锤 Commercial_ChemicalStore）都算脏，调用方一律走降级，脏键绝不进 prompt
+        /// （2026-09-11 玩家实机"Assets 频率这么高"——经环境圈摘要灌进闲聊卡被模型复读，高频污染源）。</summary>
+        internal static bool IsUglyName(string? name)
+            => string.IsNullOrEmpty(name) || name.StartsWith("Assets.", System.StringComparison.Ordinal);
 
         /// <summary>聚类文案量词后缀（类词出自 CitizenPoolSystem.ClassifyBuilding，一处定义）。</summary>
         private static string ClusterSuffix(string kind) => kind switch

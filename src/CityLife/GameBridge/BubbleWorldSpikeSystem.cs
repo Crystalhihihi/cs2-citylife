@@ -614,20 +614,34 @@ namespace CityLife.GameBridge
             }
         }
 
-        /// <summary>楼池白名单判定（§12 #57 ②④，2026-09-11 实机三现象定案——养鱼场排架/水域构件、
-        /// 空楼、低密住宅不该一直说话）。Collect 收楼时逐实体调用，判定全部 HasComponent/buffer Length
-        /// 级别，禁止遍历嵌套。三档口径：
+        /// <summary>楼池白名单判定（§12 #57 ②④ + 2026-09-11 二轮治理，实机三现象定案——养鱼场排架/水域构件、
+        /// 空楼、低密住宅不该一直说话；施工中大楼/露台仓库/学校操场不该说话）。Collect 收楼时逐实体调用，
+        /// 判定全部 HasComponent/buffer Length 级别（仓储闸为租户侧一层解引用，spike 核准），禁止遍历嵌套。四档口径：
+        /// ⓪ 二轮排除闸（spike: docs/spikes/2026-09-11-construction-and-openlot-signals.md，必须在①直收前——
+        ///   操场正是从①漏入的）：UnderConstruction=施工中闭嘴（租户签约不避施工楼，有租户≠已建成，组件完工即移除）；
+        ///   ServiceUpgrade/Extension=升级附属（学校操场/体育场等独立升级建筑+贴附扩展）开放空间归人；
+        ///   ParkingFacility/CarParkingFacility=停车场/停车楼，声音归车档/行人；
         /// ① 市政/地标直收：School/Hospital/SignatureBuildingData 任一（市政建筑无租户概念；
         ///   SignatureBuildingData 是实体侧空标记组件，dump 实锤）；
         /// ② 可租物业需有租户：四 Property（住宅/商业/工业/办公，互斥挂其一）任一 且 Renter buffer
         ///   非空——没人租=没人在里面=不说话。<b>注意组件方向</b>：Game.Buildings.Renter 才是楼上的
         ///   租户 buffer（IBufferElementData，Serialization.RenterSystem 以 m_Property 为键维护，dump 实锤）；
         ///   Game.Buildings.PropertyRenter 是租户侧（住户/公司）指回房产的组件（IComponentData），别搞反；
+        ///   仓储闸：任一租户是 Game.Companies.StorageCompany → 露台仓库/开放堆场，开放空间归人；
         /// ③ 低密住宅降频"人少话少"：住宅且租户 ≤2 户（一家人一栋楼）→ e.Index 散列 %3==0 才入池
         ///   （确定性散列：会话内稳定，不会因重采样闪进闪出）。</summary>
         private bool IsTalkativeBuilding(Entity e)
         {
             var em = EntityManager;
+            // ⓪ 二轮排除闸（必须先于①直收）
+            if (em.HasComponent<Game.Objects.UnderConstruction>(e))
+                return false; // 施工中闭嘴
+            if (em.HasComponent<Game.Buildings.ServiceUpgrade>(e)
+                || em.HasComponent<Game.Buildings.Extension>(e))
+                return false; // 升级附属（操场/体育场等）归人
+            if (em.HasComponent<Game.Buildings.ParkingFacility>(e)
+                || em.HasComponent<Game.Buildings.CarParkingFacility>(e))
+                return false; // 停车场/停车楼归车档/行人
             // ① 市政/地标直收
             if (em.HasComponent<Game.Buildings.School>(e)
                 || em.HasComponent<Game.Buildings.Hospital>(e)
@@ -639,12 +653,16 @@ namespace CityLife.GameBridge
                 && !em.HasComponent<Game.Buildings.IndustrialProperty>(e)
                 && !em.HasComponent<Game.Buildings.OfficeProperty>(e))
                 return false; // 四 Property 全不中=非可租物业（纯构件/废墟/水域排架等），闭嘴
-            // ② 租户非空（楼侧 Renter buffer；无 buffer 组件=从没被租过，同空处理）
+            // ② 租户非空（楼侧 Renter buffer；无 buffer 组件=从没被租过，同空处理）+ 仓储堆场闸
             if (!em.HasComponent<Game.Buildings.Renter>(e))
                 return false;
-            var renterCount = em.GetBuffer<Game.Buildings.Renter>(e, true).Length;
+            var renters = em.GetBuffer<Game.Buildings.Renter>(e, true);
+            var renterCount = renters.Length;
             if (renterCount == 0)
                 return false;
+            for (int i = 0; i < renters.Length; i++)
+                if (em.HasComponent<Game.Companies.StorageCompany>(renters[i].m_Renter))
+                    return false; // 露台仓库/开放仓储堆场归人（仓储公司承租的场地不收）
             // ③ 低密住宅 1/3 降频：Knuth 乘性散列，%3==0 才入池（e.Index 会话内稳定=不闪）
             if (isResidential && renterCount <= 2 && (uint)e.Index * 2654435761u % 3u != 0u)
                 return false;
@@ -1451,8 +1469,8 @@ namespace CityLife.GameBridge
                 m_Candidates.Sort((a, b) => a.Score.CompareTo(b.Score)); // 屏心优先的近者（非纯视深）
                 m_Kept.Clear();
                 m_KeptSet.Clear();
-                // 同屏上限：设置页滑杆（§12 #53 稀疏默认 6）；null（主菜单期）回落默认 6
-                var cap = Mod.Options?.BubbleVisibleMax ?? 6;
+                // 同屏上限：设置页滑杆（§12 #53 稀疏默认，2026-09-11 实机"阅读不过来"改默认 4）；null（主菜单期）回落默认 4
+                var cap = Mod.Options?.BubbleVisibleMax ?? 4;
                 var kindCap = math.max(1, cap / 3); // 楼/车各 ≤1/3（cap 最小 2 时也保 1 个坑）
                 var keptPlain = 0;   // 普通泡计数（上限只闸它）
                 var keptCar = 0;

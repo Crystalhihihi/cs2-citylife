@@ -129,6 +129,8 @@ internal static class Program
         }
         if (scenario is "topics" or "all")
             exit |= await RunTopics(provider, reservoir, topicCount, k, report);
+        if (scenario is "theater" or "all")
+            exit |= await RunTheater(provider, k, report);
 
         Directory.CreateDirectory(outDir);
         var file = Path.Combine(outDir, "eval-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".md");
@@ -214,6 +216,75 @@ internal static class Program
                   .Append(raw.Raw.Trim()).Append("\n```\n\n");
         }
         return 0;
+    }
+
+    /// <summary>剧场剧本炉场景（§12 #60 刀⑥槽位化评测）：真实 BuildTheaterStockPrompt 发 K 炉，
+    /// 真实 TheaterScriptStock.ParseBatch 解析——schema 合规率 + 占位符使用率/有效率是刀⑥的核心指标。</summary>
+    private static async Task<int> RunTheater(ICliProvider provider, int k, StringBuilder report)
+    {
+        var head = PromptBuilder.BuildTheaterStockHead();
+        var stock = new TheaterScriptStock(); // 空库存：与低水位开炉时同形（各场景现存 0 部）
+        var scripts = new List<TheaterScript>();
+        var raws = new List<(int Batch, string Raw, long Ms)>();
+        var totalSkipped = 0;
+        for (var b = 0; b < k; b++)
+        {
+            var prompt = PromptBuilder.BuildTheaterStockPrompt(head, k_Snap, stock, k_Diverse, 4);
+            Console.WriteLine($"[Eval·theater] 第 {b + 1}/{k} 炉发出（{prompt.Length} 字符）…");
+            var r = await provider.OneShotAsync(prompt, CancellationToken.None);
+            if (!r.Success)
+            {
+                Console.WriteLine($"[Eval·theater] 第 {b + 1} 炉失败：{r.Error}");
+                return 1;
+            }
+            var parsed = TheaterScriptStock.ParseBatch(r.Text, out var skipped);
+            totalSkipped += skipped;
+            scripts.AddRange(parsed);
+            raws.Add((b, r.Text, r.LatencyMs));
+            Console.WriteLine($"[Eval·theater] 第 {b + 1} 炉：{parsed.Count} 部（丢 {skipped}）{r.LatencyMs / 1000.0:0.0}s");
+        }
+
+        // —— 指标 ——
+        var n = Math.Max(1, scripts.Count);
+        var byScene = scripts.GroupBy(s => s.Scene).OrderByDescending(g => g.Count()).ToArray();
+        var withSlot = scripts.Count(s => s.Lines.Any(l => l.Text.Contains("{place}") || l.Text.Contains("{name")));
+        var slotBad = scripts.Count(s => s.Lines.Any(l => SlotInvalid(l.Text, s.Cast)));
+        var linesPer = scripts.Select(s => (double)s.Lines.Count).ToArray();
+        var slotUse = scripts.SelectMany(s => s.Lines).Count(l => l.Text.Contains("{place}") || RegexCount(l.Text, "{name") > 0);
+
+        Console.WriteLine($"\n== theater 汇总（{scripts.Count} 部，解析丢 {totalSkipped}）==");
+        Console.WriteLine($"  场景分布   : {string.Join("  ", byScene.Select(g => $"{g.Key}={g.Count()}"))}");
+        Console.WriteLine($"  句数       : 均值 {linesPer.Average():0.0}（{linesPer.Min():0}-{linesPer.Max():0}）");
+        Console.WriteLine($"  占位符     : {withSlot}/{scripts.Count} 部含占位（共 {slotUse} 处），越界无效占位 {slotBad} 部");
+
+        report.Append("## theater\n\n");
+        report.Append("- 部数：").Append(scripts.Count).Append("（解析丢 ").Append(totalSkipped).Append("）\n");
+        report.Append("- 场景：").Append(string.Join("  ", byScene.Select(g => $"{g.Key}={g.Count()}"))).Append("\n");
+        report.Append($"- 句数：均值 {linesPer.Average():0.0}（{linesPer.Min():0}-{linesPer.Max():0}）\n");
+        report.Append($"- 占位符：{withSlot}/{scripts.Count} 部含占位（共 {slotUse} 处），越界无效占位 {slotBad} 部\n\n");
+        foreach (var raw in raws)
+            report.Append("### 第 ").Append(raw.Batch + 1).Append(" 炉原始输出（")
+                  .Append((raw.Ms / 1000.0).ToString("0.0", CultureInfo.InvariantCulture)).Append("s）\n\n```\n")
+                  .Append(raw.Raw.Trim()).Append("\n```\n\n");
+        return 0;
+    }
+
+    /// <summary>占位越界判定：{nameN} 的 N 超 cast（放送时填不到真人=无效占位，FillSlots 落"朋友" salvage）。</summary>
+    private static bool SlotInvalid(string text, int cast)
+    {
+        for (var n = cast + 1; n <= 9; n++)
+            if (text.Contains("{name" + n + "}"))
+                return true;
+        return false;
+    }
+
+    private static int RegexCount(string text, string slot)
+    {
+        var n = 0;
+        for (var i = 1; i <= 3; i++)
+            if (text.Contains(slot + i + "}"))
+                n++;
+        return n;
     }
 
     /// <summary>话题炉场景：真实 BuildTopicForgePrompt 发 K 炉，按行解析 zone 打分（分区熵是"别扎堆"的量化）。</summary>

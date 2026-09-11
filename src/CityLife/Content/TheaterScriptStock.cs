@@ -10,6 +10,9 @@ namespace CityLife.Content
     /// Scene=场景标签（station/park/shop/home/window，见 <see cref="TheaterScriptStock.Scenes"/>）；
     /// Cast=人数（2-3，放送时绑这么多真人；window 恒 2——1 外 1 内，§12 #56）；
     /// Lines=台词队列，Speaker=0 基角色序号（&lt; Cast）。
+    /// 台词可带占位符（§12 #60 刀⑥剧场槽位化）：{place}=场景真名、{name1..3}=第 N 个参与者真人名——
+    /// 生成时写槽、放送时填（BubbleTheaterSystem.FillSlots），库存通用性与在地具体感的换层解；
+    /// 解析侧不校验占位符（纯文本透传，40 字硬顶照常）。
     /// </summary>
     public sealed class TheaterScript
     {
@@ -167,8 +170,8 @@ namespace CityLife.Content
 
         /// <summary>
         /// 台词数组解析：定位 "lines" 的 [...] 区间，逐个 {...} 对象取 speaker/text。
-        /// 区间/对象边界按首个 ']'/'}' 切（JsonMini 同款启发式——台词含 ']'/'}' 字符会切歪，
-        /// 后果只是该部句数变少或整行落 skipped，salvage 纪律可接受）。
+        /// 区间/对象边界走引号感知扫描（字符串内的 ']'/'}' 不算边界——刀⑥实锤：占位符 {place}/{nameN}
+        /// 自带 '}'，朴素 IndexOf 把占位台词切成未闭合串整句丢弃；PromptEval 上线首日抓的实锤）。
         /// </summary>
         private static void ParseLines(string json, TheaterScript dst)
         {
@@ -176,7 +179,7 @@ namespace CityLife.Content
             if (k < 0)
                 return;
             var lb = json.IndexOf('[', k);
-            var rb = lb >= 0 ? json.IndexOf(']', lb) : -1;
+            var rb = lb >= 0 ? FindBracketEnd(json, lb, ']') : -1;
             if (lb < 0 || rb <= lb)
                 return;
             var i = lb + 1;
@@ -185,7 +188,7 @@ namespace CityLife.Content
                 var ob = json.IndexOf('{', i);
                 if (ob < 0 || ob >= rb)
                     break;
-                var cb = json.IndexOf('}', ob);
+                var cb = FindBracketEnd(json, ob, '}');
                 if (cb < 0 || cb > rb)
                     break; // 对象未闭合/越界——数组畸形，取已解析到的
                 var obj = json.Substring(ob, cb - ob + 1);
@@ -200,6 +203,32 @@ namespace CityLife.Content
                 }
                 i = cb + 1;
             }
+        }
+
+        /// <summary>引号感知的括号边界定位：从 open 起扫描，遇引号用 JsonMini.ParseString 整串跳过——
+        /// 字符串内的匹配括号不视作边界（占位符 {place}/{nameN} 自带 '}' 的实锤踩坑）。失败（串未闭合/越界）返回 -1。</summary>
+        private static int FindBracketEnd(string json, int open, char close)
+        {
+            var i = open + 1;
+            while (i < json.Length)
+            {
+                var c = json[i];
+                if (c == '"')
+                {
+                    if (JsonMini.ParseString(json, i, out var end) == null)
+                        return -1; // 串未闭合——畸形
+                    i = end;
+                }
+                else if (c == close)
+                {
+                    return i;
+                }
+                else
+                {
+                    i++;
+                }
+            }
+            return -1;
         }
     }
 }

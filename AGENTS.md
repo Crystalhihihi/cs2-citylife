@@ -30,5 +30,6 @@
 
 - `src/CityLife/` —— mod 本体（C#）
 - `tools/GameDllDump/` —— Game.dll 元数据只读 dump 工具（版本复核用，禁止用它反编译复制游戏逻辑）
+- `tools/PromptEval/` —— prompt 离线评测 harness（§12 #60：固定卡具离线发炉，猫密度/句长方差/分区熵/占位符合规等指标，改动前后对比）
 - `scripts/` —— spike/实测脚本
 - `docs/` —— 设计文档、发布页文案、spike 报告

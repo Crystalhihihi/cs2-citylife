@@ -609,7 +609,11 @@ namespace CityLife.GameBridge
                 m_Stock.Return(script); // 理论到不了，纯防御——名单不足退回不消耗
                 return;
             }
-            t.Script.AddRange(script.Lines);
+            for (var li = 0; li < script.Lines.Count; li++)
+            {
+                var (sp, text) = script.Lines[li];
+                t.Script.Add((sp, FillSlots(text, t.Participants, sceneName))); // 刀⑥槽位化：绑定即填真人真名场景名
+            }
             foreach (var p in t.Participants)
                 if (!t.Lines.ContainsKey(p.Anchor))
                 {
@@ -642,6 +646,22 @@ namespace CityLife.GameBridge
             foreach (var a in t.Anchors)
                 bubbles.RefreshAnchorText(a);
             Mod.Log.Info($"[剧场] 开播：{sceneName}（{cand.KindLabel}），{t.Participants.Count} 人 {t.Script.Count} 句：{string.Join("、", names)}");
+        }
+
+        /// <summary>占位填充（§12 #60 刀⑥剧场槽位化）：{place}→场景真名、{nameN}→第 N 个参与者真人名
+        /// （生成时写槽、放送时填——库存剧本的通用性与在地具体感的换层解）。
+        /// N 越界（模型写嗨了）落"朋友"salvage 不丢句；填充后超长不截（名字短，气泡排版自适应）。</summary>
+        private static string FillSlots(string text, System.Collections.Generic.List<Participant> participants, string sceneName)
+        {
+            if (text.Contains("{place}"))
+                text = text.Replace("{place}", sceneName);
+            for (var n = 1; n <= 3; n++)
+            {
+                var slot = "{name" + n + "}";
+                if (text.Contains(slot))
+                    text = text.Replace(slot, n <= participants.Count ? participants[n - 1].Name : "朋友");
+            }
+            return text;
         }
 
         /// <summary>场景地点名：店内与窗口（§12 #56 地点同为建筑）走 ShopNameOf（店内店名=租户公司名优先、

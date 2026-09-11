@@ -43,6 +43,9 @@ namespace CityLife.Llm
         public string Name => "KimiCli";
 
         /// <inheritdoc/>
+        public int MaxConcurrency => 1; // CLI 子进程轨串行（进程起停贵+缓存命中纪律）
+
+        /// <inheritdoc/>
         public bool IsAvailable() => ResolveExePath() != null;
 
         /// <inheritdoc/>

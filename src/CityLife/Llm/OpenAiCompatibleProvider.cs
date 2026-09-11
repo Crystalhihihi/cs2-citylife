@@ -39,6 +39,9 @@ namespace CityLife.Llm
 
         public string Name => $"OpenAiCompat({m_Model})";
 
+        /// <inheritdoc/>
+        public int MaxConcurrency => 3; // 纯 HTTP 无共享可变状态（HttpClient 静态复用线程安全），3 路削排队
+
         public bool IsAvailable()
             => !string.IsNullOrEmpty(m_Key) && !string.IsNullOrEmpty(m_Model) && m_Url.Length > 1;
 

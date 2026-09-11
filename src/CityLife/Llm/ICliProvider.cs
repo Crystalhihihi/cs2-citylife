@@ -6,7 +6,7 @@ namespace CityLife.Llm
     // ============================================================================
     // 如何接入新供给（社区扩展指南）
     //
-    // 1. 新建一个类实现 ICliProvider（三个成员：Name / IsAvailable / OneShotAsync）。
+    // 1. 新建一个类实现 ICliProvider（四个成员：Name / IsAvailable / OneShotAsync / MaxConcurrency）。
     // 2. 在宿主装配处（Mod.OnLoad 或设置页）把它注册进 CliGateway：
     //        var gateway = new CliGateway(new YourProvider());
     //        gateway.Start();
@@ -44,6 +44,13 @@ namespace CityLife.Llm
         /// <param name="prompt">完整 prompt（固定前缀 + 动态尾部，由调用方组织）。</param>
         /// <param name="ct">取消令牌（网关停止时触发）。</param>
         Task<CliResult> OneShotAsync(string prompt, CancellationToken ct);
+
+        /// <summary>
+        /// 供给自报的最大并发路数（网关泵线程数）。CLI 子进程轨=1（串行保缓存命中与进程卫生）；
+        /// 纯 HTTP API 轨可多路（实现必须无共享可变状态——HttpClient 静态复用是安全的）。
+        /// 2026-09-11 实机动机：单路串行×多炉排队是"池子浅"真凶之一（thinking 本身不慢）。
+        /// </summary>
+        int MaxConcurrency { get; }
     }
 
     /// <summary>

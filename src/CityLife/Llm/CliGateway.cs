@@ -116,7 +116,7 @@ namespace CityLife.Llm
         private readonly Queue<CliRequest> _low = new Queue<CliRequest>();
         private readonly Queue<CliCompletedResult> _completed = new Queue<CliCompletedResult>();
 
-        private Thread? _pump;
+        private Thread?[]? _pumps;
         private volatile bool _running;
         private CancellationTokenSource? _cts;
 
@@ -140,7 +140,7 @@ namespace CityLife.Llm
             get { lock (_gate) { return _high.Count + _normal.Count + _low.Count; } }
         }
 
-        /// <summary>启动后台泵线程。重复调用无效。</summary>
+        /// <summary>启动后台泵线程组（并发数由供给自报：API 轨多路削排队，CLI 轨单路串行）。重复调用无效。</summary>
         public void Start()
         {
             if (_running)
@@ -149,25 +149,30 @@ namespace CityLife.Llm
             }
             _cts = new CancellationTokenSource();
             _running = true;
-            _pump = new Thread(PumpLoop)
+            var workers = Math.Max(1, _provider.MaxConcurrency);
+            _pumps = new Thread[workers];
+            for (int i = 0; i < workers; i++)
             {
-                Name = "CityLife.CliGateway",
-                IsBackground = true, // 游戏退出时随进程回收，绝不拖住退出
-            };
-            _pump.Start();
-            Log?.Invoke($"[CliGateway] 已启动，供给={_provider.Name}（可用={_provider.IsAvailable()}）");
+                _pumps[i] = new Thread(PumpLoop)
+                {
+                    Name = $"CityLife.CliGateway.{i}",
+                    IsBackground = true, // 游戏退出时随进程回收，绝不拖住退出
+                };
+                _pumps[i].Start();
+            }
+            Log?.Invoke($"[CliGateway] 已启动，供给={_provider.Name}（可用={_provider.IsAvailable()}，并发={workers}）");
         }
 
-        /// <summary>停止后台泵。进行中的一发最多再等待 2s，随后随进程回收（one-shot 无副作用）。</summary>
+        /// <summary>停止后台泵组。进行中的一发最多再等待 2s，随后随进程回收（one-shot 无副作用）。</summary>
         public void Stop()
         {
             _running = false;
             _cts?.Cancel();
-            if (_pump != null && _pump.IsAlive)
-            {
-                _pump.Join(2000);
-            }
-            _pump = null;
+            if (_pumps != null)
+                foreach (var p in _pumps)
+                    if (p != null && p.IsAlive)
+                        p.Join(2000);
+            _pumps = null;
         }
 
         public void Dispose() => Stop();
@@ -273,6 +278,9 @@ namespace CityLife.Llm
                 {
                     Interlocked.Increment(ref _succeeded);
                     Interlocked.Add(ref _responseChars, result.ResponseChars);
+                    // 耗时可见化（2026-09-11 "thinking 慢"排查：实测延迟=LLM+排队+收炉节拍，逐项记账才分得清）
+                    Log?.Invoke($"[CliGateway] {req.Id} 完成：调用 {result.LatencyMs / 1000d:F1}s" +
+                        $"（排队 {((DateTime.UtcNow - req.EnqueueTime).TotalSeconds - result.LatencyMs / 1000d):F1}s）");
                 }
                 else
                 {

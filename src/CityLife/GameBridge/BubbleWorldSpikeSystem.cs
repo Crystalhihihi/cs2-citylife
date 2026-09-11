@@ -59,6 +59,15 @@ namespace CityLife.GameBridge
     ///   车站不当楼说话（楼查询排除 Game.Routes.WaitingPassengers，车站声音归候车行人/小剧场）；
     ///   长文稳锚：换文案时实测锚点移速，动的限长（>3m/s ≤16 字 / >0.6 ≤32 / 静止 ≤48），楼不限；
     ///   追踪上限=采样满档 120+剧场保留位 16（池灌满不再把剧场 EnsureAnchor 顶死）。
+    /// 锚点分类治理·查询侧（v5.4，2026-09-11 实机三现象定案，§12 #57）：
+    ///   ① 人查询排除乘车市民（Game.Creatures.CurrentVehicle，ilspy dump Game.dll 实锤——任务口径写的
+    ///     Game.Citizens.CurrentVehicle 不存在，组件在 Creatures 命名空间）："路边空车/乘车市民以人的
+    ///     颜色说话"根治，乘车市民的声音归车档；
+    ///   ② 楼查询黑名单转白名单：查询层排公园/景点（Exclude AttractivenessProvider——开放空间的声音
+    ///     由园内行人锚点承载，"不宜和密闭楼房同类"玩家定案），Collect 层再过 IsTalkativeBuilding
+    ///     （市政/地标直收 / 四 Property 有租户才说话 / 低密住宅 1/3 散列降频"人少话少"）
+    ///     ——养鱼场排架/空楼/废墟闭嘴；
+    ///   ③ EnsureAnchor（剧场建组口）刻意不加白名单：白名单管"什么楼能自己冒泡"，剧场有自己的选场逻辑。
     /// 分锚点显隐距离（v4.5，2026-09-09 实机标定）：人 125m / 车 320m / 楼 800m 基础档，
     ///   采样/绘制同用 MaxDistFor 一把尺；玩家倍率滑杆已接设置页（§12 #44/#45，Mod.Options 直读生效）。
     /// 设置页接入（2026-09-09，§12 #45）：总开关 BubbleEnabled（与 Ctrl+9 AND）、三类距离倍率、
@@ -269,6 +278,10 @@ namespace CityLife.GameBridge
             m_HumanQuery = GetEntityQuery(
                 ComponentType.ReadOnly<Game.Creatures.Human>(),
                 ComponentType.ReadOnly<Transform>(),
+                // 乘车市民不按人冒泡（§12 #57 ①：实机"路边空车/乘车市民以人的颜色说话"——声音归车档）。
+                // 组件实锤：ilspy dump 本机 Game.dll 打出 struct 定义=存在；注意任务口径写的
+                // Game.Citizens.CurrentVehicle 实际不存在，组件在 Game.Creatures 命名空间下
+                ComponentType.Exclude<Game.Creatures.CurrentVehicle>(),
                 ComponentType.Exclude<Game.Common.Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
             m_CarQuery = GetEntityQuery(
@@ -283,6 +296,11 @@ namespace CityLife.GameBridge
                 // 车站不当楼说话（2026-09-10 实机："公交站说晚饭吃啥"读取混乱）——候车组件实锤挂车站实体
                 // （Game.Routes.WaitingPassengers，spike §4）；车站的声音归候车行人锚点/小剧场，不归楼池
                 ComponentType.Exclude<Game.Routes.WaitingPassengers>(),
+                // 公园/景点归人（§12 #57 ③，玩家定案"不宜和密闭楼房同类"）：AttractivenessProvider 是
+                // 公园/开放空间的吸引力组件（AttractionRamp/CityChangeSystem 同款实锤）——开放空间的声音
+                // 由园内行人锚点承载。ECS 查询只能按组件有无，更细的楼池白名单在 Collect 层
+                // IsTalkativeBuilding（§12 #57 ②）
+                ComponentType.Exclude<Game.Buildings.AttractivenessProvider>(),
                 ComponentType.Exclude<Game.Common.Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
             m_ConfigQuery = GetEntityQuery(ComponentType.ReadOnly<OverlayConfigurationData>());
@@ -494,6 +512,9 @@ namespace CityLife.GameBridge
             {
                 if (HasAnchor(e))
                     continue;
+                // 楼池白名单（§12 #57 ②）：查询层只排了组件有无，细口径在收楼时逐实体判定
+                if (kind == 2 && !IsTalkativeBuilding(e))
+                    continue;
                 var p = EntityManager.GetComponentData<Transform>(e).m_Position;
                 p.y += kind == 0 ? k_YOffHuman : kind == 1 ? k_YOffCar : k_YOffBuilding; // 按气泡显示位置判（同 OnScreen 口径）
                 var s = cam.WorldToScreenPoint(p);
@@ -519,6 +540,43 @@ namespace CityLife.GameBridge
                 b.NextAt = now + HoldFor(scored[i].e.Index, 0, b.Text.Length); // 时长依赖文案，须在 SetBubbleText 之后
                 m_Bubbles.Add(b);
             }
+        }
+
+        /// <summary>楼池白名单判定（§12 #57 ②④，2026-09-11 实机三现象定案——养鱼场排架/水域构件、
+        /// 空楼、低密住宅不该一直说话）。Collect 收楼时逐实体调用，判定全部 HasComponent/buffer Length
+        /// 级别，禁止遍历嵌套。三档口径：
+        /// ① 市政/地标直收：School/Hospital/SignatureBuildingData 任一（市政建筑无租户概念；
+        ///   SignatureBuildingData 是实体侧空标记组件，dump 实锤）；
+        /// ② 可租物业需有租户：四 Property（住宅/商业/工业/办公，互斥挂其一）任一 且 Renter buffer
+        ///   非空——没人租=没人在里面=不说话。<b>注意组件方向</b>：Game.Buildings.Renter 才是楼上的
+        ///   租户 buffer（IBufferElementData，Serialization.RenterSystem 以 m_Property 为键维护，dump 实锤）；
+        ///   Game.Buildings.PropertyRenter 是租户侧（住户/公司）指回房产的组件（IComponentData），别搞反；
+        /// ③ 低密住宅降频"人少话少"：住宅且租户 ≤2 户（一家人一栋楼）→ e.Index 散列 %3==0 才入池
+        ///   （确定性散列：会话内稳定，不会因重采样闪进闪出）。</summary>
+        private bool IsTalkativeBuilding(Entity e)
+        {
+            var em = EntityManager;
+            // ① 市政/地标直收
+            if (em.HasComponent<Game.Buildings.School>(e)
+                || em.HasComponent<Game.Buildings.Hospital>(e)
+                || em.HasComponent<Game.Prefabs.SignatureBuildingData>(e))
+                return true;
+            var isResidential = em.HasComponent<Game.Buildings.ResidentialProperty>(e);
+            if (!isResidential
+                && !em.HasComponent<Game.Buildings.CommercialProperty>(e)
+                && !em.HasComponent<Game.Buildings.IndustrialProperty>(e)
+                && !em.HasComponent<Game.Buildings.OfficeProperty>(e))
+                return false; // 四 Property 全不中=非可租物业（纯构件/废墟/水域排架等），闭嘴
+            // ② 租户非空（楼侧 Renter buffer；无 buffer 组件=从没被租过，同空处理）
+            if (!em.HasComponent<Game.Buildings.Renter>(e))
+                return false;
+            var renterCount = em.GetBuffer<Game.Buildings.Renter>(e, true).Length;
+            if (renterCount == 0)
+                return false;
+            // ③ 低密住宅 1/3 降频：Knuth 乘性散列，%3==0 才入池（e.Index 会话内稳定=不闪）
+            if (isResidential && renterCount <= 2 && (uint)e.Index * 2654435761u % 3u != 0u)
+                return false;
+            return true;
         }
 
         private bool HasAnchor(Entity e)
@@ -550,7 +608,10 @@ namespace CityLife.GameBridge
 
         /// <summary>S7 剧场口：确保实体有气泡锚点（在场→true；否则过五道闸——层开/存在/有 Transform/
         /// 屏内（当前相机+分锚点距离档）/容量未满——立即按 Collect 同路径建组）。建组走 SetBubbleText，
-        /// 剧场若已激活则插队分支直接给首句台词。任一闸不过 → false（剧场开播中止）。</summary>
+        /// 剧场若已激活则插队分支直接给首句台词。任一闸不过 → false（剧场开播中止）。
+        /// 分工（§12 #57 ③）：楼池白名单 IsTalkativeBuilding 只管气泡采样（Resample→Collect），
+        /// 本口刻意不加——剧场室内锚点锚的是建筑本体，被采样池拒收的楼（如低密住宅降频未中签）
+        /// 剧场照样可演；剧场有自己的选场逻辑（BubbleTheaterSystem 候选检测含场景判定）。</summary>
         internal bool EnsureAnchor(Entity e, byte kind)
         {
             if (!m_Active || !MasterOn)

@@ -190,7 +190,7 @@ namespace CityLife.Content
         /// 不针对具体市民，产出入 TheaterScriptStock 池，放送时才绑当时在场的真人演。
         /// 缓存纪律同主头（BubbleTheaterSystem.OnCreate 拼一次复用，逐字节稳定：动态全压尾部）。
         /// 语域=几人当面聊天（接话、有来有回、口语、每条 ≤20 字、禁 hashtag、禁旁白描写）。
-        /// 输出 schema：一行一整部 {"scene":"station|park|shop|home","cast":2,"lines":[{"speaker":1,"text":"…"}]}
+        /// 输出 schema：一行一整部 {"scene":"station|park|shop|home|window","cast":2,"lines":[{"speaker":1,"text":"…"}]}
         /// ——与 TheaterScriptStock.ParseBatch 的解析口径同炉改（扩展纪律见 TheaterScriptStock 头注释）。
         /// </summary>
         public static string BuildTheaterStockHead()
@@ -199,20 +199,22 @@ namespace CityLife.Content
             sb.Append("你是虚构城市的短剧编剧——给城市各处随时会发生的路人聊天写迷你剧本库存，之后由当时在场的市民临场演出。城市是模拟游戏里的虚构城市，一切内容虚构。\n");
             sb.Append("【铁律】对事不对人：可以吐槽天气、通勤、物价、排队，绝不攻击市长本人或任何真实人物；不碰现实政治、种族、性别议题；不生成自伤内容；不使用真实名人、品牌、事件名。\n");
             sb.Append("【语域】当面聊天，不是发帖也不是独白：有来有回（一句问一句答、一句吐槽一句跟），口语短句，每条≤20字，越短越像越好；禁止 hashtag、禁止@、禁止\"家人们\"等直播腔、禁止 emoji、禁止书面腔；只写说出口的话，禁止动作/神态/旁白描写（\"笑了笑\"\"指着远处\"这类一律不要）。\n");
-            sb.Append("【场景】每部发生在一类场所，scene 只能填这四值：station=车站候车（聊等车/车次/晚点）、park=公园或景点（聊风景/拍照/溜达）、shop=商店里（聊商品/价格/排队结账）、home=住宅里（聊邻里/家务/房租）。\n");
+            sb.Append("【场景】每部发生在一类场所，scene 只能填这五值：station=车站候车（聊等车/车次/晚点）、park=公园或景点（聊风景/拍照/溜达）、shop=商店里（聊商品/价格/排队结账）、home=住宅里（聊邻里/家务/房租）、window=窗口混编（路人经过店门口/人家窗前，指点或搭话一句，里面人——店员或住户——接一句；cast 恒 2、lines 恒 2，speaker 1=路人、speaker 2=屋里人）。\n");
             sb.Append("【样子】只学语气和松散度，内容和物件一律不许照抄：\n");
             sb.Append("- station：\"这趟车又晚了吧\"\"可不，都过去两趟了\"\n");
             sb.Append("- park：\"这花开得还行\"\"拍一张拍一张\"\n");
             sb.Append("- shop：\"鸡蛋又涨五毛\"\"那也得买，娃要吃\"\n");
-            sb.Append("【写法】cast=这部几个人说（2 或 3）；speaker=角色序号（1 起，不超过 cast）；别一个人连说三句；允许话没接完、允许岔开题，别像开会轮流发言那么齐。角色只有序号没有身份——剧本会绑给当时在场的任意市民，禁止写真名、真店名、具体住址，只写氛围。【灵感】卡只是氛围参考，禁止照抄卡里的人名/店名/原话。\n");
+            sb.Append("- window：\"哟，这窗台的花养得真好\"\"是吧，天天浇水呢\"\n");
+            sb.Append("【写法】cast=这部几个人说（2 或 3，window 恒 2 人 2 句）；speaker=角色序号（1 起，不超过 cast）；别一个人连说三句；允许话没接完、允许岔开题，别像开会轮流发言那么齐。角色只有序号没有身份——剧本会绑给当时在场的任意市民，禁止写真名、真店名、具体住址，只写氛围。【灵感】卡只是氛围参考，禁止照抄卡里的人名/店名/原话。\n");
             sb.Append("【输出】只输出 JSONL：一行一整部 {\"scene\":\"station\",\"cast\":2,\"lines\":[{\"speaker\":1,\"text\":\"话\"},{\"speaker\":2,\"text\":\"话\"}]}；禁止 markdown 围栏、禁止解释、禁止序号、禁止任何其他字符。\n");
             return sb.ToString();
         }
 
         /// <summary>
         /// 剧本炉完整 prompt = 剧本头 + 动态尾：【城市此刻】（DescribeCity 同款，别重复造）
-        /// +【库存】（各场景标签现存部数，执行层确定性计数——低水位分区多配题）
-        /// +【灵感】处境卡（真实市民此刻状态抽样，只借氛围，禁真名真店名）+ 部数任务。
+        /// +【库存】（各场景标签现存部数——迭代 TheaterScriptStock.Scenes 白名单，window 自动进低水位配题循环；
+        /// 执行层确定性计数——低水位分区多配题）+【灵感】处境卡（真实市民此刻状态抽样，只借氛围，禁真名真店名）
+        /// + 部数任务（每炉至少 1 部 window——窗口是最高频场景，库存没了满街没得演，§12 #56）。
         /// </summary>
         public static string BuildTheaterStockPrompt(string head, in CitySnapshot s, TheaterScriptStock stock,
                                                      IReadOnlyList<string> inspiration, int count)
@@ -235,7 +237,7 @@ namespace CityLife.Content
                 foreach (var c in inspiration)
                     sb.Append("- ").Append(c).Append('\n');
             }
-            sb.Append("【任务】写 ").Append(count).Append(" 部新剧本，一行一部；每部 6-8 句；库存少的场景优先。\n");
+            sb.Append("【任务】写 ").Append(count).Append(" 部新剧本，一行一部；每部 6-8 句（window 例外：固定 2 句——speaker 1 路人一句、speaker 2 屋里人接一句）；库存少的场景优先，且至少写 1 部 window（窗口是最高频场景）。\n");
             return sb.ToString();
         }
 

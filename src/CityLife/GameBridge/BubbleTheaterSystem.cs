@@ -39,7 +39,7 @@ namespace CityLife.GameBridge
     ///    行人 agent 回指市民（S6 实锤候车行人在树里），按离地点距离升序取 2-4 人，锚点=agent 本体；
     ///    店内 = CurrentBuilding==该建筑的市民 2-4 人，锚点=建筑本体（室内市民无 agent，多人共锚）。
     ///    参与者已在他组的跳过。场景标签映射：车站候车→station、公园/景点→park、商店→shop、
-    ///    住宅区→home；其余室内类型（学校/医院/办公楼等）无标签=本拍跳过。候选成立 →
+    ///    住宅区→home、窗口混编→window（见⑥）；其余室内类型（学校/医院/办公楼等）无标签=本拍跳过。候选成立 →
     ///    stock.TryTake(标签, 名单人数)：场景严格相符+cast≤人数确定性取一条；无匹配=本拍跳过
     ///    （不打炉！炉只由水位触发，放送侧绝不开炉）。
     /// ④ 开播：取到剧本即绑名单建剧场——Participants/Lines 初始化其余锚点显"……"（在听）+
@@ -53,6 +53,14 @@ namespace CityLife.GameBridge
     /// ⑤ 终了：剧本播完 / 任一参与者实体失效 / 任一锚点离屏（气泡系统 Resample 裁掉即检测不到）
     ///    / 地点实体失效（车站被拆）——锚点失效即锁（#28）：终了即给地点上冷却 ≈3 炉节拍防连开；
     ///    播过的剧本即弃不退池。
+    /// ⑥ 窗口混编（§12 #56，2026-09-11 定案，新形态排序第一）：从可见行人锚点（kind=0）出发，
+    ///    20m 静树查最近一栋"有人气"的商店/住宅（其余业态/车站/公园跳过——复用 IndoorSceneTag
+    ///    室内分类映射当白名单）+ 屋内 ≥1 个空闲市民（CurrentBuilding==该楼、不在组）→ 1 外 1 内
+    ///    混编名单（路人锚行人 agent kind=0、屋里人锚建筑本体 kind=2——Theater 混合锚点架构现成），
+    ///    地点=建筑（冷却/占用判它），标签 window，cast=2/lines=2 短剧（1 轮，路人不逗留；schema
+    ///    恒值校验在 TheaterScriptStock）。剧本炉每炉至少配 1 部 window（最高频场景，库存没了满街
+    ///    没得演）。窗口候选与室外/店内候选同台竞争（DistToCam 近者优先，沿用 best 比较），评估拍
+    ///    节奏/同屏 ≤2/冷却不变，开播/播放/终了全部复用现有机制零改动。
     ///
     /// 上限与降级：同屏活剧场 ≤2（k_MaxActive）；同时在飞最多一炉剧本炉；池空/供给不可用=不开
     /// （不致命，单人吐槽管道照常）。只在评估/收炉低频点查树与扫市民，不进任何每帧/渲染热路径；
@@ -68,6 +76,7 @@ namespace CityLife.GameBridge
         private const int k_MaxParticipants = 4;
         private const float k_ScanRadius = 40f;  // 选锚点扫描半径（环境圈同尺，S6 定值）
         private const float k_BindRadius = 30f;  // 绑名单半径：参与者须离地点 30m 内（"共位"）
+        private const float k_WindowScanRadius = 20f; // 窗口混编找楼半径（§12 #56 定 15-20m，取上沿：树里是楼心不是门脸，临街楼心离人行道常超 15m）
         private const int k_MaxAnchorScan = 8;   // 每拍最多扫几个可见锚点（帧预算闸）
         private const int k_MinWaiting = 2;      // 车站候车人气门槛（#48"≥2 人"）
         private const uint k_CooldownMinutes = 12; // 锚点冷却 ≈3 炉节拍（3-4-5 分钟轮换 ×3），防连开
@@ -126,12 +135,13 @@ namespace CityLife.GameBridge
             public Entity Location;
             public float3 Pos;
             public string KindLabel = "";
-            public string SceneTag = "";     // 剧本池场景标签（station/park/shop/home）；""=无标签（本拍不可用）
+            public string SceneTag = "";     // 剧本池场景标签（station/park/shop/home/window）；""=无标签（本拍不可用）
             public float DistToCam;
             public readonly List<(Entity Citizen, Entity Anchor, bool Indoor)> Roster = new();
         }
 
-        /// <summary>店内分组用：建筑 → 楼内市民（名单封顶 k_MaxParticipants，计数全记）。</summary>
+        /// <summary>楼内市民分组（店内候选与窗口混编⑥共用，BuildIndoorGroups 每评估拍最多建一次）：
+        /// 建筑 → 楼内市民（名单封顶 k_MaxParticipants，计数全记）。</summary>
         private sealed class IndoorGroup
         {
             public int Count;
@@ -249,9 +259,11 @@ namespace CityLife.GameBridge
 
         // —— ② 放送选锚点 ——
 
-        /// <summary>放送评估拍主流程：可见锚点快照 → 室外候选（车站/公园景点，按离镜头近扫）+ 店内候选
-        /// （CurrentBuilding 分组），取离镜头最近且绑得够 2 人的 → 按场景标签向剧本池取件：无匹配剧本=
-        /// 本拍跳过（不打炉！炉只由水位触发）；取到即绑名单开播（零 LLM 等待，绑定即复核）。</summary>
+        /// <summary>放送评估拍主流程：可见锚点快照 → 室外候选（车站/公园景点，按离镜头近扫）+ 窗口混编候选
+        /// （行人锚点旁"有人气"的商店/住宅，§12 #56）+ 店内候选（CurrentBuilding 分组）——窗口与店内共用
+        /// 每拍最多一次的楼内市民分组（BuildIndoorGroups 懒建）。三类同台竞争，取离镜头最近且绑得够人的 →
+        /// 按场景标签向剧本池取件：无匹配剧本=本拍跳过（不打炉！炉只由水位触发）；取到即绑名单开播
+        /// （零 LLM 等待，绑定即复核）。</summary>
         private void TryCast()
         {
             m_BubbleWorld ??= World.GetExistingSystemManaged<BubbleWorldSpikeSystem>();
@@ -274,16 +286,24 @@ namespace CityLife.GameBridge
             var scanCount = math.min(k_MaxAnchorScan, m_AnchorSnap.Count);
             var statics = new NativeList<Entity>(32, Allocator.Temp);
             var movers = new NativeList<Entity>(32, Allocator.Temp);
+            Dictionary<Entity, IndoorGroup>? indoorGroups = null; // 楼内市民分组：窗口/店内候选共用，每拍最多全量扫一次（懒建）
             for (int i = 0; i < scanCount; i++)
             {
                 var cand = ScanOutdoor(m_AnchorSnap[i].Pos, camPos, statics, movers);
                 if (cand != null && (best == null || cand.DistToCam < best.DistToCam))
                     best = cand;
+                if (m_AnchorSnap[i].Kind == 0) // 窗口混编只从可见行人锚点出发（§12 #56：1 外 1 内）
+                {
+                    indoorGroups ??= BuildIndoorGroups();
+                    var win = ScanWindow(m_AnchorSnap[i], camPos, statics, movers, indoorGroups);
+                    if (win != null && (best == null || win.DistToCam < best.DistToCam))
+                        best = win;
+                }
             }
             statics.Dispose();
             movers.Dispose();
 
-            var indoor = ScanIndoor(camPos);
+            var indoor = ScanIndoor(camPos, indoorGroups ?? BuildIndoorGroups());
             if (indoor != null && (best == null || indoor.DistToCam < best.DistToCam))
                 best = indoor;
 
@@ -344,7 +364,7 @@ namespace CityLife.GameBridge
             Entity loc;
             float3 locPos;
             string label;
-            string tag; // 剧本池场景标签（TheaterScriptStock 四值）
+            string tag; // 剧本池场景标签（TheaterScriptStock 白名单值）
             if (station != Entity.Null) { loc = station; locPos = stationPos; label = "车站候车"; tag = Content.TheaterScriptStock.Station; }
             else if (park != Entity.Null) { loc = park; locPos = parkPos; label = parkIsSignature ? "景点" : "公园"; tag = Content.TheaterScriptStock.Park; }
             else return null;
@@ -396,10 +416,10 @@ namespace CityLife.GameBridge
                     dst.Add((scored[i].Citizen, scored[i].Agent, false));
         }
 
-        /// <summary>店内候选：市民查询按 CurrentBuilding 分组计数（剧场级低频全量扫，3-5 游戏分钟才一次），
-        /// ≥2 人且落在某个可见锚点 40m 内的建筑才算；绑人=楼内市民（锚点=建筑本体，多人共锚），
-        /// 取离镜头最近的一栋。全不中 → null。</summary>
-        private Candidate? ScanIndoor(float3 camPos)
+        /// <summary>楼内市民分组（剧场级低频全量扫，3-5 游戏分钟才一次；窗口⑥/店内候选共用，每评估拍
+        /// 最多建一次）：建筑 → 楼内市民（Count 全记，Members 只收空闲的——不在组，封顶 k_MaxParticipants）。
+        /// 外部连接等非建筑实体剔除（spike §1 兜底纪律）；读不到位置的没法演。</summary>
+        private Dictionary<Entity, IndoorGroup> BuildIndoorGroups()
         {
             var arr = m_IndoorQuery.ToEntityArray(Allocator.Temp);
             var groups = new Dictionary<Entity, IndoorGroup>();
@@ -407,7 +427,6 @@ namespace CityLife.GameBridge
             {
                 var e = arr[i];
                 var b = EntityManager.GetComponentData<CurrentBuilding>(e).m_CurrentBuilding;
-                // 外部连接等非建筑实体剔除（spike §1 兜底纪律）；读不到位置的没法演
                 if (!EntityManager.HasComponent<Game.Buildings.Building>(b)
                     || !EntityManager.HasComponent<Transform>(b))
                     continue;
@@ -421,7 +440,13 @@ namespace CityLife.GameBridge
                     g.Members.Add(e);
             }
             arr.Dispose();
+            return groups;
+        }
 
+        /// <summary>店内候选：从楼内市民分组里挑 ≥2 人且落在某个可见锚点 40m 内的建筑才算；
+        /// 绑人=楼内市民（锚点=建筑本体，多人共锚），取离镜头最近的一栋。全不中 → null。</summary>
+        private Candidate? ScanIndoor(float3 camPos, Dictionary<Entity, IndoorGroup> groups)
+        {
             Candidate? best = null;
             foreach (var kv in groups)
             {
@@ -452,6 +477,84 @@ namespace CityLife.GameBridge
             return best;
         }
 
+        /// <summary>窗口混编候选（§12 #56）：以一个可见行人锚点（kind=0）为圆心查 20m 静树，取最近一栋
+        /// "有人气"的商店/住宅（车站/公园/其他业态跳过——复用 IndoorSceneTag 室内分类映射当白名单），
+        /// 且屋内 ≥1 个空闲市民（groups 的 Members 已滤在组）。名单=[（路人市民, 行人 agent, 室外）,
+        /// （屋内市民, 建筑本体, 室内）]——1 外 1 内混编（混合锚点现成：agent kind=0、建筑 kind=2；
+        /// 顺序即角色序号，prompt 头写明 speaker 1=路人、speaker 2=屋里人）。地点=建筑（冷却/占用判它），
+        /// 标签 window。路人不成立/圈内没有够格的楼 → null。</summary>
+        private Candidate? ScanWindow((Entity Anchor, byte Kind, float3 Pos) a, float3 camPos,
+                                      NativeList<Entity> statics, NativeList<Entity> movers,
+                                      Dictionary<Entity, IndoorGroup> groups)
+        {
+            // 路人侧：行人 agent 回指市民（BindOutdoorRoster 同款防御：Human 排动物、Resident 排载具、Transform 可锚定）
+            var agent = a.Anchor;
+            if (!EntityManager.HasComponent<Game.Creatures.Human>(agent)
+                || !EntityManager.HasComponent<Game.Creatures.Resident>(agent)
+                || !EntityManager.HasComponent<Transform>(agent))
+                return null;
+            var pedestrian = EntityManager.GetComponentData<Game.Creatures.Resident>(agent).m_Citizen;
+            if (pedestrian == Entity.Null || !EntityManager.HasComponent<Citizen>(pedestrian) || InUse(pedestrian))
+                return null;
+            if (m_ByAnchor.ContainsKey(agent))
+                return null; // 这个行人已经在别的剧场里演着
+
+            statics.Clear();
+            movers.Clear();
+            m_Environment.CollectAround(a.Pos, k_WindowScanRadius, statics, movers);
+
+            // 圈内最近一栋"有人气"的商店/住宅（有人气=屋内 ≥1 个空闲市民）
+            var loc = Entity.Null;
+            var locPos = float3.zero;
+            string? locKind = null;
+            var indoorCitizen = Entity.Null;
+            var bestD2 = float.MaxValue;
+            for (int i = 0; i < statics.Length; i++)
+            {
+                var e = statics[i];
+                if (!EntityManager.HasComponent<Game.Buildings.Building>(e)
+                    || !EntityManager.HasComponent<Transform>(e))
+                    continue;
+                var kind = CitizenPoolSystem.ClassifyBuilding(EntityManager, e);
+                if (IndoorSceneTag(kind).Length == 0)
+                    continue; // 只要商店/住宅，车站/公园/学校/医院/办公楼等跳过
+                if (OnCooldown(e) || LocationInUse(e) || m_ByAnchor.ContainsKey(e))
+                    continue;
+                if (!groups.TryGetValue(e, out var g))
+                    continue;
+                var member = Entity.Null;
+                foreach (var m in g.Members)
+                    if (m != pedestrian) { member = m; break; } // 顺带排掉路人自己（理论到不了，纯防御）
+                if (member == Entity.Null)
+                    continue; // 屋里没有空闲市民
+                var p = EntityManager.GetComponentData<Transform>(e).m_Position;
+                var d = p - a.Pos;
+                var d2 = math.dot(d, d);
+                if (d2 < bestD2)
+                {
+                    bestD2 = d2;
+                    loc = e;
+                    locPos = p;
+                    locKind = kind;
+                    indoorCitizen = member;
+                }
+            }
+            if (loc == Entity.Null)
+                return null;
+
+            var cand = new Candidate
+            {
+                Location = loc,
+                Pos = locPos,
+                KindLabel = locKind + "窗口", // 商店窗口/住宅区窗口（日志+场景名兜底用）
+                SceneTag = Content.TheaterScriptStock.Window,
+                DistToCam = math.distance(camPos, locPos),
+            };
+            cand.Roster.Add((pedestrian, agent, false));   // speaker 1=路人
+            cand.Roster.Add((indoorCitizen, loc, true));   // speaker 2=屋里人
+            return cand;
+        }
+
         /// <summary>地点是否落在任一可见锚点 k_ScanRadius 内（店内候选的"离镜头近"判据）。</summary>
         private bool NearAnyVisibleAnchor(float3 pos)
         {
@@ -468,7 +571,8 @@ namespace CityLife.GameBridge
         // —— ③ 取件开播（放送时绑定，绑定即复核） ——
 
         /// <summary>室内建筑类型词 → 剧本场景标签（§12 #52 定案只四类分区）：商店→shop、住宅区→home；
-        /// 学校/医院/工厂/办公楼/未分类 → ""（池无此分区，候选本拍跳过——扩新分区见 TheaterScriptStock 头注释，三处同改）。</summary>
+        /// 学校/医院/工厂/办公楼/未分类 → ""（池无此分区，候选本拍跳过——扩新分区见 TheaterScriptStock 头注释，三处同改）。
+        /// 窗口混编（§12 #56）不复用返回值，只把本映射当"有人气建筑"白名单——非 ""（商店/住宅）才够格（见 ScanWindow）。</summary>
         private static string IndoorSceneTag(string? kind) => kind switch
         {
             "商店" => Content.TheaterScriptStock.Shop,
@@ -540,12 +644,13 @@ namespace CityLife.GameBridge
             Mod.Log.Info($"[剧场] 开播：{sceneName}（{cand.KindLabel}），{t.Participants.Count} 人 {t.Script.Count} 句：{string.Join("、", names)}");
         }
 
-        /// <summary>场景地点名：店内=店名（租户公司名优先），车站/公园=渲染名；读不到或拿到未本地化的
+        /// <summary>场景地点名：店内与窗口（§12 #56 地点同为建筑）走 ShopNameOf（店内店名=租户公司名优先、
+        /// 住宅落住户姓，无名回退渲染名），车站/公园=渲染名；读不到或拿到未本地化的
         /// 资源键（"Assets.NAME[...]"——部分资产无本地化名的实机实锤，2026-09-11 Commercial_ChemicalStore）
         /// → 类型词兜底（不硬造，脏键绝不进 prompt）。</summary>
         private string SceneNameOf(Candidate cand)
         {
-            string? name = cand.KindLabel.EndsWith("内")
+            string? name = cand.KindLabel.EndsWith("内") || cand.SceneTag == Content.TheaterScriptStock.Window
                 ? EnvironmentDigestSystem.ShopNameOf(EntityManager, m_NameSystem, cand.Location)
                 : EnvironmentDigestSystem.RenderedName(m_NameSystem, cand.Location);
             return name == null || name.Contains("Assets.") ? cand.KindLabel : name;

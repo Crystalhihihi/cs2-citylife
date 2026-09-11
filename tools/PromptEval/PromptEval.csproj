@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>PromptEval</AssemblyName>
+  </PropertyGroup>
+
+  <!-- 复用 mod 本体的纯 C# 文件（Content/Util/Llm 零 Unity 依赖，架构铁律 4 的副产品）：
+       prompt 组装、批次解析、provider 调用全部走生产代码路径——评测的即是实机所发。
+       新增依赖文件时保持纪律：只链 Content/Util/Llm 三个目录，GameBridge 一律不许进 -->
+  <ItemGroup>
+    <Compile Include="..\..\src\CityLife\Content\PromptBuilder.cs" Link="Content\PromptBuilder.cs" />
+    <Compile Include="..\..\src\CityLife\Content\Persona.cs" Link="Content\Persona.cs" />
+    <Compile Include="..\..\src\CityLife\Content\PostForm.cs" Link="Content\PostForm.cs" />
+    <Compile Include="..\..\src\CityLife\Content\Topic.cs" Link="Content\Topic.cs" />
+    <Compile Include="..\..\src\CityLife\Content\CitySnapshot.cs" Link="Content\CitySnapshot.cs" />
+    <Compile Include="..\..\src\CityLife\Content\EventPack.cs" Link="Content\EventPack.cs" />
+    <Compile Include="..\..\src\CityLife\Content\TheaterScriptStock.cs" Link="Content\TheaterScriptStock.cs" />
+    <Compile Include="..\..\src\CityLife\Content\TopicReservoir.cs" Link="Content\TopicReservoir.cs" />
+    <Compile Include="..\..\src\CityLife\Content\BubbleSnippetPool.cs" Link="Content\BubbleSnippetPool.cs" />
+    <Compile Include="..\..\src\CityLife\Util\JsonMini.cs" Link="Util\JsonMini.cs" />
+    <Compile Include="..\..\src\CityLife\Llm\ICliProvider.cs" Link="Llm\ICliProvider.cs" />
+    <Compile Include="..\..\src\CityLife\Llm\ProviderConfig.cs" Link="Llm\ProviderConfig.cs" />
+    <Compile Include="..\..\src\CityLife\Llm\OpenAiCompatibleProvider.cs" Link="Llm\OpenAiCompatibleProvider.cs" />
+    <Compile Include="..\..\src\CityLife\Llm\KimiCliProvider.cs" Link="Llm\KimiCliProvider.cs" />
+  </ItemGroup>
+
+</Project>

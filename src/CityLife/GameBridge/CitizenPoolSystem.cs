@@ -251,8 +251,9 @@ namespace CityLife.GameBridge
             return vehicle != Entity.Null && em.HasComponent<Game.Vehicles.Vehicle>(vehicle) ? vehicle : Entity.Null;
         }
 
-        /// <summary>目的地建筑类型词（"商店"）；无 Target/非建筑/未分类 → null（该维度省略）。</summary>
-        private static string? DestinationPlace(EntityManager em, Entity e)
+        /// <summary>目的地建筑类型词（"商店"）；无 Target/非建筑/未分类 → null（该维度省略）。
+        /// internal static 共享：BubbleChatterSystem 车卡组卡（载具目的地）同用（一处定义别复制粘贴）。</summary>
+        internal static string? DestinationPlace(EntityManager em, Entity e)
         {
             if (!em.HasComponent<Game.Common.Target>(e))
                 return null;

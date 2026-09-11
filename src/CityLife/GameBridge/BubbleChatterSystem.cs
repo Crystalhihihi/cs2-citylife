@@ -43,6 +43,7 @@ namespace CityLife.GameBridge
         private const int k_MinWalkCards = 3;    // 每炉 Walk 场合保底卡数（同上）
 
         private EntityQuery m_CitizenQuery = default!;
+        private EntityQuery m_VehicleQuery = default!; // 车卡源（载具本体采样——司机多是过境/服务人口，市民池天然车 0，[Pool] 日志实锤）
         private TopicRadarSystem m_Radar = default!;
         private CitizenPoolSystem m_CitizenPool = default!;
         private ContentDirectorSystem m_Director = default!; // 话题库持有方（别重复造，配题抽同一货架）
@@ -71,6 +72,11 @@ namespace CityLife.GameBridge
                 ComponentType.Exclude<Game.Common.Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
             RequireForUpdate(m_CitizenQuery);
+            // 车卡源查询（不加 RequireForUpdate：没车的城也得产人卡，只闸市民查询）
+            m_VehicleQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Vehicles.Vehicle>(),
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
             m_Radar = World.GetOrCreateSystemManaged<TopicRadarSystem>();
             m_CitizenPool = World.GetOrCreateSystemManaged<CitizenPoolSystem>();
             m_Director = World.GetOrCreateSystemManaged<ContentDirectorSystem>();
@@ -151,6 +157,9 @@ namespace CityLife.GameBridge
                 topics.Add(topic);
                 m_CurrentZones.Add(ZoneOf(topic)); // 分区回填备收炉按 card 对齐（执行层查表，不赌模型复述）
             }
+            // 车卡（车载泡根治 v2：车里多是过境/服务司机，市民池天然车 0——[Pool] 日志实锤连续车 0，
+            // 人卡保底找不到候选；车锚的声源必须是车自己：从载具本体采样组卡，场合恒 Vehicle）
+            AppendVehicleCards(cards, topics, ref digested);
 
             m_Pool.CurrentCycle = m_ForgeCount; // BornCycle 基准锚本炉
             var rumorsNow = Content.CityRumors.Recent(3); // 刀②城市记忆：最新 3 条传闻当话料
@@ -215,13 +224,13 @@ namespace CityLife.GameBridge
             return "";
         }
 
-        /// <summary>场合供给侧保底（2026-09-11 车载泡被吃回归的修复）：每炉 Vehicle/Walk 各保 k_MinVehicleCards/k_MinWalkCards 张
-        /// （池里有才保，没有不硬造）。根因链：生产端按市民池分布（夜晚室内占大头），消费端按锚点分布（满街车锚吃 Vehicle），
-        /// 刀①拆除 Any 桥梁+§12 #53 一次性消耗下，Vehicle/Walk 片段入不敷出=车锚全落沉默泡。
-        /// 保底=确定性换坑：从炉计数锚定偏移顺找未选中的对应场合市民，替换室内槽位（室内是夜晚绝对多数派，换得起）。</summary>
+        /// <summary>场合供给侧保底：每炉 Walk 保 k_MinWalkCards 张（池里有才保，没有不硬造）。
+        /// 根因链：生产端按市民池分布（夜晚室内占大头），消费端按锚点分布（街面人锚吃 Walk），
+        /// 刀①拆除 Any 桥梁+§12 #53 一次性消耗下，Walk 片段入不敷出=人锚全落沉默泡。
+        /// （Vehicle 不在这里保——市民池天然车 0，车卡改从载具本体采样，见 AppendVehicleCards。）
+        /// 保底=确定性换坑：从炉计数锚定偏移顺找未选中的走路市民，替换室内槽位（室内是夜晚绝对多数派，换得起）。</summary>
         private static void EnsureOccasionSupply(IReadOnlyList<CitizenContext> entries, List<CitizenContext> picked, uint salt)
         {
-            EnsureOccasion(entries, picked, salt, Content.BubbleOccasion.Vehicle, k_MinVehicleCards);
             EnsureOccasion(entries, picked, salt + 7919u, Content.BubbleOccasion.Walk, k_MinWalkCards);
         }
 
@@ -268,6 +277,58 @@ namespace CityLife.GameBridge
             for (int i = 0; i < m_CurrentOccasions.Count; i++)
                 t[(int)m_CurrentOccasions[i]]++;
             return t;
+        }
+
+        /// <summary>车卡组卡追加（车载泡根治 v2）：从载具本体采样 ≤k_MinVehicleCards 张，场合恒 Vehicle。
+        /// 只收四类民用载具（私家车/出租车/公交/货车——警车/垃圾车等服务车说话="空车说话"同款诡异，不收）；
+        /// 跨步抽样+炉计数锚定（与人卡同款确定性）；车也吃 S6 环境圈摘要（Transform 现位直读，不进热路径）。</summary>
+        private void AppendVehicleCards(List<string> cards, List<string> topics, ref int digested)
+        {
+            var arr = m_VehicleQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
+            var n = System.Math.Min(k_MinVehicleCards, arr.Length);
+            var stride = System.Math.Max(1, arr.Length / System.Math.Max(1, n));
+            var start = arr.Length > 0 ? (int)(m_ForgeCount % (uint)arr.Length) : 0;
+            var added = 0;
+            for (int i = start; i < arr.Length && added < n; i += stride)
+            {
+                var card = DescribeVehicle(arr[i], out var parked);
+                if (card == null)
+                    continue; // 服务车/特种车：v1 不收
+                if (EntityManager.HasComponent<Transform>(arr[i]))
+                {
+                    var digest = m_Environment.BuildDigest(EntityManager.GetComponentData<Transform>(arr[i]).m_Position);
+                    if (digest.Length > 0)
+                    {
+                        card += "｜旁边：" + digest;
+                        digested++;
+                    }
+                }
+                cards.Add(card);
+                m_CurrentOccasions.Add(Content.BubbleOccasion.Vehicle); // 车卡场合恒 Vehicle（采样时已确定）
+                var topic = m_Director.Topics.TopicFor(m_ForgeCount, cards.Count - 1, avoidSafeZones: parked); // 停车=弱卡（无处可去），避开萌宠/沙雕
+                topics.Add(topic);
+                m_CurrentZones.Add(ZoneOf(topic));
+                added++;
+            }
+            arr.Dispose();
+        }
+
+        /// <summary>车卡文案："货车司机，送货路上（去工业区）" / "公交司机，在线路上跑" / "私家车司机，停在路边"。
+        /// 非四类民用载具 → null（不收）。parked=是否停着（停车卡判弱，配题避开安全区）。</summary>
+        private string? DescribeVehicle(Entity v, out bool parked)
+        {
+            parked = EntityManager.HasComponent<Game.Vehicles.ParkedCar>(v);
+            string who;
+            string moving;
+            if (EntityManager.HasComponent<Game.Vehicles.Taxi>(v)) { who = "出租车司机"; moving = "街上兜客"; }
+            else if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(v)) { who = "公交司机"; moving = "在线路上跑"; }
+            else if (EntityManager.HasComponent<Game.Vehicles.DeliveryTruck>(v)) { who = "货车司机"; moving = "送货路上"; }
+            else if (EntityManager.HasComponent<Game.Vehicles.PersonalCar>(v)) { who = "私家车司机"; moving = "开车赶路"; }
+            else return null;
+            if (parked)
+                return who + "，停在路边";
+            var dest = CitizenPoolSystem.DestinationPlace(EntityManager, v);
+            return dest != null ? $"{who}，{moving}（去{dest}）" : $"{who}，{moving}";
         }
 
         /// <summary>弱卡判定（刀③，启发式阈值待实机校准）：纯身份无处境/只"呆着"=低信息熵卡——

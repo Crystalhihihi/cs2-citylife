@@ -144,7 +144,7 @@ namespace CityLife.GameBridge
             }
 
             m_Pool.CurrentCycle = m_ForgeCount; // BornCycle 基准锚本炉
-            var prompt = Content.PromptBuilder.BuildChatterPrompt(m_Head, snapshot, cards, topics);
+            var prompt = Content.PromptBuilder.BuildChatterPrompt(m_Head, snapshot, cards, topics, Content.CityRumors.Recent(3)); // 刀②城市记忆：最新 3 条传闻当话料
             Mod.FastGateway!.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Low, k_ForgeTtl, "chatter:" + m_ForgeCount)); // 快轨（§12 #59）
             m_ForgePending = true;
             m_ForgeSince = DateTime.UtcNow;

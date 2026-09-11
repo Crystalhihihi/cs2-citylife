@@ -245,9 +245,10 @@ namespace CityLife.GameBridge
             Mod.Log.Info($"[Change] 锚点入队：{anchor.Label}（{anchor.Kind}）");
         }
 
-        /// <summary>快讯直发（模板帖，不耗 LLM）：拆除/落成/门槛/新路。</summary>
+        /// <summary>快讯直发（模板帖，不耗 LLM）：拆除/落成/门槛/新路。同步进传闻榜（§12 #60 刀②城市记忆）。</summary>
         private static void Flash(string text, Entity entity)
         {
+            Content.CityRumors.Add(text);
             if (entity != Entity.Null)
                 Mod.Feed.Record(new Content.Post("城市快讯", text, Content.Topic.Breaking, "newsflash"),
                                 entity.Index, entity.Version);

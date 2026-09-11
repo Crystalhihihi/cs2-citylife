@@ -321,7 +321,8 @@ namespace CityLife.GameBridge
                     m_Head, snapshot, m_BatchTopic, m_CurrentAssigned,
                     new List<string>(m_Recent), m_BatchCount, anchorTexts, prevPosts,
                     breaking, mayorCtx, outcomeCtx, Content.LiveContext.OngoingEvent,
-                    petition, petitionResolvedCtx, citizenCtx, slotTopics);
+                    petition, petitionResolvedCtx, citizenCtx, slotTopics,
+                    Content.CityRumors.Recent(3)); // 刀②城市记忆：最新 3 条传闻当话料
                 Mod.Gateway.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Normal, 600));
                 m_BatchPending = true;
                 m_BatchCount++;

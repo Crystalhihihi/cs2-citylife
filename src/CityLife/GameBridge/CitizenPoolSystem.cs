@@ -55,6 +55,11 @@ namespace CityLife.GameBridge
     public partial class CitizenPoolSystem : GameSystemBase
     {
         private const int k_MaxEntries = 48;
+        // 分层配额（§12 #60 刀②，治"夜晚住宅区塌缩"实机实锤——配额只超采不重排，少数派拉满即停）
+        private const int k_OccasionCap = 29;  // 单场合 ≤60%
+        private const int k_IdentityCap = 12;  // 同身份 ≤25%
+        private const int k_SameTextCap = 4;   // 同文本卡（重复卡对内容零增量）
+        private const int k_MaxScan = 384;     // 扫描预算（配额拒绝变多后防全表扫，读侧成本有界）
 
         private EntityQuery m_CitizenQuery = default!;
         private Game.UI.NameSystem? m_NameSystem;  // 惰性：游戏自建系统，GetExisting 拿不到就等下轮
@@ -87,7 +92,11 @@ namespace CityLife.GameBridge
             var arr = m_CitizenQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
             m_Entries.Clear();
             var stride = math.max(1, arr.Length / k_MaxEntries);
-            for (int i = m_Offset % stride; i < arr.Length && m_Entries.Count < k_MaxEntries; i += stride)
+            var occCount = new int[4]; // BubbleOccasion 计数（配额+日志用）
+            var idCount = new Dictionary<string, int>();
+            var textCount = new Dictionary<string, int>();
+            var scanned = 0;
+            for (int i = m_Offset % stride; i < arr.Length && m_Entries.Count < k_MaxEntries && scanned < k_MaxScan; i += stride, scanned++)
             {
                 var e = arr[i];
                 var citizen = EntityManager.GetComponentData<Citizen>(e);
@@ -105,15 +114,28 @@ namespace CityLife.GameBridge
                 var name = m_NameSystem.GetRenderedLabelName(e);
                 if (string.IsNullOrEmpty(name))
                     continue;
-                m_Entries.Add(new CitizenContext(name, Describe(EntityManager, e, citizen, age, purpose, out var occasion), e, occasion));
+                var card = Describe(EntityManager, e, citizen, age, purpose, out var occasion);
+                // 配额闸：超额的多数派让位，少数派拉满预算尽量补齐（配额只超采不重排）
+                if (occCount[(int)occasion] >= k_OccasionCap)
+                    continue;
+                var comma = card.IndexOf('，');
+                var identity = comma > 0 ? card[..comma] : card;
+                if (idCount.TryGetValue(identity, out var ic) && ic >= k_IdentityCap)
+                    continue;
+                if (textCount.TryGetValue(card, out var tc) && tc >= k_SameTextCap)
+                    continue;
+                m_Entries.Add(new CitizenContext(name, card, e, occasion));
+                occCount[(int)occasion]++;
+                idCount[identity] = ic + 1;
+                textCount[card] = tc + 1;
             }
             m_Offset++;
             m_Cycle++;
             arr.Dispose();
 
-            // 实机肉眼验收用：每轮采样结束打一条样例卡
+            // 实机肉眼验收用：每轮采样结束打一条样例卡+场合分布（配额成效看这里）
             if (m_Entries.Count > 0)
-                Mod.Log.Info($"[Pool] 本轮 {m_Entries.Count} 条，样例：\"{m_Entries[0].Context}\"（{m_Entries[0].Name}）");
+                Mod.Log.Info($"[Pool] 本轮 {m_Entries.Count} 条（走{occCount[1]}/车{occCount[2]}/室{occCount[3]}/通{occCount[0]}，扫描{scanned}），样例：\"{m_Entries[0].Context}\"（{m_Entries[0].Name}）");
             else
                 Mod.Log.Info("[Pool] 本轮 0 条（市民皆被跳过或城市无人）");
         }

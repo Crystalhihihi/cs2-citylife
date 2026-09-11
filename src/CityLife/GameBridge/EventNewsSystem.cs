@@ -206,6 +206,7 @@ namespace CityLife.GameBridge
         {
             m_Reported.Add(e);
             m_LastAnyAt = Now;
+            Content.CityRumors.Add(breaking); // 城市记忆（§12 #60 刀②）：进传闻榜，闲聊炉/信息流当话料
             Mod.Feed.Record(new Content.Post("现场直击", postText, Content.Topic.Breaking, "live"), e.Index, e.Version);
             if (Mod.Gateway != null && !Llm.CliGateway.Mute)
             {

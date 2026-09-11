@@ -165,6 +165,7 @@ namespace CityLife.GameBridge
             m_State = PetitionState.Voiced;
             m_StateUntil = Now + (uint)Content.ModSettings.PetitionWindowH * TicksPerHour;
             Content.LiveContext.PendingPetition = m_Theme; // 导演下一炉变怨气热议串
+            Content.CityRumors.Add($"市民联署要求回应{m_Theme}"); // 城市记忆（§12 #60 刀②）
             Mod.Feed.Record(new Content.Post("城市快讯", $"市民正在联署：要求市长回应{m_Theme}。",
                                              Content.Topic.Petition, "newsflash"));
             Mod.Log.Info($"[Petition] 触发：{m_Theme}（窗口 {Content.ModSettings.PetitionWindowH}h 等市长回应）");
@@ -195,6 +196,7 @@ namespace CityLife.GameBridge
             Mod.Feed.Record(new Content.Post("城市快讯", $"市长回应了关于{m_Theme}的联署，评论区还在吵。",
                                              Content.Topic.Petition, "newsflash"));
             Content.LiveContext.PetitionResolved = $"市长回应了{m_Theme}";
+            Content.CityRumors.Add($"市长回应了{m_Theme}"); // 城市记忆（§12 #60 刀②）
             GoCooldown("市长已回应");
         }
 
@@ -207,6 +209,7 @@ namespace CityLife.GameBridge
                 Mod.Feed.Record(new Content.Post("城市快讯", $"关于{m_Theme}的联署还在继续，市长一直没有回应。",
                                                  Content.Topic.Petition, "newsflash"));
                 Content.LiveContext.PetitionResolved = $"{m_Theme}仍未解决，市长没有回应";
+                Content.CityRumors.Add($"{m_Theme}仍未解决，市长没有回应"); // 城市记忆（§12 #60 刀②）
                 Mod.Log.Info("[Petition] 无可用聚集点（没市政厅/地标），聚集降级为纯舆情");
                 GoCooldown("超时无回应（降级）");
                 return;
@@ -260,6 +263,7 @@ namespace CityLife.GameBridge
             Content.LiveContext.PetitionResolved = responded
                 ? $"市长在聚集期间回应了{m_Theme}"
                 : $"聚集散去，{m_Theme}仍未解决";
+            Content.CityRumors.Add(Content.LiveContext.PetitionResolved); // 城市记忆（§12 #60 刀②）
             GoCooldown(reason);
         }
 

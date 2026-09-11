@@ -167,11 +167,13 @@ namespace CityLife.Content
         /// CitizenPoolSystem.Entries 抽样 + TopicReservoir.TopicFor 配题）。
         /// </summary>
         public static string BuildChatterPrompt(string head, in CitySnapshot s,
-                                                IReadOnlyList<string> cards, IReadOnlyList<string> topics)
+                                                IReadOnlyList<string> cards, IReadOnlyList<string> topics,
+                                                IReadOnlyList<string>? rumors = null)
         {
             var sb = new StringBuilder(head.Length + 512);
             sb.Append(head);
             sb.Append("【城市此刻】").Append(DescribeCity(s)).Append('\n');
+            AppendRumors(sb, rumors, "可以当话料（别逐字复读，别每条都蹭）");
             sb.Append("【处境卡】一行一张（真实市民此刻的状态），\"｜题：\"后是配给这人的话头：\n");
             for (int i = 0; i < cards.Count; i++)
             {
@@ -182,6 +184,16 @@ namespace CityLife.Content
             }
             sb.Append("【任务】每张处境卡写 2-3 条，共 ").Append(cards.Count * 2).Append('-').Append(cards.Count * 3).Append(" 条；哪张卡的话用完就换下一张，别复读。\n");
             return sb.ToString();
+        }
+
+        /// <summary>【城里最近在传】段（§12 #60 刀②城市记忆）：活力的本质=这座城市有昨天。两炉同款，一处组装。</summary>
+        private static void AppendRumors(StringBuilder sb, IReadOnlyList<string>? rumors, string usage)
+        {
+            if (rumors == null || rumors.Count == 0)
+                return;
+            sb.Append("【城里最近在传】最近城里真发生的事，").Append(usage).Append("：\n");
+            foreach (var r in rumors)
+                sb.Append("- ").Append(r).Append('\n');
         }
 
         /// <summary>
@@ -286,9 +298,10 @@ namespace CityLife.Content
         }
 
         /// <summary>
-        /// 完整批量 prompt = 稳定头 + 动态尾。动态部分：城市此刻/本轮话题/分配/锚点/前情/突发/市长说/已发禁重复。
+        /// 完整批量 prompt = 稳定头 + 动态尾。动态部分：城市此刻/传闻/本轮话题/分配/锚点/前情/突发/市长说/已发禁重复。
         /// recent = 最近已发正文（去重反馈）；seed = 处境池轮换（Daily 话题抽题已迁 TopicReservoir）；anchors/prevPosts 与 assigned 等长对齐（可空）；
-        /// breaking = 突发事件文本（非空则本炉是热议串）；mayorContext = 市长发言（市民回应用，写回是 M4）。
+        /// breaking = 突发事件文本（非空则本炉是热议串）；mayorContext = 市长发言（市民回应用，写回是 M4）；
+        /// rumors = 城市传闻榜最新条目（§12 #60 刀②城市记忆，可空）。
         /// </summary>
         public static string BuildBatch(string head, in CitySnapshot s, Topic topic,
                                         IReadOnlyList<Assignment> assigned, IReadOnlyList<string> recent, uint seed,
@@ -298,11 +311,13 @@ namespace CityLife.Content
                                         string? eventOutcome = null, string? ongoingEvent = null,
                                         string? petition = null, string? petitionResolved = null,
                                         IReadOnlyList<string?>? contexts = null,
-                                        IReadOnlyList<string?>? topics = null)
+                                        IReadOnlyList<string?>? topics = null,
+                                        IReadOnlyList<string>? rumors = null)
         {
             var sb = new StringBuilder(head.Length + 896);
             sb.Append(head);
             sb.Append("【城市此刻】").Append(DescribeCity(s)).Append('\n');
+            AppendRumors(sb, rumors, "帖子和评论可以当话料（别逐字复读，别每帖都蹭）");
             sb.Append("【本轮话题】").Append(DescribeTopic(topic, s, seed)).Append('\n');
             sb.Append("【分配】").Append(assigned.Count).Append(" 条：");
             var anyTopic = false;

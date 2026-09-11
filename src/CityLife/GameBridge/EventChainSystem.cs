@@ -397,6 +397,7 @@ namespace CityLife.GameBridge
             m_EndFrame = Now + TicksPerHour * (uint)m_DurationH;
             m_State = ChainState.Running;
             Content.LiveContext.OngoingEvent = $"{m_Pack!.Name}（{m_VenueLabel}）"; // 信息流实时跟着活动走
+            Content.CityRumors.Add($"{m_Pack!.Name}在{m_VenueLabel}开场"); // 城市记忆（§12 #60 刀②）
             OfficialPost($"现场：{m_Pack.Name}在{m_VenueLabel}开场了，市民正在前往。", m_Venue);
             Mod.Log.Info($"[Event] 开场：{m_Pack.Name} @ {m_VenueLabel}（吸引力 boost={(m_AttractionBoosted ? "OK" : "跳过")}）");
         }
@@ -466,6 +467,7 @@ namespace CityLife.GameBridge
 
             OfficialPost($"活动落幕：{m_Pack?.Name}（{m_VenueLabel}）{outcome}。", m_Venue);
             Content.LiveContext.LastEventOutcome = $"{m_Pack?.Name}（{m_VenueLabel}）{outcome}";
+            Content.CityRumors.Add($"{m_Pack?.Name}（{m_VenueLabel}）{outcome}"); // 城市记忆（§12 #60 刀②）
             Content.LiveContext.OngoingEvent = null;
             Mod.Log.Info($"[Event] 结算：{outcome}");
 

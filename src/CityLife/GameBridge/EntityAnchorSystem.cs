@@ -175,7 +175,9 @@ namespace CityLife.GameBridge
 
         /// <summary>
         /// 公司锚点标签（2026-08-20 玩家定案：人说"解放路那家面馆"，不说"城西北"）：
-        /// 真实公司名（NameSystem）+ 所在路名后缀；无名系统时回退"方位+那家+业态"的旧兜底。
+        /// 真实公司名（NameSystem）+ 所在路名后缀；无名公司走真路名地址制（§12 #60 刀⑤，
+        /// "115冬青街那家便利店"——门牌号由游戏公共方法 BuildingUtils.GetAddress 现算，spike 实锤
+        /// docs/spikes/2026-09-11-building-address-system.md）；地址拿不到才退"方位+那家+业态"最末兜底。
         /// 2026-09-09 实锤补充：GetRenderedLabelName 对无自定义名公司返回原始资产 ID
         /// （"Assets.NAME[Commercial_ConvenienceFoodStore]"——署名乱码源头），检出即视同无名回退；
         /// word 本身已是产出业态词（BusinessWord → ShopOutput），无需再借 ClassifyBuilding。
@@ -190,10 +192,12 @@ namespace CityLife.GameBridge
                     && !name.StartsWith("Assets.NAME[", System.StringComparison.Ordinal))
                     return name + RoadSuffix(building);
             }
-            return Geo.DirectionOf(pos) + "那家" + word + RoadSuffix(building);
+            return TryGetAddressLabel(building, out var addr)
+                ? addr + "那家" + word
+                : Geo.DirectionOf(pos) + "那家" + word + RoadSuffix(building);
         }
 
-        /// <summary>地点锚点标签（公园/景点）：真实地名 + 路名后缀；无名系统回退方位+兜底词。</summary>
+        /// <summary>地点锚点标签（公园/景点）：真实地名 + 路名后缀；无名走真路名地址（刀⑤），再退方位兜底。</summary>
         private string PlaceLabel(Entity building, float3 pos, string fallback)
         {
             m_NameSystem ??= World.GetExistingSystemManaged<Game.UI.NameSystem>();
@@ -203,7 +207,9 @@ namespace CityLife.GameBridge
                 if (!string.IsNullOrEmpty(name))
                     return name + RoadSuffix(building);
             }
-            return Geo.DirectionOf(pos) + fallback;
+            return TryGetAddressLabel(building, out var addr)
+                ? addr + fallback
+                : Geo.DirectionOf(pos) + fallback;
         }
 
         /// <summary>所在路名后缀"（神太街）"：建筑 m_RoadEdge 的渲染名；拿不到就空串（不硬造）。</summary>
@@ -216,6 +222,30 @@ namespace CityLife.GameBridge
                 return "";
             var name = m_NameSystem.GetRenderedLabelName(road);
             return string.IsNullOrEmpty(name) ? "" : $"（{name}）";
+        }
+
+        /// <summary>真路名地址（"115冬青街"，§12 #60 刀⑤）：游戏公共静态方法 BuildingUtils.GetAddress 现算
+        /// （门牌号不存储——调游戏 API 不复制公式，铁律 3；行级实锤 docs/spikes/2026-09-11-building-address-system.md）。
+        /// 路名与选中 UI 同源（GetRenderedLabelName(road)，玩家自定义路名优先）。
+        /// 仅主线程低频用（内部遍历聚合路路段 buffer，O(路段数)——禁止进渲染热路径）。
+        /// 拿不到（非建筑/临路边未聚合/路名空）→ false，调用方走降级链。</summary>
+        private bool TryGetAddressLabel(Entity building, out string label)
+        {
+            label = "";
+            m_NameSystem ??= World.GetExistingSystemManaged<Game.UI.NameSystem>();
+            if (m_NameSystem == null || !EntityManager.HasComponent<Game.Buildings.Building>(building))
+                return false;
+            if (Game.Buildings.BuildingUtils.GetAddress(EntityManager, building, out var road, out var number)
+                && road != Entity.Null)
+            {
+                var roadName = m_NameSystem.GetRenderedLabelName(road);
+                if (!string.IsNullOrEmpty(roadName))
+                {
+                    label = $"{number}{roadName}"; // zh 客户端 "Assets.ADDRESS_NAME_FORMAT={NUMBER}{ROAD}" 同款
+                    return true;
+                }
+            }
+            return false;
         }
 
         // 方位命名已抽到 Geo.DirectionOf（GameBridge 共享：锚点/场馆/突发定位同一口径）

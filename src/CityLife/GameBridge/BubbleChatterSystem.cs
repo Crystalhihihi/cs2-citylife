@@ -138,7 +138,8 @@ namespace CityLife.GameBridge
                 }
                 cards.Add(card);
                 m_CurrentOccasions.Add(entry.Occasion); // 场合随卡盖章（§12 #60 刀①：采样时已确定，收炉按 card 回填）
-                var topic = m_Director.Topics.TopicFor(m_ForgeCount, k); // 每张配一题（话题库分区轮转+新鲜度加权）
+                // 弱卡配强题（刀③）：低熵卡避开萌宠/沙雕万能安全区，否则模型必逃中文语料最安全题材
+                var topic = m_Director.Topics.TopicFor(m_ForgeCount, k, avoidSafeZones: IsWeakCard(card));
                 topics.Add(topic);
                 m_CurrentZones.Add(ZoneOf(topic)); // 分区回填备收炉按 card 对齐（执行层查表，不赌模型复述）
             }
@@ -201,6 +202,11 @@ namespace CityLife.GameBridge
                     return entries[i].Zone;
             return "";
         }
+
+        /// <summary>弱卡判定（刀③，启发式阈值待实机校准）：纯身份无处境/只"呆着"=低信息熵卡——
+        /// 配题避开万能安全区（萌宠/沙雕），否则模型必逃中文语料最安全题材（猫灾的卡片侧成因）。</summary>
+        private static bool IsWeakCard(string card)
+            => card.IndexOf('，') < 0 || card.Contains("呆着");
 
         /// <summary>
         /// 市民现位（S6 环境圈圆心）：在建筑内 → 建筑位置（CurrentBuilding 仅室内挂，spike §1）；

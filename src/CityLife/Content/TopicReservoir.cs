@@ -16,7 +16,8 @@ namespace CityLife.Content
     /// <summary>
     /// 话题条目：Zone=分区（美食/通勤/…，一帖一题分区制的粗筛维度）；Topic=题面；
     /// Tags=场合标签（可空，给后续"场合→话题"匹配留口，§12 #48）；
-    /// BornCycle=生成源出生炉次（新鲜度衰减的年龄基准；内置/社区恒 0，不衰减）。
+    /// BornCycle=生成源出生炉次（新鲜度衰减的年龄基准；内置/社区恒 0，不衰减）；
+    /// LastDrawnCycle=上次被抽中的炉次（0=未抽过；§12 #60 刀③用后冷却，内置题轮休不删猫）。
     /// </summary>
     public sealed class TopicEntry
     {
@@ -25,6 +26,7 @@ namespace CityLife.Content
         public string[] Tags = Array.Empty<string>();
         public TopicSource Source;
         public uint BornCycle;
+        public uint LastDrawnCycle;
     }
 
     /// <summary>
@@ -37,13 +39,16 @@ namespace CityLife.Content
     ///   默认**追加**进内置池；文件第一条有效行（非空非注释）是 {"mode":"replace"} 则整池替换内置
     ///   ——社区"完整话题包"的口子。缺文件=纯内置；非法行跳过，加载日志一行汇总警告数，不刷屏。
     ///
-    /// 抽样语义（TopicFor）：纯确定性——同 batch+slot+池状态必同结果。
-    ///   先按 (batch+slot) 在池内分区上轮转（一帖一题分区制，2026-08-20 玩家定案），
-    ///   再在区内按新鲜度加权抽：内置/社区权重恒 1；生成源权重 = 0.5^(炉龄/半衰期8炉)、下限 0.05
-    ///   ——越新越易被抽中，货架常新而非"说完"（#48 话题创建炉的出水口）。
+    /// 抽样语义（TopicFor）：纯确定性——同 batch+slot+池状态（含抽取历史）必同结果。
+    ///   分区轮转加权：普通区双份、万能安全区（萌宠/沙雕，k_SafeZones）半份额（§12 #60 刀③——
+    ///   中文语料舒适区降权，模型无脑逃向的题材少露面）；avoidSafeZones=弱卡配强题（低熵处境卡避开安全区）。
+    ///   区内按新鲜度加权抽：内置/社区权重恒 1；生成源权重 = 0.5^(炉龄/半衰期8炉)、下限 0.05
+    ///   ——越新越易被抽中，货架常新而非"说完"（#48 话题创建炉的出水口）；
+    ///   叠加用后冷却 k_CooldownCycles 炉权重归零（刀③内置题轮休，全区冷却则取最久未抽，绝不空题）。
     ///
     /// 容量：上限 MaxCapacity（默认 200），超出先逐出最旧的**生成**源条目；内置/社区永不逐出。
-    ///   生成源条目由 S3 话题创建炉经 AddGenerated/AddGeneratedBatch 入库，炉节拍推进 CurrentCycle（衰减基准）。
+    ///   生成源条目由 S3 话题创建炉经 AddGenerated/AddGeneratedBatch 入库，炉节拍推进 CurrentCycle（衰减基准）；
+    ///   入库闸分区限容（刀③：生成池 ≥20 后单分区份额 >15% 拒收，防生成源扎堆淹池——prompt"别扎堆"是劝，这里是拦）。
     ///   S3 水位口径见 FreshGeneratedCount：新鲜生成话题 &lt;15 条才开炉（触发在 ContentDirectorSystem，执行层确定性）。
     /// </summary>
     public sealed class TopicReservoir
@@ -51,6 +56,20 @@ namespace CityLife.Content
         private const int k_HalfLifeCycles = 8;   // 生成话题新鲜度半衰期（炉次）：每过 8 炉权重减半
         private const double k_MinWeight = 0.05;  // 生成话题权重下限：再老也留一口被抽中的机会，直到被容量逐出
         private const double k_FreshWeight = 0.25; // "新鲜"门槛：权重 ≥0.25（炉龄 ≤16，两个半衰期内）算新鲜——S3 水位线口径
+        private const int k_CooldownCycles = 3;   // 用后冷却（炉次）：抽中后 N 炉权重归零——内置题轮休（刀③，不删猫让猫轮休）
+        private const int k_ZoneCapMinPool = 20;  // 分区限容起步线：生成池小于此数敞收（刀③）
+        private const double k_GeneratedZoneCapShare = 0.15; // 生成题单分区份额上限（刀③入库闸）
+
+        // 万能安全区（中文语料舒适区，模型无脑逃向——刀③抽题半份额+弱卡回避）：只列已知分区，社区新分区默认全份额
+        private static readonly string[] k_SafeZones = { "萌宠", "沙雕" };
+
+        private static bool IsSafeZone(string zone)
+        {
+            foreach (var z in k_SafeZones)
+                if (z == zone)
+                    return true;
+            return false;
+        }
 
         private readonly List<TopicEntry> m_Entries = new();
 
@@ -144,47 +163,86 @@ namespace CityLife.Content
         }
 
         /// <summary>
-        /// 每席位抽题（替代原 PromptBuilder.DailyTopicFor）：确定性——同 batch+slot+池状态同结果。
-        /// 先分区轮转（一帖一题分区制），再区内按新鲜度加权抽（生成源越新越易被抽中）。
+        /// 每席位抽题（替代原 PromptBuilder.DailyTopicFor）：确定性——同 batch+slot+池状态（含抽取历史）同结果。
+        /// 分区加权轮转（普通区双份/安全区半份额，刀③），avoidSafeZones=弱卡配强题（低熵处境卡避开万能安全区）；
+        /// 区内新鲜度加权抽，用后冷却 k_CooldownCycles 炉权重归零（刀③内置题轮休），全区冷却取最久未抽（绝不空题）。
         /// </summary>
-        public string TopicFor(uint batch, int slot)
+        public string TopicFor(uint batch, int slot, bool avoidSafeZones = false)
         {
             if (m_Entries.Count == 0)
                 return "生活闲聊"; // 理论到不了（装载有内置兜底），纯防御
 
-            // 分区轮转：池内分区按首现序去重（社区新分区自动进轮转）
-            var zones = new List<string>(8);
+            // 分区轮转（加权：普通区双份=安全区半份额）：池内分区按首现序去重（社区新分区自动进轮转）
+            var zones = new List<string>(12);
             foreach (var e in m_Entries)
                 if (!zones.Contains(e.Zone))
+                {
                     zones.Add(e.Zone);
-            var zone = zones[(int)((batch + (uint)slot) % (uint)zones.Count)];
+                    if (!IsSafeZone(e.Zone))
+                        zones.Add(e.Zone);
+                }
+            var idx = (int)((batch + (uint)slot) % (uint)zones.Count);
+            var zone = zones[idx];
+            if (avoidSafeZones)
+                for (var t = 0; t < zones.Count && IsSafeZone(zone); t++)
+                    zone = zones[(idx + t + 1) % zones.Count]; // 顺找首个非安全区（确定性）
 
-            // 区内新鲜度加权抽样：r 落在累计权重的哪一段就抽哪题
+            // 区内新鲜度加权抽样（冷却中权重归零）：r 落在累计权重的哪一段就抽哪题
             var total = 0.0;
             foreach (var e in m_Entries)
-                if (e.Zone == zone)
+                if (e.Zone == zone && !OnCooldown(e))
                     total += WeightOf(e);
-            var r = Hash01(batch, slot) * total;
-            var acc = 0.0;
-            string? chosen = null;
-            foreach (var e in m_Entries)
+            TopicEntry? chosen = null;
+            if (total <= 0.0)
             {
-                if (e.Zone != zone) continue;
-                chosen = e.Topic;
-                acc += WeightOf(e);
-                if (r < acc) break;
+                // 全区冷却中：取最久未抽的（轮休先到先得，绝不空题）
+                foreach (var e in m_Entries)
+                    if (e.Zone == zone && (chosen == null || e.LastDrawnCycle < chosen.LastDrawnCycle))
+                        chosen = e;
             }
-            return chosen ?? "生活闲聊"; // 浮点尾巴兜底：返回区内最后一题
+            else
+            {
+                var r = Hash01(batch, slot) * total;
+                var acc = 0.0;
+                foreach (var e in m_Entries)
+                {
+                    if (e.Zone != zone || OnCooldown(e)) continue;
+                    chosen = e;
+                    acc += WeightOf(e);
+                    if (r < acc) break;
+                }
+            }
+            if (chosen == null)
+                return "生活闲聊"; // 分区有名单无条目（理论到不了），纯防御
+            chosen.LastDrawnCycle = CurrentCycle > 0 ? CurrentCycle : 1u; // 0=未抽过哨兵，别写回 0
+            return chosen.Topic;
         }
 
+        /// <summary>用后冷却判定（刀③）：抽中后 k_CooldownCycles 炉内权重归零；0=未抽过不冷却。</summary>
+        private bool OnCooldown(TopicEntry e)
+            => e.LastDrawnCycle != 0 && CurrentCycle > e.LastDrawnCycle
+               && CurrentCycle - e.LastDrawnCycle < k_CooldownCycles;
+
         /// <summary>
-        /// 生成源条目入库（S3 话题创建炉的产出口，先备好）：BornCycle 记当前炉次；
-        /// 入库后超库容先逐出最旧的生成源条目。
+        /// 生成源条目入库（S3 话题创建炉的产出口）：BornCycle 记当前炉次；入库后超库容先逐出最旧的生成源条目。
+        /// 分区限容（刀③入库闸）：生成池 ≥k_ZoneCapMinPool 后，该分区份额将超 k_GeneratedZoneCapShare 则拒收
+        /// （prompt"别扎堆"是劝，这里是拦；起步期敞收）。返回是否真入。
         /// </summary>
-        public void AddGenerated(string zone, string topic, string[]? tags = null)
+        public bool AddGenerated(string zone, string topic, string[]? tags = null)
         {
             if (string.IsNullOrEmpty(zone) || string.IsNullOrEmpty(topic))
-                return;
+                return false;
+            var genCount = 0;
+            var zoneCount = 0;
+            foreach (var e in m_Entries)
+                if (e.Source == TopicSource.Generated)
+                {
+                    genCount++;
+                    if (e.Zone == zone)
+                        zoneCount++;
+                }
+            if (genCount >= k_ZoneCapMinPool && (zoneCount + 1.0) / (genCount + 1.0) > k_GeneratedZoneCapShare)
+                return false;
             m_Entries.Add(new TopicEntry
             {
                 Zone = zone,
@@ -194,19 +252,25 @@ namespace CityLife.Content
                 BornCycle = CurrentCycle,
             });
             EvictOverflow();
+            return true;
         }
 
         /// <summary>
         /// 话题创建炉产出批量入库（S3 的装载口）：输出 schema 与社区 topics.jsonl 完全同构，
-        /// 故直接复用同一条 Parse 路径——坏行跳过计数、好行 salvage（与社区装载同纪律，不致命）；
-        /// 逐条走 AddGenerated（BornCycle=CurrentCycle + 超容逐出）。返回入库条数。
+        /// 故直接复用同一条 Parse 路径——坏行跳过计 skipped、好行 salvage（与社区装载同纪律，不致命）；
+        /// 逐条走 AddGenerated（BornCycle=CurrentCycle + 分区限容 + 超容逐出），限容拒收计 rejected。返回入库条数。
         /// </summary>
-        public int AddGeneratedBatch(string jsonl, out int skipped)
+        public int AddGeneratedBatch(string jsonl, out int skipped, out int rejected)
         {
             var entries = Parse(jsonl, TopicSource.Generated, out skipped);
+            var added = 0;
+            rejected = 0;
             foreach (var e in entries)
-                AddGenerated(e.Zone, e.Topic, e.Tags);
-            return entries.Count;
+                if (AddGenerated(e.Zone, e.Topic, e.Tags))
+                    added++;
+                else
+                    rejected++;
+            return added;
         }
 
         /// <summary>S3 水位：当前新鲜的生成源话题条数（权重 ≥ k_FreshWeight，即炉龄 ≤16）。&lt;15 触发话题创建炉。</summary>

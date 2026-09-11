@@ -450,8 +450,8 @@ namespace CityLife.GameBridge
                 Mod.Log.Info($"[Topic炉] 一炉失败：{r.Result.Error}（水位低了，下节拍再试）");
                 return;
             }
-            var added = m_Topics.AddGeneratedBatch(r.Result.Text, out var skipped);
-            Mod.Log.Info($"[Topic炉] 入库 {added} 条（解析丢 {skipped} 条，库现 {m_Topics.Entries.Count} 题）");
+            var added = m_Topics.AddGeneratedBatch(r.Result.Text, out var skipped, out var rejected);
+            Mod.Log.Info($"[Topic炉] 入库 {added} 条（解析丢 {skipped} 条，限容拒 {rejected} 条，库现 {m_Topics.Entries.Count} 题）");
         }
 
         /// <summary>已发正文登记：去重反馈池 + 人格卡前情（连载机制数据源）。</summary>

@@ -68,6 +68,14 @@ internal static class Program
         BubbleOccasion.Walk, BubbleOccasion.Indoor, BubbleOccasion.Vehicle, BubbleOccasion.Walk,
     };
 
+    // 城市记忆具（§12 #60 刀②）：与实机同形的传闻榜样例，让评测 prompt 与生产 prompt 同结构
+    private static readonly string[] k_Rumors =
+    {
+        "城东北路口发生车祸",
+        "新修了 3 段路，路网还在长",
+        "市民联署要求回应失业率高、工作难找的问题",
+    };
+
     // 猫灾关键词（中文语料最安全万能题材，密度=卡片信息熵的晴雨表）
     private static readonly string[] k_CatWords = { "猫", "狗", "宠物", "喵", "汪" };
 
@@ -143,7 +151,7 @@ internal static class Program
         {
             // 每卡配一题：真实 TopicFor 确定性抽题（与实机同一代码路径）
             var topics = cards.Select((_, i) => reservoir.TopicFor(batchBase + (uint)b, i)).ToArray();
-            var prompt = PromptBuilder.BuildChatterPrompt(head, k_Snap, cards, topics);
+            var prompt = PromptBuilder.BuildChatterPrompt(head, k_Snap, cards, topics, k_Rumors);
             Console.WriteLine($"[Eval·chatter/{setName}] 第 {b + 1}/{k} 炉发出（{prompt.Length} 字符）…");
             var r = await provider.OneShotAsync(prompt, CancellationToken.None);
             if (!r.Success)

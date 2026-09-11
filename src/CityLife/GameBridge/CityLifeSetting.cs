@@ -72,6 +72,12 @@ namespace CityLife.GameBridge
         [SettingsUISection(kTab, kGroupBubble)]
         public BubbleDensityLevel BubbleDensity { get; set; } = BubbleDensityLevel.High;
 
+        /// <summary>同屏气泡上限（默认 6，§12 #53：稀疏默认——"不是满屏冒泡"，玩家自定 2-30）；
+        /// 楼/车各 ≤上限/3、人不限（人为主比例不变）。要爽自己拉高，token 账自负。</summary>
+        [SettingsUISection(kTab, kGroupBubble)]
+        [SettingsUISlider(min = 2f, max = 30f, step = 1f, unit = "integer")]
+        public int BubbleVisibleMax { get; set; } = 6;
+
         /// <summary>气泡底板开关（默认开）：文字下垫深色圆角底板。</summary>
         [SettingsUISection(kTab, kGroupBubble)]
         public bool BubblePlate { get; set; } = true;
@@ -120,6 +126,7 @@ namespace CityLife.GameBridge
             BubbleDistCar = 1f;
             BubbleDistBuilding = 1f;
             BubbleDensity = BubbleDensityLevel.High;
+            BubbleVisibleMax = 6;
             BubblePlate = true;
             BubbleAutoHideBuildTool = true;
             BubbleAutoHidePhotoMode = true;

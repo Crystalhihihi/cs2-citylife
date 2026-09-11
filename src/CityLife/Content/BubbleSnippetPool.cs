@@ -32,8 +32,6 @@ namespace CityLife.Content
         public BubbleOccasion Occasion;
         public string Zone = "";
         public uint BornCycle;
-        /// <summary>上次被取用时刻（unscaledTime 秒；负无穷=从未用过，恒过冷却）。取用即盖戳（S5 冷却制，2026-09-11 玩家定案）。</summary>
-        public float LastUsedAt = float.NegativeInfinity;
     }
 
     /// <summary>
@@ -41,20 +39,22 @@ namespace CityLife.Content
     /// 纯数据模块，不碰游戏 API；装载点=BubbleChatterSystem（闲聊炉收炉），消费口=S5 气泡世界层
     /// （经 BubbleChatterSystem.Snippets 取用——本池不知道也不关心谁读）。
     ///
-    /// 容量上限 MaxCapacity（默认 100），先进先出逐出（表头最旧）；同文本去重（炉内重复/跨炉撞车都丢）。
+    /// 容量上限 MaxCapacity（默认 200），先进先出逐出（表头最旧）；同文本去重（炉内重复/跨炉撞车都丢）。
+    /// **取用即消耗**（2026-09-11 玩家定案，§12 #53：真一次性——同一句话全城一辈子只说一遍；
+    /// 池空调用方落"……"沉默泡，宁沉默不重复）。
     ///
     /// 如何扩展（社区贡献点）：
     ///   · 新场合：BubbleOccasion 加枚举值 + OccasionFromString 加映射 + 闲聊炉 prompt 头
     ///     （PromptBuilder.BuildChatterHead）补一条推导规则——三处必须同炉改，漏一处=新场合静默落 Any；
     ///   · 新匹配维度（按 Zone/新鲜度取泡等）：加 PickFor 重载，别改既有 PickFor 的语义契约
-    ///     （同 salt+池状态+冷却状态必同条——气泡换文案要可复现，世界层据此排重）。
+    ///     （同 salt+池状态必同条——取用即消耗本身就是池状态变化，气泡换文案据此可复现）。
     /// </summary>
     public sealed class BubbleSnippetPool
     {
         private readonly List<BubbleSnippet> m_Entries = new();
 
         /// <summary>池容上限：超出先进先出逐出最旧片段。</summary>
-        public int MaxCapacity = 100;
+        public int MaxCapacity = 200;
 
         /// <summary>当前炉次（闲聊炉炉计数同步；BornCycle 的基准）。</summary>
         public uint CurrentCycle;
@@ -124,36 +124,28 @@ namespace CityLife.Content
         }
 
         /// <summary>
-        /// S5 取泡口：按场合确定性抽一条（候选 = exact 场合 ∪ Any；同 salt+池状态+冷却状态必同条）。
-        /// maxLen 限长（§12 #51 长文稳锚：动的锚点只配短句；入库已 ≤40 字）。
-        /// 冷却制（2026-09-11 玩家定案，治"同一句话反复套在不同人身上"）：nowSec/cooldownSec 给定时，
-        /// 冷却期内的片段先被过滤——短时一次性（同一句冷却期内全城不说第二遍）；冷却过滤后无候选
-        /// 回退无冷却集（保底不饿退，复用的必是最久没用的附近条——salt 定位自然落在旧条目上的概率
-        /// 随冷却占比升高）；再无候选回退不限长。取用成功由调用方 MarkUsed 盖戳（探测不顺延盖戳）。
-        /// 池空/无候选返回 null（调用方回退占位文案）。
+        /// S5 取泡口：按场合确定性抽一条（候选 = exact 场合 ∪ Any；同 salt+池状态必同条）。
+        /// maxLen 限长（§12 #51 长文稳锚：动的锚点只配短句；入库已 ≤40 字）；限长后无候选回退不限长。
+        /// **取用即消耗**（§12 #53 真一次性：抽中即从池删除，同一句话全城只说一遍）。
+        /// 池空/无候选返回 null（调用方落"……"沉默泡，宁沉默不重复）。
         /// </summary>
-        public BubbleSnippet? PickFor(BubbleOccasion occasion, uint salt, int maxLen = int.MaxValue,
-            float nowSec = float.PositiveInfinity, float cooldownSec = 0f)
+        public BubbleSnippet? PickFor(BubbleOccasion occasion, uint salt, int maxLen = int.MaxValue)
         {
-            var picked = PickFiltered(occasion, salt, maxLen, nowSec, cooldownSec);
-            if (picked == null && cooldownSec > 0f)
-                picked = PickFiltered(occasion, salt, maxLen, float.PositiveInfinity, 0f); // 全冷却→不饿退
+            var picked = PickFiltered(occasion, salt, maxLen);
             if (picked == null && maxLen != int.MaxValue)
-                picked = PickFiltered(occasion, salt, int.MaxValue, float.PositiveInfinity, 0f); // 再放开限长
+                picked = PickFiltered(occasion, salt, int.MaxValue);
+            if (picked != null)
+                m_Entries.Remove(picked); // 一次性：取用即消耗
             return picked;
         }
 
-        /// <summary>取用盖戳（冷却制的时间基准）。只有真正采用才调——探测候选不算用。</summary>
-        public void MarkUsed(BubbleSnippet entry, float nowSec) => entry.LastUsedAt = nowSec;
-
-        /// <summary>限长+冷却过滤的确定性抽取（候选计数 → salt 取模定位）。无候选返回 null。</summary>
-        private BubbleSnippet? PickFiltered(BubbleOccasion occasion, uint salt, int maxLen, float nowSec, float cooldownSec)
+        /// <summary>限长过滤的确定性抽取（候选计数 → salt 取模定位）。无候选返回 null。</summary>
+        private BubbleSnippet? PickFiltered(BubbleOccasion occasion, uint salt, int maxLen)
         {
             var n = 0;
             for (int i = 0; i < m_Entries.Count; i++)
                 if ((m_Entries[i].Occasion == occasion || m_Entries[i].Occasion == BubbleOccasion.Any)
-                    && m_Entries[i].Text.Length <= maxLen
-                    && nowSec - m_Entries[i].LastUsedAt > cooldownSec)
+                    && m_Entries[i].Text.Length <= maxLen)
                     n++;
             if (n == 0)
                 return null;
@@ -164,8 +156,6 @@ namespace CityLife.Content
                 if (e.Occasion != occasion && e.Occasion != BubbleOccasion.Any)
                     continue;
                 if (e.Text.Length > maxLen)
-                    continue;
-                if (nowSec - e.LastUsedAt <= cooldownSec)
                     continue;
                 if (target-- == 0)
                     return e;

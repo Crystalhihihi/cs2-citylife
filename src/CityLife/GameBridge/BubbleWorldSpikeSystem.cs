@@ -257,14 +257,8 @@ namespace CityLife.GameBridge
 
         // 占位文案池（v5.0 起身份降级：从文案主源降为闲聊炉片段池的池空兜底——炉未出货/系统未就绪时
         // 气泡仍有话；按类型分池：公园/住宅已分，载具类型全分待正式版）
-        private static readonly string[] k_Texts =
-            { "……", "吃了吗", "今天这公交又晚点了，离谱", "风好大", "快走要迟到了", "这店排队也太长了", "听说东区新开了家店" };
-        private static readonly string[] k_CarTexts =
-            { "嘀嘀——", "又堵了", "轰——", "前面路口慢点" };
-        private static readonly string[] k_BuildingTexts =
-            { "……", "晚饭吃啥", "电视小点声！", "装修第三天了", "快递放门口", "楼上又拖椅子" };
-        private static readonly string[] k_ParkTexts =
-            { "风一吹真舒服", "鸽子真多", "遛弯第三圈了", "这花开得不错" };
+        // 占位句池已于 §12 #53 退役（一次性语义下占位=重复制造机；池空兜底改"……"沉默泡）。
+        // 首烘用沉默泡建缓存（"……"三档网格式时即烘，见 EnsureBaked 调用链）
 
         protected override void OnCreate()
         {
@@ -476,9 +470,7 @@ namespace CityLife.GameBridge
         // 全是"离屏"但场景明明在眼前；绘制热路径另有镜头背后剔除（sp.z<1f），余量只影响绑定/保留判定）
         private const float k_ScreenMargin = 0.15f;
 
-        /// <summary>片段冷却时长（秒，墙钟）：同一句台词冷却期内全城不说第二遍（2026-09-11 玩家定案
-        /// "短时一次性"——供需差 12 倍纯一次性会饿退回占位池，冷却制拿大头；池深上来后可调长）。</summary>
-        private const float k_SnippetCooldownSec = 180f;
+        // （冷却制常量已随 §12 #53 真一次性退役——取用即消耗，无冷却可言）
 
         private bool OnScreen(Camera cam, Entity e, byte kind)
         {
@@ -646,12 +638,8 @@ namespace CityLife.GameBridge
             }
             if (!TryPickSnippet(b, textIdx, out var text))
             {
-                // 池空兜底（占位文案池）：锚点+次数取模轮换（旧语义，确定性错开；公园锚点有专池）
-                var pool = b.Kind == 0 ? k_Texts
-                    : b.Kind == 1 ? k_CarTexts
-                    : EntityManager.HasComponent<Game.Buildings.AttractivenessProvider>(b.Anchor) ? k_ParkTexts
-                    : k_BuildingTexts;
-                text = pool[(b.Anchor.Index + textIdx) % pool.Length];
+                // 池空兜底（§12 #53 改"沉默泡"：一次性语义下占位句池=重复制造机，退役；宁可"……"也不重复）
+                text = "……";
             }
             b.Text = text;
             if (m_BaseTextMaterial != null)
@@ -694,16 +682,17 @@ namespace CityLife.GameBridge
                 : b.Speed > 0.6f ? 32
                 : 48;
             var salt = (uint)(b.Anchor.Index + textIdx);
-            var nowSec = UnityEngine.Time.unscaledTime;
             for (uint k = 0; k < 8; k++)
             {
-                var picked = pool.PickFor(occasion, salt + k, maxLen, nowSec, k_SnippetCooldownSec);
+                var picked = pool.PickFor(occasion, salt + k, maxLen); // 取用即消耗（§12 #53 真一次性）
                 if (picked == null)
-                    return false; // 该场合连 Any 候选都没有（理论到不了，纯防御）
+                    return false; // 池已空/该场合无候选——调用方落"……"沉默泡
                 if (k < 7 && (m_UsedThisFrame.Contains(picked.Text) || m_InUseTexts.Contains(picked.Text)))
-                    continue; // 本帧/在显已被别的气泡用，顺探下一条（池浅探尽才接受重复）
+                {
+                    // 在显冲突（同帧另一泡刚消耗了它）：该条已消耗不可再生，顺探下一条
+                    continue;
+                }
                 m_UsedThisFrame.Add(picked.Text);
-                pool.MarkUsed(picked, nowSec); // 取用盖戳（冷却制时间基准）
                 text = picked.Text;
                 if (!m_LoggedSnippetPool)
                 {
@@ -1198,8 +1187,9 @@ namespace CityLife.GameBridge
                 m_Candidates.Sort((a, b) => a.Score.CompareTo(b.Score)); // 屏心优先的近者（非纯视深）
                 m_Kept.Clear();
                 m_KeptSet.Clear();
-                var cap = math.max(4, LevelCount() / k_VisibleDiv);
-                var kindCap = cap / 3;
+                // 同屏上限：设置页滑杆优先（§12 #53 稀疏默认 6）；null（主菜单期）回落旧公式 采样池/6
+                var cap = Mod.Options?.BubbleVisibleMax ?? math.max(4, LevelCount() / k_VisibleDiv);
+                var kindCap = math.max(1, cap / 3); // 楼/车各 ≤1/3（cap 最小 2 时也保 1 个坑）
                 var keptCar = 0;
                 var keptBuilding = 0;
                 var nowU = UnityEngine.Time.unscaledTime;

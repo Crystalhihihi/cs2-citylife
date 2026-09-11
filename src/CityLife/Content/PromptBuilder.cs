@@ -156,9 +156,9 @@ namespace CityLife.Content
             sb.Append("- 公交再不来我真走回去了\n");
             sb.Append("- 面又涨两块，快吃不起了\n");
             sb.Append("- 这花开得还行，拍一张\n");
-            sb.Append("【写法】每张处境卡写一条：就照这个人的处境和配给他的话头写，必须是从这个人嘴里能说出来的话；可以顺势吐槽【城市此刻】里的天气/通勤/物价。卡里若带\"｜旁边：\"（S6 环境圈摘要），是这人边上此刻真实有的东西，可以顺手当话料，没有就是没有。\n");
+            sb.Append("【写法】每张处境卡写 2-3 条（长短句搭配，别全一个长度）：就照这个人的处境和配给他的话头写，必须是从这个人嘴里能说出来的话；可以顺势吐槽【城市此刻】里的天气/通勤/物价。卡里若带\"｜旁边：\"（S6 环境圈摘要），是这人边上此刻真实有的东西，可以顺手当话料，没有就是没有。\n");
             sb.Append("【场合】每条按处境卡推场合写进 occasion：卡里乘了车（开私家车/打车/坐公交/开货车）→\"vehicle\"；卡里在建筑或场所内（\"在…里\"上班上课逛街等，不在路上）→\"indoor\"；卡里在路上但没乘车（走路/赶路）→\"walk\"；拿不准→\"any\"。\n");
-            sb.Append("【输出】只输出 JSONL：一行一条 {\"text\":\"话\",\"occasion\":\"walk|vehicle|indoor|any\"}，行数与处境卡一致、顺序一致；禁止 markdown 围栏、禁止解释、禁止序号。\n");
+            sb.Append("【输出】只输出 JSONL：一行一条 {\"text\":\"话\",\"occasion\":\"walk|vehicle|indoor|any\"}；禁止 markdown 围栏、禁止解释、禁止序号。\n");
             return sb.ToString();
         }
 
@@ -181,7 +181,7 @@ namespace CityLife.Content
                     sb.Append("｜题：").Append(topics[i]);
                 sb.Append('\n');
             }
-            sb.Append("【任务】每张处境卡写一条，共 ").Append(cards.Count).Append(" 条，顺序与处境卡一致。\n");
+            sb.Append("【任务】每张处境卡写 2-3 条，共 ").Append(cards.Count * 2).Append('-').Append(cards.Count * 3).Append(" 条；哪张卡的话用完就换下一张，别复读。\n");
             return sb.ToString();
         }
 

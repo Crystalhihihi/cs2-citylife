@@ -153,12 +153,13 @@ namespace CityLife.Llm
             _pumps = new Thread[workers];
             for (int i = 0; i < workers; i++)
             {
-                _pumps[i] = new Thread(PumpLoop)
+                var t = new Thread(PumpLoop)
                 {
                     Name = $"CityLife.CliGateway.{i}",
                     IsBackground = true, // 游戏退出时随进程回收，绝不拖住退出
                 };
-                _pumps[i].Start();
+                _pumps[i] = t;
+                t.Start();
             }
             Log?.Invoke($"[CliGateway] 已启动，供给={_provider.Name}（可用={_provider.IsAvailable()}，并发={workers}）");
         }

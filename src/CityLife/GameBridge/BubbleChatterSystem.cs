@@ -37,7 +37,7 @@ namespace CityLife.GameBridge
     public partial class BubbleChatterSystem : GameSystemBase
     {
         private const double k_ForgeTtl = 300;  // 在飞请求 TTL（秒）：低频补给宁缺毋滥（S3 同值）
-        private const int k_MinCards = 10;      // 每炉处境卡 10-14 张（炉计数取模确定性变化）
+        private const int k_MinCards = 12;      // 每炉处境卡 12-16 张（炉计数取模确定性变化）×每卡 2-3 句（§12 #53 一次性供给侧加产）
 
         private EntityQuery m_CitizenQuery = default!;
         private TopicRadarSystem m_Radar = default!;

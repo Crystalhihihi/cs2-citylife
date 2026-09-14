@@ -139,6 +139,10 @@ namespace CityLife
             // 多人小剧场（S7，§12 #48 多人小剧场段）：对话锚点成组+真名单绑定+轮流冒泡（同屏 ≤2）。
             // 登记在气泡世界层之后：同相序内先跑完气泡采样/生命周期，剧场再读锚点快照/验活
             updateSystem.UpdateAt<GameBridge.BubbleTheaterSystem>(SystemUpdatePhase.GameSimulation);
+
+            // 普查+事件监听口 spike（2026-09-14，§12 #62/#64/#65 收口工具：Ctrl+6 普查 dump / Ctrl+7 事件探针开关）。
+            // 只读；验证完即退役——删本行即可。报告 docs/spikes/2026-09-14-census-and-event-watch.md
+            updateSystem.UpdateAt<GameBridge.CensusSpikeSystem>(SystemUpdatePhase.GameSimulation);
         }
 
         public void OnDispose()

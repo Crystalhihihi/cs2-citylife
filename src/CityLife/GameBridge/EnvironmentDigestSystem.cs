@@ -259,8 +259,9 @@ namespace CityLife.GameBridge
             return sb.ToString();
         }
 
-        /// <summary>真实店名（§12 #62 场所名分级）：租户公司名优先（EntityAnchorSystem 先例：
-        /// NameSystem.GetRenderedLabelName(company)）；无名回退建筑自身渲染名——**分区自长建筑除外**
+        /// <summary>真实店名（§12 #62 场所名分级）：租户名优先——公司走品牌真名（CompanyNameOf，
+        /// 2026-09-14 普查实锤：公司渲染名 34/34 全是 Assets. 脏键，真店名在 m_Brand 品牌实体），
+        /// 住户直读渲染名（普查实锤真姓："汉密尔顿一家"式）；无名回退建筑自身渲染名——**分区自长建筑除外**
         /// （IsZoneGrown：其渲染名=zone 通用名"北美低密度商业"式功能区标签，只当类别不当店名，
         /// 2026-09-12 玩家实机"被当店名念"）；再无名 → null（聚类点退纯计数文案）。
         /// internal static：S7 小剧场的场景卡取店名共用这一处定义（别复制粘贴）。</summary>
@@ -273,7 +274,10 @@ namespace CityLife.GameBridge
                 var renters = em.GetBuffer<Renter>(building);
                 for (int i = 0; i < renters.Length; i++)
                 {
-                    var name = nameSystem.GetRenderedLabelName(renters[i].m_Renter);
+                    var renter = renters[i].m_Renter;
+                    var name = nameSystem.GetRenderedLabelName(renter);
+                    if (IsUglyName(name))
+                        name = CompanyNameOf(em, nameSystem, renter); // 公司渲染名普查实锤全脏键→品牌真名；非公司租户此路 null
                     if (!IsUglyName(name)) // 脏键跳过：继续找下一个租户，不行才落建筑名（IsUglyName 实锤见该方法注释）
                         return name;
                 }
@@ -281,6 +285,22 @@ namespace CityLife.GameBridge
             if (IsZoneGrown(em, building))
                 return null; // 功能区标签不是名字（#62）——调用方走类别词降级，绝不进 prompt
             return RenderedName(nameSystem, building);
+        }
+
+        /// <summary>公司真名（2026-09-14 普查实锤，logs/census-spike-20260914/player-dump-20260914.log）：
+        /// GetRenderedLabelName(公司) 全是 Assets.NAME[...] 脏键——公司 prefab 没有本地化名；
+        /// 真店名在品牌实体上：CompanyData.m_Brand → GetRenderedLabelName(brand)（"Cheap & Random"式，
+        /// 与游戏 UI 公司名同源）。非公司实体/无品牌/脏键 → null，调用方走降级链。
+        /// internal static：ShopNameOf 租户路径与 EntityAnchorSystem 锚点标签同用（一处定义别复制粘贴）。</summary>
+        internal static string? CompanyNameOf(EntityManager em, Game.UI.NameSystem? nameSystem, Entity company)
+        {
+            if (nameSystem == null || !em.HasComponent<Game.Companies.CompanyData>(company))
+                return null;
+            var brand = em.GetComponentData<Game.Companies.CompanyData>(company).m_Brand;
+            if (brand == Entity.Null)
+                return null;
+            var name = nameSystem.GetRenderedLabelName(brand);
+            return IsUglyName(name) ? null : name;
         }
 
         /// <summary>分区自长建筑判定（§12 #62，一处定义全桥共用）：prefab 有 SpawnableBuildingData

@@ -180,6 +180,8 @@ namespace CityLife.GameBridge
         /// docs/spikes/2026-09-11-building-address-system.md）；地址拿不到才退"方位+那家+业态"最末兜底。
         /// 2026-09-09 实锤补充：GetRenderedLabelName 对无自定义名公司返回原始资产 ID
         /// （"Assets.NAME[Commercial_ConvenienceFoodStore]"——署名乱码源头），检出即视同无名回退；
+        /// 2026-09-14 普查再实锤：脏键率 34/34=公司 prefab 全没本地化名，故脏键后**先落品牌真名层**
+        /// （CompanyNameOf：m_Brand 品牌实体名，与游戏 UI 公司名同源），品牌也拿不到才退地址制；
         /// word 本身已是产出业态词（BusinessWord → ShopOutput），无需再借 ClassifyBuilding。
         /// </summary>
         private string CompanyLabel(Entity company, Entity building, string word, float3 pos)
@@ -188,8 +190,11 @@ namespace CityLife.GameBridge
             if (m_NameSystem != null)
             {
                 var name = m_NameSystem.GetRenderedLabelName(company);
-                if (!EnvironmentDigestSystem.IsUglyName(name)) // 脏键（空名/Assets.NAME[...] 原始资产 ID）视同无名——署名乱码源头，2026-09-09 实锤
+                if (!EnvironmentDigestSystem.IsUglyName(name)) // 非脏键=玩家自定义公司名，最优先
                     return name + RoadSuffix(building);
+                var brand = EnvironmentDigestSystem.CompanyNameOf(EntityManager, m_NameSystem, company);
+                if (brand != null) // 品牌真名层（普查实锤：公司渲染名全脏键，真店名在 m_Brand）
+                    return brand + RoadSuffix(building);
             }
             return TryGetAddressLabel(building, out var addr)
                 ? addr + "那家" + word

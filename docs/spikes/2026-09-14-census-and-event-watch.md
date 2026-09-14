@@ -4,7 +4,7 @@
 > Game.dll 版本：`Cities2_Data\Managed\Game.dll`，12,055,552 字节，文件时间 2026-06-29；Steam buildid **23700737**（appmanifest_949230.acf）；Unity 引擎 2022.3.71f1（与 2026-09-11 address-spike 同版，本报告头部照抄并当日复核一致）
 > 反编译产物存档：`logs/census-spike-20260914/`（普查字段）+ `logs/event-watch-spike-20260914/`（事件监听口）
 > 收口工具：`src/CityLife/GameBridge/CensusSpikeSystem.cs`（Ctrl+6 普查 dump / Ctrl+7 事件探针开关）
-> 结论先行：**组件层路径全部钉死**（§1 实锤表）；**事件监听口语义实锤**——Created/Deleted 只活一帧、EventJournal 只跟 EventPrefab（建造拆除走它无用）、灾难规模=受害实体 m_Event 回指针计数（§3）。§4 七项未实锤已经当日晚实机收口（两轮 Ctrl+6 普查 64+64 栋、一次 Ctrl+7 探针开窗 3 分 43 秒）：**①②⑦ 实锤、④ 证伪、③ 产出读法实锤（标记分布无样本）、⑤⑥ 窗口零命中仍未知**；**#62 小修复查通过、零误伤**（自长建筑渲染名 100% 为 zone 通用名样式，非自长 100% 为正常 prefab 本地化名，无 Assets. 脏键漏网进建筑名）。
+> 结论先行：**组件层路径全部钉死**（§1 实锤表）；**事件监听口语义实锤**——Created/Deleted 只活一帧、EventJournal 只跟 EventPrefab（建造拆除走它无用）、灾难规模=受害实体 m_Event 回指针计数（§3）。§4 七项未实锤已经当日晚实机收口（两轮 Ctrl+6 普查 64+64 栋、Ctrl+7 探针两次开窗）：**①②⑦ 实锤、④ 证伪、③ 产出读法实锤（标记分布无样本）**；⑤⑥ 首窗零命中后，第二窗"建 17 段路仍零命中"定位真根因=**相位错位**（GameSimulation watcher 看不到 Apply 相位的 Created/Deleted，§3.3），探针已改**集合差集法**待复跑；**#62 小修复查通过、零误伤**（自长建筑渲染名 100% 为 zone 通用名样式，非自长 100% 为正常 prefab 本地化名，无 Assets. 脏键漏网进建筑名）。
 
 ---
 
@@ -76,11 +76,13 @@
 
 - 建造 = 实体带 `Game.Common.Created`：Building/Road/Tree 各自 +Created 查询（exclude Temp）。
 - 拆除 = 带 `Game.Common.Deleted`（查询口径见 §3.1）。
-- **EventJournal 对建造拆除无用**：其 prefab 源查询只有 `EventPrefab + PrefabData`（EventJournalSystem.cs:503）——入刊的只有灾难类事件预制体，建筑/道路不是 EventPrefab，建造拆除永远不进 journal。监听口只能自建一帧探针（本 spike 交付物）。
+- **EventJournal 对建造拆除无用**：其 prefab 源查询只有 `EventPrefab + PrefabData`（EventJournalSystem.cs:503）——入刊的只有灾难类事件预制体，建筑/道路不是 EventPrefab，建造拆除永远不进 journal。
+- **实机实锤（2026-09-14 两轮零命中，相位错位）**：初版探针=Created/Deleted 标记直读、跑 GameSimulation 相位 interval=1。玩家 21:40:09 开探针，21:40:15-55 建造工具活跃建 17 段路（[Change] 快讯 21:41:00 实锤"新修了 17 段路"），探针**零命中**，两轮皆然。根因：`SystemUpdatePhase` 枚举（定向反编译）含 ApplyTool 且 **Cleanup 排最末**——玩家放置经 Apply 相位落地挂 Created/Deleted，Cleanup 相位帧末清标记，而 GameSimulation 在 Apply **之前**更新、下一帧标记已被清 → GameSimulation 相位的 watcher **永远看不到玩家放置的标记**。
+- **#65 监听口选型结论**：**集合差集法**（相位无关：快照三类实体集合，每帧差集报新增/消失——已实装进 Ctrl+7 探针，待实机复跑验证）；备选=换 ApplyTool 相位再验标记直读（未验）。
 
 ### 3.4 美化（玩家种树/庭院树）
 
-- 玩家种树 = `Game.Objects.Tree + Created`。`Game.Common.Owner { Entity m_Owner }` 组件存在性已补钉实锤（2026-09-14 ilspycmd 定向，ApplyNetSystem/DestroySystem 等多处挂它）。
+- 玩家种树 = `Game.Objects.Tree + Created`（⚠️ 同样受 §3.3 相位错位约束：GameSimulation 相位看不到，差集法探针打 `有Owner=` 收口）。`Game.Common.Owner { Entity m_Owner }` 组件存在性已补钉实锤（2026-09-14 ilspycmd 定向，ApplyNetSystem/DestroySystem 等多处挂它）。
 - "玩家手种的树无 Owner、庭院树有 Owner（挂在建筑/地块下）"是**推断**未实锤 → §4⑥ 探针逐条打 HasComponent<Owner> 供实机对照。
 
 ## 4. 未实锤清单 = 本次实机普查收口项（工具用法 + **结果已回填**）
@@ -91,8 +93,8 @@
 | ② | household 住户姓字面（GetRenderedLabelName(household) 是姓还是全名/脏键） | Ctrl+6 租户行 `住户姓=` | **实锤：真住户姓**——170/170 全为"X 一家"式本地化姓，详见 §4.2 |
 | ③ | extractor/service 公司产出读法（无 IndustrialProcessData 时的标记组件分布） | Ctrl+6 公司租户行 `extractor=/service=/commercial=` | **产出读法实锤（IndustrialProcessData 通吃 34/34）；标记组件分布无样本**（零公司落入该分支），详见 §4.3 |
 | ④ | GetRenderedLabelName(company) 是否=品牌名（CompanyData.m_Brand 对照） | Ctrl+6 公司租户行 `名=` vs `品牌=` | **证伪：≠ 品牌名，34/34 全是 Assets.NAME 脏键**；品牌名须走 m_Brand，详见 §4.4 |
-| ⑤ | 分区自长建筑是否带 Created（自长 vs 玩家手放的判别是否成立） | Ctrl+7 开探针后等分区自长/手动放建筑，看 `自长=` | **仍未知**——探针开窗 3m43s 零命中（窗口内无建造/拆除/种树，城市零增长），详见 §4.5 |
-| ⑥ | 庭院树 Owner 判别（玩家手种树是否无 Owner） | Ctrl+7 开探针后手动种树 vs 分区自长带出的树，`有Owner=` | **仍未知**——窗口内 Tree+Created 零命中，详见 §4.5 |
+| ⑤ | 分区自长建筑是否带 Created（自长 vs 玩家手放的判别是否成立） | Ctrl+7 开探针后等分区自长/手动放建筑，看 `自长=` | **探针机制已改集合差集**（标记直读相位错位实锤，§3.3），待玩家实机复跑收口 |
+| ⑥ | 庭院树 Owner 判别（玩家手种树是否无 Owner） | Ctrl+7 开探针后手动种树 vs 分区自长带出的树，`有Owner=` | **探针机制已改集合差集**（同上），待玩家实机复跑收口 |
 | ⑦ | 可入刊灾难 prefab 清单（eventPrefabs 实际内容） | Ctrl+6 末尾 `可入刊事件 prefab 共 N：` 行 | **实锤：为空**——两轮均 `共 0`，清单体零行、无报错，详见 §4.6 |
 
 ### 实机概况（回填数据的口径）
@@ -125,9 +127,14 @@
 
 34/34 公司 `名=` 全是 **`Assets.NAME[prefab内部名]` 未解析键**（中文客户端下 NameSystem 对公司实体不解析该键），如 `名=Assets.NAME[Commercial_FashionStore] prefab=Commercial_FashionStore 品牌=Cheap & Random`。而 `品牌=`（CompanyData.m_Brand → 品牌 prefab 名）全是真品牌：Cheap & Random、Smelt 'n Blast、Lehto Electronics、Maito、Limzabar、Pteropus、Neckbeard、InstaLOD……（英文虚构品牌，中文客户端保持原文）。**#62 公司档定稿：店名取 m_Brand 品牌名，GetRenderedLabelName(company) 不可用作显示名**。附带观测：品牌是"虚构集团"可跨业态复用——Crapfish Granules 同挂 PlasticsStore 与 PlasticsFactory。
 
-### 4.5 ⑤⑥ 探针窗口零命中 —— 仍未知（不硬编结论）
+### 4.5 ⑤⑥ 探针零命中 —— 根因已定位=相位错位，探针已改集合差集待复跑
 
-`[事件探针]` 全日志仅 2 行：19:52:10.764 **开**、19:55:53.388 **关**，开窗约 3 分 43 秒期间**零命中**（无新建建筑/新路/新树/拆建筑任何一条）。窗口内游戏确认在跑（闲聊炉连开 10 炉、FPS≈45-50、无 ERR/WARN），两轮普查全城建筑数 2598→2598 零增长互洽——结论只能是**窗口内玩家无建造/拆除/种树动作、城市也无分区自长新建筑**，探针未经正样本验证。⑤自长是否带 Created、⑥庭院树 Owner 判别，**两项仍未知**，留待下一轮实机开窗时按 §4 工具用法第 3 步做一轮正样本操作。
+两轮实机零命中，两段窗口性质不同：
+
+- **第一窗（19:52:10 开 → 19:55:53 关，约 3m43s）**：零命中，窗口内游戏在跑（闲聊炉连开 10 炉、FPS≈45-50）、两轮普查全城 2598→2598 零增减——该窗确无建造活动，属"无正样本"。
+- **第二窗（21:40:09 开）**：玩家 21:40:15-55 建造工具活跃建 17 段路（[Change] 快讯 21:41:00 实锤"新修了 17 段路"），探针**仍零命中**——有正样本却看不到，证伪"无活动"解释，定位真根因=**相位错位**（§3.3：GameSimulation 在 ApplyTool 之前、Cleanup 帧末清标记，标记直读在 GameSimulation 相位永远看不到玩家放置）。
+
+探针已重写为**集合差集法**（相位无关，开探针帧快照基准、每帧差集报新增/消失，树消失只打合并计数）。⑤⑥ 两项结论留待玩家用新探针复跑一轮正样本操作（手动放建筑/等自长/种树/拆建筑）后回填。
 
 ### 4.6 ⑦ 可入刊事件 prefab 清单 —— 实锤：为空
 
@@ -151,13 +158,13 @@
 
 1. 部署后进任意**有 ≥50 栋建筑的城市存档**，`tail -f Logs/CityLife.log`（--developerMode 下日志在 `AppData/LocalLow/Colossal Order/Cities Skylines II/Logs/CityLife.log`）。
 2. **Ctrl+6 = 普查 dump**（按一次打一轮）：`[普查]` 前缀——开头类别分布行 → ≤64 栋逐栋行（实体号/类别/自长/prefab 名/地块/两套 Flags/loc/渲染名/地址）+ 每栋 ≤4 个租户行 → 末尾可入刊事件 prefab 清单 + 合计行数。
-3. **Ctrl+7 = 事件探针开关**（拨开再拨关）：开启期间 `[事件探针]` 前缀逐条打新建建筑（含 `自长=`）/新路/新树（含 `有Owner=`）/拆建筑。建议开着探针做一轮操作：手动放一栋建筑、等分区自长、手动种棵树、拆一栋建筑，然后 Ctrl+7 关掉。
-4. 单帧同类命中 >20 条自动合并成一行计数（防批量生成时刷屏）。
+3. **Ctrl+7 = 事件探针开关**（拨开再拨关）：**集合差集法**——开探针帧先快照全城建筑/路/树为基准（打一行基准计数，不报"新增"），开启期间每帧差集，`[事件探针]` 前缀逐条打新建建筑（含 `自长=`）/新路/新树（含 `有Owner=`）/拆建筑/拆路（消失的打快照存的 prefab 名）；树消失只打合并计数行。建议开着探针做一轮正样本操作：手动放一栋建筑、等分区自长、手动种棵树、拆一栋建筑，然后 Ctrl+7 关掉。
+4. 单帧同类新增/消失 >20 条自动合并成一行计数（防批量生成时刷屏）。
 
 ## 5. 风险与纪律
 
 - **只读不写**：全系统无一处 Add/Set/RemoveComponent，不写回任何模拟数据。
 - **主线程低频**：普查 dump 是热键触发的一次性 O(64) 循环（租户 ≤4/栋，一轮几百行内）；GetAddress 只在抽样栋上跑（O(路段数) 警告适用但量级极小）。
-- **探针默认关**：m_ProbeOn 默认 false，关闭时不跑任何探针查询（零成本）；开启时空命中 ToEntityArray 后 Length==0 直接返回不分配。
-- **ECS 纪律**：禁用 SystemAPI；查询全部 OnCreate 缓存；GetUpdateInterval=1（2 的幂，热键捕获与一帧标记语义的双重需要）；exclude Temp/Deleted（Deleted 探针支路除外，§3.1）；HasComponent 先行再 GetComponentData；游戏自建系统（PrefabSystem/NameSystem/EventJournalSystem）惰性解析+判空。
+- **探针默认关**：m_ProbeOn 默认 false，关闭时不跑任何探针查询、快照清空（零成本）；开启时每帧三查询差集，ToEntityArray/NativeHashSet 用 Allocator.Temp 无残留分配，prefab 名只给新增实体解析。
+- **ECS 纪律**：禁用 SystemAPI；查询全部 OnCreate 缓存；GetUpdateInterval=1（2 的幂，热键捕获与每帧差集的双重需要）；查询 exclude Temp/Deleted；HasComponent 先行再 GetComponentData；游戏自建系统（PrefabSystem/NameSystem/EventJournalSystem）惰性解析+判空。
 - **退役方法**：验证完即退役——Mod.cs 删 `updateSystem.UpdateAt<GameBridge.CensusSpikeSystem>(...)` 一行即可（登记处注释已注明）。

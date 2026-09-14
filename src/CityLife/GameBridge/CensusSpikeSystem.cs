@@ -24,18 +24,23 @@ namespace CityLife.GameBridge
     ///   每栋 ≤4 个租户各打一行（公司：prefab 名 + IndustrialProcessData 有无及投入产出 + m_IsImport + 品牌名，
     ///   无则打 Extractor/Service/Commercial 标记组件有无；住户：渲染名=住户姓验证），
     ///   末尾一行全量类别分布 + 一行可入刊事件 prefab 清单（EventJournalSystem.eventPrefabs）+ 合计行数。
-    /// - **Ctrl+7 事件探针开关**（拨一下开、再拨关，状态进日志）：开启期间每帧查
-    ///   Building+Created / Road+Created / Tree+Created / Building+Deleted（Created/Deleted 只活一帧，
-    ///   PrepareCleanUpSystem→CleanUpSystem 每帧清，必须 GetUpdateInterval=1 当帧观察；
-    ///   Deleted 支路查询不加 Exclude&lt;Deleted&gt;——实体当帧还在、组件可读）。
-    ///   命中逐条打 `[事件探针]`；单帧同类 &gt;20 条合并成一行计数防爆日志。
+    /// - **Ctrl+7 事件探针开关**（拨一下开、再拨关，状态进日志）：**集合差集法**——开探针帧快照全城
+    ///   建筑（实体→prefab 名）/路（同）/树（HashSet）为基准（不报"新增"，否则开局全城皆"新"），
+    ///   开启期间每帧重查并差集：新增=新建建筑（prefab 名+IsZoneGrown 自长）/新路/新树（prefab 名+Owner 有无），
+    ///   消失=拆建筑/拆路（打快照存的 prefab 名）；树消失只打合并计数行（游戏自清树量大），
+    ///   单帧同类新增/消失 &gt;20 条合并成一行计数防爆日志。
+    ///   **为什么不用 Created/Deleted 标记直读**：2026-09-14 两轮实机零命中实锤相位错位——玩家放置经
+    ///   ApplyTool 相位落地挂 Created/Deleted，Cleanup 相位帧末清标记，而本系统跑 GameSimulation 相位
+    ///   （在 Apply 之前更新，下一帧标记已清）→ GameSimulation 相位 interval=1 watcher 永远看不到
+    ///   玩家放置的标记（#65 监听口选型关键实锤，详见报告 §3.1）。集合差集=相位无关的稳健法。
+    ///   已知噪声：Entity index 复用时同 index 新版本会表现为一拆一建（spike 工具可接受）。
     ///
     /// 如何扩展：加普查字段=在 DumpBuilding/DumpRenter 里加一行读取（HasComponent 先行再 GetComponentData）；
-    /// 加探针类别=OnCreate 缓存新查询 + ProbeFrame 里加一支（ Deleted 类支路记得别加 Exclude&lt;Deleted&gt;）。
+    /// 加探针类别=OnCreate 缓存新查询 + SnapshotAll 加基准 + ProbeFrame 加一支差集。
     ///
-    /// 纪律：只读不写；dump 是主线程一次性 O(64) 循环不阻塞模拟；探针关闭时零成本（不跑任何查询），
-    /// 开启时命中为空 ToEntityArray 后 Length==0 直接返回不分配；禁用 SystemAPI（源码生成器不跑）；
-    /// 查询全部 OnCreate 缓存；游戏自建系统（PrefabSystem/NameSystem/EventJournalSystem）惰性解析+判空。
+    /// 纪律：只读不写；dump 是主线程一次性 O(64) 循环不阻塞模拟；探针关闭时零成本（不跑任何查询、快照清空），
+    /// 开启时三查询 ToEntityArray/HashSet 用 Allocator.Temp/栈外无残留分配，prefab 名只给新增实体解析；
+    /// 禁用 SystemAPI（源码生成器不跑）；查询全部 OnCreate 缓存；游戏自建系统（PrefabSystem/NameSystem/EventJournalSystem）惰性解析+判空。
     /// </summary>
     public partial class CensusSpikeSystem : GameSystemBase
     {
@@ -43,11 +48,9 @@ namespace CityLife.GameBridge
         private const int k_MaxRenters = 4;      // 每栋最多打的租户行数
         private const int k_MergeThreshold = 20; // 单帧同类命中超此数合并成一行计数
 
-        private EntityQuery m_BuildingQuery = default!;        // 普查主查询 + RequireForUpdate 闸（主菜单/空城静默）
-        private EntityQuery m_BuildingCreatedQuery = default!;
-        private EntityQuery m_RoadCreatedQuery = default!;
-        private EntityQuery m_TreeCreatedQuery = default!;
-        private EntityQuery m_BuildingDeletedQuery = default!; // Deleted 支路：不能加 Exclude<Deleted>
+        private EntityQuery m_BuildingQuery = default!;        // 普查主查询 + 探针建筑差集 + RequireForUpdate 闸（主菜单/空城静默）
+        private EntityQuery m_RoadQuery = default!;            // 探针路网差集
+        private EntityQuery m_TreeQuery = default!;            // 探针树差集
 
         private PrefabSystem? m_PrefabSystem;                  // 惰性：prefab 内部名（GetPrefabName public）
         private Game.UI.NameSystem? m_NameSystem;              // 惰性：渲染名/路名
@@ -57,6 +60,12 @@ namespace CityLife.GameBridge
         private uint m_Frame;
         private uint m_LastKeyFrame; // 上次触发帧，30 帧防抖（按住/单键多帧登记只触发一次）
 
+        // 探针差集基准（开探针帧快照；建筑/路存 prefab 名供消失播报，树只存实体）
+        private readonly Dictionary<Entity, string> m_BuildingSnap = new();
+        private readonly Dictionary<Entity, string> m_RoadSnap = new();
+        private readonly HashSet<Entity> m_TreeSnap = new();
+        private readonly List<Entity> m_Scratch = new();       // 差集移除暂存（枚举字典时不能改字典）
+
         protected override void OnCreate()
         {
             base.OnCreate();
@@ -64,28 +73,19 @@ namespace CityLife.GameBridge
                 ComponentType.ReadOnly<Game.Buildings.Building>(),
                 ComponentType.Exclude<Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
-            // —— 事件探针四类（Created/Deleted 只活一帧，查询不含 Temp 即可，命中当帧组件全可读）——
-            m_BuildingCreatedQuery = GetEntityQuery(
-                ComponentType.ReadOnly<Game.Buildings.Building>(),
-                ComponentType.ReadOnly<Created>(),
-                ComponentType.Exclude<Game.Tools.Temp>());
-            m_RoadCreatedQuery = GetEntityQuery(
+            // —— 事件探针差集查询（集合差集=相位无关，不用 Created/Deleted 标记，原因见头注释）——
+            m_RoadQuery = GetEntityQuery(
                 ComponentType.ReadOnly<Game.Net.Road>(),
-                ComponentType.ReadOnly<Created>(),
+                ComponentType.Exclude<Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
-            m_TreeCreatedQuery = GetEntityQuery(
+            m_TreeQuery = GetEntityQuery(
                 ComponentType.ReadOnly<Game.Objects.Tree>(),
-                ComponentType.ReadOnly<Created>(),
-                ComponentType.Exclude<Game.Tools.Temp>());
-            // 拆除支路：Deleted 当帧实体还在，绝不能 Exclude<Deleted>
-            m_BuildingDeletedQuery = GetEntityQuery(
-                ComponentType.ReadOnly<Game.Buildings.Building>(),
-                ComponentType.ReadOnly<Deleted>(),
+                ComponentType.Exclude<Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
             RequireForUpdate(m_BuildingQuery); // 主菜单/空城整系统静默（热键也不响应）
         }
 
-        public override int GetUpdateInterval(SystemUpdatePhase phase) => 1; // 2 的幂；热键捕获+探针当帧都要逐帧
+        public override int GetUpdateInterval(SystemUpdatePhase phase) => 1; // 2 的幂；热键捕获+探针每帧差集都要逐帧
 
         protected override void OnUpdate()
         {
@@ -288,72 +288,189 @@ namespace CityLife.GameBridge
         private void ToggleProbe()
         {
             m_ProbeOn = !m_ProbeOn;
-            Mod.Log.Info(m_ProbeOn
-                ? "[事件探针] 开（每帧查 Building/Road/Tree+Created 与 Building+Deleted，Ctrl+7 再拨关闭）"
-                : "[事件探针] 关");
+            if (m_ProbeOn)
+            {
+                // 开探针帧以快照为基准，不报任何"新增"（否则开局全城皆"新"）
+                SnapshotAll();
+                Mod.Log.Info("[事件探针] 开（集合差集法：每帧报建筑/路/树的新增与消失，Ctrl+7 再拨关闭）");
+            }
+            else
+            {
+                m_BuildingSnap.Clear();
+                m_RoadSnap.Clear();
+                m_TreeSnap.Clear();
+                Mod.Log.Info("[事件探针] 关");
+            }
+        }
+
+        /// <summary>开探针帧基准快照：三类实体全集（建筑/路顺带存 prefab 名，消失时才有得报）。</summary>
+        private void SnapshotAll()
+        {
+            m_BuildingSnap.Clear();
+            var buildings = m_BuildingQuery.ToEntityArray(Allocator.Temp);
+            foreach (var e in buildings)
+                m_BuildingSnap[e] = PrefabNameOf(e);
+            buildings.Dispose();
+
+            m_RoadSnap.Clear();
+            var roads = m_RoadQuery.ToEntityArray(Allocator.Temp);
+            foreach (var e in roads)
+                m_RoadSnap[e] = PrefabNameOf(e);
+            roads.Dispose();
+
+            m_TreeSnap.Clear();
+            var trees = m_TreeQuery.ToEntityArray(Allocator.Temp);
+            foreach (var e in trees)
+                m_TreeSnap.Add(e);
+            trees.Dispose();
+
+            Mod.Log.Info($"[事件探针] 基准快照：建筑 {m_BuildingSnap.Count}，路 {m_RoadSnap.Count}，树 {m_TreeSnap.Count}");
         }
 
         private void ProbeFrame()
         {
-            ProbeCreatedBuildings();
-            ProbeSimple(m_RoadCreatedQuery, "新路", showOwner: false);
-            ProbeSimple(m_TreeCreatedQuery, "新树", showOwner: true); // Owner 有无=玩家种的判别候选（收口⑥，推断待实机）
-            ProbeDeletedBuildings();
+            DiffBuildings();
+            DiffNamed(m_RoadQuery, m_RoadSnap, "新路", "拆路");
+            DiffTrees();
         }
 
-        private void ProbeCreatedBuildings()
+        /// <summary>建筑差集：新增打 prefab 名+自长（收口⑤：自长 vs 玩家手放判别）；消失打快照存的 prefab 名。</summary>
+        private void DiffBuildings()
         {
-            var arr = m_BuildingCreatedQuery.ToEntityArray(Allocator.Temp);
-            if (arr.Length == 0) { arr.Dispose(); return; }
-            if (arr.Length > k_MergeThreshold)
-            {
-                Mod.Log.Info($"[事件探针] 新建建筑 本帧 ×{arr.Length}（>{k_MergeThreshold} 合并）");
-                arr.Dispose();
-                return;
-            }
+            var arr = m_BuildingQuery.ToEntityArray(Allocator.Temp);
+            var current = new NativeHashSet<Entity>(arr.Length, Allocator.Temp);
             foreach (var e in arr)
+                current.Add(e);
+
+            var added = 0;
+            foreach (var e in arr)
+                if (!m_BuildingSnap.ContainsKey(e))
+                    added++;
+            if (added > k_MergeThreshold)
             {
-                // 自长=是 → 分区自长（游戏系统生成）；否 → 玩家手放/签名建筑（收口⑤：自长是否带 Created）
-                var grown = EnvironmentDigestSystem.IsZoneGrown(EntityManager, e);
-                Mod.Log.Info($"[事件探针] 新建建筑 {e.Index}:{e.Version} prefab={PrefabNameOf(e)} 自长={(grown ? "是" : "否")}");
+                Mod.Log.Info($"[事件探针] 新建建筑 本帧 ×{added}（>{k_MergeThreshold} 合并）");
             }
+            else
+            {
+                foreach (var e in arr)
+                {
+                    if (m_BuildingSnap.ContainsKey(e))
+                        continue;
+                    var grown = EnvironmentDigestSystem.IsZoneGrown(EntityManager, e);
+                    Mod.Log.Info($"[事件探针] 新建建筑 {e.Index}:{e.Version} prefab={PrefabNameOf(e)} 自长={(grown ? "是" : "否")}");
+                }
+            }
+
+            m_Scratch.Clear();
+            foreach (var kv in m_BuildingSnap)
+                if (!current.Contains(kv.Key))
+                    m_Scratch.Add(kv.Key);
+            ReportRemoved(m_Scratch, m_BuildingSnap, "拆建筑");
+            // 新增补名入基准（存量名字不重复解析——GetPrefabName 只给新实体调）
+            foreach (var e in arr)
+                if (!m_BuildingSnap.ContainsKey(e))
+                    m_BuildingSnap[e] = PrefabNameOf(e);
+            current.Dispose();
             arr.Dispose();
         }
 
-        private void ProbeSimple(EntityQuery query, string label, bool showOwner)
+        /// <summary>带 prefab 名快照的通用差集（路网用）：新增/消失逐条报名，超阈值合并计数。</summary>
+        private void DiffNamed(EntityQuery query, Dictionary<Entity, string> snap, string addedLabel, string removedLabel)
         {
             var arr = query.ToEntityArray(Allocator.Temp);
-            if (arr.Length == 0) { arr.Dispose(); return; }
-            if (arr.Length > k_MergeThreshold)
-            {
-                Mod.Log.Info($"[事件探针] {label} 本帧 ×{arr.Length}（>{k_MergeThreshold} 合并）");
-                arr.Dispose();
-                return;
-            }
+            var current = new NativeHashSet<Entity>(arr.Length, Allocator.Temp);
             foreach (var e in arr)
+                current.Add(e);
+
+            var added = 0;
+            foreach (var e in arr)
+                if (!snap.ContainsKey(e))
+                    added++;
+            if (added > k_MergeThreshold)
             {
-                var owner = showOwner ? $" 有Owner={(EntityManager.HasComponent<Owner>(e) ? "是" : "否")}" : "";
-                Mod.Log.Info($"[事件探针] {label} {e.Index}:{e.Version} prefab={PrefabNameOf(e)}{owner}");
+                Mod.Log.Info($"[事件探针] {addedLabel} 本帧 ×{added}（>{k_MergeThreshold} 合并）");
             }
+            else
+            {
+                foreach (var e in arr)
+                    if (!snap.ContainsKey(e))
+                        Mod.Log.Info($"[事件探针] {addedLabel} {e.Index}:{e.Version} prefab={PrefabNameOf(e)}");
+            }
+
+            m_Scratch.Clear();
+            foreach (var kv in snap)
+                if (!current.Contains(kv.Key))
+                    m_Scratch.Add(kv.Key);
+            ReportRemoved(m_Scratch, snap, removedLabel);
+            // 新增补名入基准（存量名字不重复解析）
+            foreach (var e in arr)
+                if (!snap.ContainsKey(e))
+                    snap[e] = PrefabNameOf(e);
+            current.Dispose();
             arr.Dispose();
         }
 
-        private void ProbeDeletedBuildings()
+        /// <summary>消失播报+快照同步：逐条打快照存的 prefab 名（超阈值合并），然后从基准移除并让 arr 侧新增补名入库。</summary>
+        private void ReportRemoved(List<Entity> removed, Dictionary<Entity, string> snap, string removedLabel)
         {
-            var arr = m_BuildingDeletedQuery.ToEntityArray(Allocator.Temp);
-            if (arr.Length == 0) { arr.Dispose(); return; }
-            if (arr.Length > k_MergeThreshold)
+            if (removed.Count > k_MergeThreshold)
             {
-                Mod.Log.Info($"[事件探针] 拆建筑 本帧 ×{arr.Length}（>{k_MergeThreshold} 合并）");
-                arr.Dispose();
-                return;
+                Mod.Log.Info($"[事件探针] {removedLabel} 本帧 ×{removed.Count}（>{k_MergeThreshold} 合并）");
             }
+            else
+            {
+                foreach (var e in removed)
+                    Mod.Log.Info($"[事件探针] {removedLabel} prefab={snap[e]}（实体 {e.Index}:{e.Version} 已消失）");
+            }
+            foreach (var e in removed)
+                snap.Remove(e);
+        }
+
+        /// <summary>树差集：新增逐条打 prefab 名+Owner 有无（收口⑥：玩家种的判别候选，推断待实机）；
+        /// 消失**只打合并计数行**（游戏自清树量大，逐条刷屏无价值）。</summary>
+        private void DiffTrees()
+        {
+            var arr = m_TreeQuery.ToEntityArray(Allocator.Temp);
+            var current = new NativeHashSet<Entity>(arr.Length, Allocator.Temp);
             foreach (var e in arr)
+                current.Add(e);
+
+            var added = 0;
+            foreach (var e in arr)
+                if (!m_TreeSnap.Contains(e))
+                    added++;
+            if (added > k_MergeThreshold)
             {
-                // Deleted 当帧组件全在（CleanUpSystem 帧末才 DestroyEntity），prefab 名/自长照常可读
-                var grown = EnvironmentDigestSystem.IsZoneGrown(EntityManager, e);
-                Mod.Log.Info($"[事件探针] 拆建筑 {e.Index}:{e.Version} prefab={PrefabNameOf(e)} 自长={(grown ? "是" : "否")}");
+                Mod.Log.Info($"[事件探针] 新树 本帧 ×{added}（>{k_MergeThreshold} 合并）");
             }
+            else
+            {
+                foreach (var e in arr)
+                {
+                    if (m_TreeSnap.Contains(e))
+                        continue;
+                    Mod.Log.Info($"[事件探针] 新树 {e.Index}:{e.Version} prefab={PrefabNameOf(e)} " +
+                                 $"有Owner={(EntityManager.HasComponent<Owner>(e) ? "是" : "否")}");
+                }
+            }
+
+            var removed = 0;
+            m_Scratch.Clear();
+            foreach (var e in m_TreeSnap)
+                if (!current.Contains(e))
+                {
+                    removed++;
+                    m_Scratch.Add(e);
+                }
+            if (removed > 0)
+                Mod.Log.Info($"[事件探针] 树消失 本帧 ×{removed}（合并计数，不逐条）");
+            foreach (var e in m_Scratch)
+                m_TreeSnap.Remove(e);
+
+            // 新增补入基准
+            foreach (var e in arr)
+                m_TreeSnap.Add(e);
+            current.Dispose();
             arr.Dispose();
         }
 

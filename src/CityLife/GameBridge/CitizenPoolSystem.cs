@@ -114,7 +114,7 @@ namespace CityLife.GameBridge
                 var name = m_NameSystem.GetRenderedLabelName(e);
                 if (string.IsNullOrEmpty(name))
                     continue;
-                var card = Describe(EntityManager, e, citizen, age, purpose, out var occasion);
+                var card = Describe(EntityManager, e, citizen, age, purpose, m_NameSystem, out var occasion);
                 // 配额闸：超额的多数派让位，少数派拉满预算尽量补齐（配额只超采不重排）
                 if (occCount[(int)occasion] >= k_OccasionCap)
                     continue;
@@ -144,10 +144,11 @@ namespace CityLife.GameBridge
         /// 对任意市民实体出处境卡（与池采样同一条产线同一口径，一处定义别复制粘贴）。
         /// 按实体出卡的公共口：S7 剧场按人开炉曾用，§12 #52 改库存剧本后当前无调用方，
         /// 保留给 backlog 的定班底剧场等后续形态。无 Citizen 组件/儿童/MovingAway → null（调用方跳过）。
-        /// 名字不在此处取——NameSystem 归调用方（EnvironmentDigestSystem 同款惰性解析先例）。
+        /// 名字不在此处取——NameSystem 归调用方（EnvironmentDigestSystem 同款惰性解析先例）；
+        /// nameSystem 只用于场所真名层（§12 #62），传 null = 场所全落类别词。
         /// 场合随卡盖章（§12 #60 刀①），失败路径落 Any。
         /// </summary>
-        internal static string? DescribeCitizen(EntityManager em, Entity e, out Content.BubbleOccasion occasion)
+        internal static string? DescribeCitizen(EntityManager em, Entity e, out Content.BubbleOccasion occasion, Game.UI.NameSystem? nameSystem = null)
         {
             occasion = Content.BubbleOccasion.Any;
             if (e == Entity.Null || !em.Exists(e) || !em.HasComponent<Citizen>(e))
@@ -162,13 +163,14 @@ namespace CityLife.GameBridge
                 : Purpose.None;
             if (purpose == Purpose.MovingAway)
                 return null;
-            return Describe(em, e, citizen, age, purpose, out occasion);
+            return Describe(em, e, citizen, age, purpose, nameSystem, out occasion);
         }
 
-        /// <summary>处境卡组装："退休大爷，在公园里溜达" / "手头紧的上班族，坐公交下班回家路上（去住宅区）" / "学生，打车上学路上（去学校）"。读不到的维度整段省略。
+        /// <summary>处境卡组装："退休大爷，在公园里溜达" / "手头紧的上班族，坐公交下班回家路上（去「胖东来」）" / "学生，打车上学路上（去学校）"。读不到的维度整段省略。
+        /// 场所显示词走 §12 #62 分级：真名（NameSystem，「」括注）>类别词；zone 通用名在 ShopNameOf 已斩断，到不了这里。
         /// 场合随组装一并盖章（§12 #60 刀① Plan B——是事实不是判断，不再劳烦 LLM 推）。
         /// static + 显式 EntityManager：池采样（OnUpdate）与按实体出卡口（DescribeCitizen）共用。</summary>
-        private static string Describe(EntityManager em, Entity e, Citizen citizen, CitizenAge age, Purpose purpose, out Content.BubbleOccasion occasion)
+        private static string Describe(EntityManager em, Entity e, Citizen citizen, CitizenAge age, Purpose purpose, Game.UI.NameSystem? nameSystem, out Content.BubbleOccasion occasion)
         {
             // —— 身份（谁）——
             var tourist = (citizen.m_State & CitizenFlags.Tourist) != 0;
@@ -196,24 +198,29 @@ namespace CityLife.GameBridge
             }
 
             // —— 处境（在哪/在干嘛/乘什么/去哪）——
-            var situation = DescribeSituation(em, e, purpose, out occasion);
+            var situation = DescribeSituation(em, e, purpose, nameSystem, out occasion);
             return situation.Length > 0 ? $"{identity}，{situation}" : identity;
         }
 
         /// <summary>处境半句：在室内→"在 XX（里）+动作"；在途中→"乘什么+路程短语+（去 XX）"。
+        /// 场所显示词走 §12 #62 分级：真名（NameSystem，「」括注）>类别词——真名经 ShopNameOf 取
+        /// （zone 通用名已在那层斩断）；住宅是自己家不落名（住宅无业态），恒落类别词"住宅区"。
         /// 场合随路盖章（§12 #60 刀①）：室内=Indoor（公园/景点是开放空间=Walk，#57 公园归人）；
         /// 途中乘真载具=Vehicle，否则走路=Walk——采样时已确定的事实，LLM 不再推。</summary>
-        private static string DescribeSituation(EntityManager em, Entity e, Purpose purpose, out Content.BubbleOccasion occasion)
+        private static string DescribeSituation(EntityManager em, Entity e, Purpose purpose, Game.UI.NameSystem? nameSystem, out Content.BubbleOccasion occasion)
         {
             // 室内：CurrentBuilding 在挂=在建筑内（行程分发时移除，spike §1）
             if (em.HasComponent<CurrentBuilding>(e))
             {
-                var place = ClassifyBuilding(em, em.GetComponentData<CurrentBuilding>(e).m_CurrentBuilding);
+                var curBuilding = em.GetComponentData<CurrentBuilding>(e).m_CurrentBuilding;
+                var place = ClassifyBuilding(em, curBuilding);
                 occasion = place is "公园" or "景点" ? Content.BubbleOccasion.Walk : Content.BubbleOccasion.Indoor;
                 if (place != null)
                 {
-                    // "在商店里上班" vs "在住宅区呆着"：片区/开放场所不加"里"
-                    var at = place is "住宅区" or "景点" ? $"在{place}" : $"在{place}里";
+                    var real = place == "住宅区" ? null : EnvironmentDigestSystem.ShopNameOf(em, nameSystem, curBuilding);
+                    var where = real != null ? $"「{real}」" : place;
+                    // "在商店里上班" vs "在住宅区呆着"：片区/开放场所不加"里"（带真名时按类别同判）
+                    var at = place is "住宅区" or "景点" ? $"在{where}" : $"在{where}里";
                     return at + IndoorActivity(purpose);
                 }
                 // 建筑读不出类型（外部连接/未分类）：只按目的直译，不编场所
@@ -223,7 +230,7 @@ namespace CityLife.GameBridge
             // 在途中：乘什么（步行/未分类=省略）+ 路程短语 + 目的地括注
             occasion = RealVehicleOrNull(em, e) != Entity.Null ? Content.BubbleOccasion.Vehicle : Content.BubbleOccasion.Walk;
             var s = TransportPhrase(em, e) + JourneyPhrase(purpose);
-            var dest = DestinationPlace(em, e);
+            var dest = DestinationPlace(em, e, nameSystem);
             if (dest != null)
                 s += s.Length > 0 ? $"（去{dest}）" : $"在去{dest}的路上";
             return s;
@@ -251,9 +258,11 @@ namespace CityLife.GameBridge
             return vehicle != Entity.Null && em.HasComponent<Game.Vehicles.Vehicle>(vehicle) ? vehicle : Entity.Null;
         }
 
-        /// <summary>目的地建筑类型词（"商店"）；无 Target/非建筑/未分类 → null（该维度省略）。
+        /// <summary>目的地建筑显示词（§12 #62 分级）：真名（NameSystem，「」括注）优先、类别词（"商店"）兜底；
+        /// 住宅是自己家不落名=类别词"住宅区"。无 Target/非建筑/未分类 → null（该维度省略）。
+        /// nameSystem 传 null = 真名层整体关闭（全落类别词）。
         /// internal static 共享：BubbleChatterSystem 车卡组卡（载具目的地）同用（一处定义别复制粘贴）。</summary>
-        internal static string? DestinationPlace(EntityManager em, Entity e)
+        internal static string? DestinationPlace(EntityManager em, Entity e, Game.UI.NameSystem? nameSystem = null)
         {
             if (!em.HasComponent<Game.Common.Target>(e))
                 return null;
@@ -263,7 +272,11 @@ namespace CityLife.GameBridge
             // 目标是租户实体（公司/住户）时映射到其房产建筑（spike §2，TripNeededSystem decomp 行 145-150）
             if (em.HasComponent<Game.Buildings.PropertyRenter>(target))
                 target = em.GetComponentData<Game.Buildings.PropertyRenter>(target).m_Property;
-            return ClassifyBuilding(em, target);
+            var place = ClassifyBuilding(em, target);
+            if (place == null || place == "住宅区" || nameSystem == null)
+                return place;
+            var real = EnvironmentDigestSystem.ShopNameOf(em, nameSystem, target);
+            return real != null ? $"「{real}」" : place;
         }
 
         /// <summary>建筑类型词：景点/学校/医院/住宅区/商店/工厂/办公楼/公园；非建筑（外部连接等）与未分类 → null。

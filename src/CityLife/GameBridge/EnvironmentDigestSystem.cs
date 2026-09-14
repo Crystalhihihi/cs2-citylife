@@ -259,8 +259,10 @@ namespace CityLife.GameBridge
             return sb.ToString();
         }
 
-        /// <summary>真实店名：租户公司名优先（EntityAnchorSystem 先例：NameSystem.GetRenderedLabelName(company)），
-        /// 无名回退建筑自身渲染名，再无名 → null（聚类点退纯计数文案）。
+        /// <summary>真实店名（§12 #62 场所名分级）：租户公司名优先（EntityAnchorSystem 先例：
+        /// NameSystem.GetRenderedLabelName(company)）；无名回退建筑自身渲染名——**分区自长建筑除外**
+        /// （IsZoneGrown：其渲染名=zone 通用名"北美低密度商业"式功能区标签，只当类别不当店名，
+        /// 2026-09-12 玩家实机"被当店名念"）；再无名 → null（聚类点退纯计数文案）。
         /// internal static：S7 小剧场的场景卡取店名共用这一处定义（别复制粘贴）。</summary>
         internal static string? ShopNameOf(EntityManager em, Game.UI.NameSystem? nameSystem, Entity building)
         {
@@ -276,7 +278,49 @@ namespace CityLife.GameBridge
                         return name;
                 }
             }
+            if (IsZoneGrown(em, building))
+                return null; // 功能区标签不是名字（#62）——调用方走类别词降级，绝不进 prompt
             return RenderedName(nameSystem, building);
+        }
+
+        /// <summary>分区自长建筑判定（§12 #62，一处定义全桥共用）：prefab 有 SpawnableBuildingData
+        /// 且无 SignatureBuildingData——与游戏 NameSystem.GetName 的选择逻辑同源
+        /// （行级实锤 docs/spikes/2026-09-11-building-address-system.md §3/§4）；这类建筑的
+        /// GetRenderedLabelName=zone 通用名（"北美低密度商业"式功能区标签），不是店名。
+        /// SignatureBuildingData 实体侧也有空标记（dump 实锤，BubbleWorldSpikeSystem 先例），prefab/实体两查保险。</summary>
+        internal static bool IsZoneGrown(EntityManager em, Entity building)
+        {
+            if (!em.HasComponent<Game.Prefabs.PrefabRef>(building))
+                return false;
+            var prefab = em.GetComponentData<Game.Prefabs.PrefabRef>(building).m_Prefab;
+            if (em.HasComponent<Game.Prefabs.SignatureBuildingData>(building)
+                || em.HasComponent<Game.Prefabs.SignatureBuildingData>(prefab))
+                return false;
+            return em.HasComponent<Game.Prefabs.SpawnableBuildingData>(prefab);
+        }
+
+        /// <summary>真路名地址（"115冬青街"，§12 #60 刀⑤）：游戏公共静态方法 BuildingUtils.GetAddress 现算
+        /// （门牌号不存储——调游戏 API 不复制公式，铁律 3；行级实锤 docs/spikes/2026-09-11-building-address-system.md）。
+        /// 路名与选中 UI 同源（GetRenderedLabelName(road)，玩家自定义路名优先）。
+        /// 仅主线程低频用（内部遍历聚合路路段 buffer，O(路段数)——禁止进渲染热路径）。
+        /// 拿不到（非建筑/临路边未聚合/路名空）→ false，调用方走降级链。
+        /// internal static 共享：EntityAnchorSystem 锚点名/EventChainSystem 场馆名同用（一处定义别复制粘贴）。</summary>
+        internal static bool TryGetAddressLabel(EntityManager em, Game.UI.NameSystem? nameSystem, Entity building, out string label)
+        {
+            label = "";
+            if (nameSystem == null || !em.HasComponent<Game.Buildings.Building>(building))
+                return false;
+            if (Game.Buildings.BuildingUtils.GetAddress(em, building, out var road, out var number)
+                && road != Entity.Null)
+            {
+                var roadName = nameSystem.GetRenderedLabelName(road);
+                if (!IsUglyName(roadName))
+                {
+                    label = $"{number}{roadName}"; // zh 客户端 "Assets.ADDRESS_NAME_FORMAT={NUMBER}{ROAD}" 同款
+                    return true;
+                }
+            }
+            return false;
         }
 
         /// <summary>渲染名兜底（NameSystem 缺席/空名/未本地化脏键 → null，不硬造）。internal static：S7 场景卡共用。</summary>

@@ -264,13 +264,23 @@ namespace CityLife.GameBridge
             PendingConfirmVersion++;
         }
 
-        /// <summary>场馆标签："城西·口袋公园"——方位（Geo 统一口径）+ 本地化真名（NameSystem，拿不到回退 prefab 名清洗）。</summary>
+        /// <summary>场馆标签："城西·口袋公园"——方位（Geo 统一口径）+ 本地化真名（NameSystem）。
+        /// §12 #62：分区自长建筑的渲染名=zone 通用名（功能区标签，"北美低密度商业"式），不当名字——
+        /// 改走门牌地址（"115冬青街"，与玩家选中该建筑时 UI 标题同源）；再拿不到回退 prefab 名清洗。</summary>
         private string VenueLabel(Entity building, float3 pos)
         {
             string? real = null;
             m_NameSystem ??= World.GetExistingSystemManaged<Game.UI.NameSystem>();
-            if (m_NameSystem != null)
-                real = m_NameSystem.GetRenderedLabelName(building);
+            var zoneGrown = EnvironmentDigestSystem.IsZoneGrown(EntityManager, building);
+            if (m_NameSystem != null && !zoneGrown)
+            {
+                var rendered = m_NameSystem.GetRenderedLabelName(building);
+                if (!EnvironmentDigestSystem.IsUglyName(rendered)) // 脏键（空名/Assets. 原始键）视同无名——一处定义全桥共用
+                    real = rendered;
+            }
+            if (real == null && zoneGrown
+                && EnvironmentDigestSystem.TryGetAddressLabel(EntityManager, m_NameSystem, building, out var addr))
+                real = addr; // 分区自长建筑的 UI 显示名=门牌地址（spike §1 实锤同源）
             if (string.IsNullOrEmpty(real) && EntityManager.HasComponent<PrefabRef>(building))
             {
                 var prefabRef = EntityManager.GetComponentData<PrefabRef>(building);

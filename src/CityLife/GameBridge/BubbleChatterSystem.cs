@@ -49,6 +49,7 @@ namespace CityLife.GameBridge
         private ContentDirectorSystem m_Director = default!; // 话题库持有方（别重复造，配题抽同一货架）
         private SimulationSystem m_SimulationSystem = default!;
         private EnvironmentDigestSystem m_Environment = default!; // S6 环境圈摘要：组炉时逐卡查"旁边有什么"
+        private Game.UI.NameSystem? m_NameSystem;           // 惰性：车卡目的地真名层（§12 #62；拿不到=类别词兜底）
 
         private readonly Content.BubbleSnippetPool m_Pool = new();
         private string m_Head = "";
@@ -327,7 +328,8 @@ namespace CityLife.GameBridge
             else return null;
             if (parked)
                 return who + "，停在路边";
-            var dest = CitizenPoolSystem.DestinationPlace(EntityManager, v);
+            m_NameSystem ??= World.GetExistingSystemManaged<Game.UI.NameSystem>();
+            var dest = CitizenPoolSystem.DestinationPlace(EntityManager, v, m_NameSystem); // §12 #62 真名层："（去「胖东来」）"
             return dest != null ? $"{who}，{moving}（去{dest}）" : $"{who}，{moving}";
         }
 

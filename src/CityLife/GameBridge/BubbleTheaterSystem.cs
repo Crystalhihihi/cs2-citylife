@@ -665,7 +665,8 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>场景地点名：店内与窗口（§12 #56 地点同为建筑）走 ShopNameOf（店内店名=租户公司名优先、
-        /// 住宅落住户姓，无名回退渲染名），车站/公园=渲染名；读不到或拿到未本地化的
+        /// 住宅落住户姓；分区自长建筑的 zone 通用名已在那层斩断=功能区标签绝不进台词，§12 #62），
+        /// 车站/公园=渲染名；读不到或拿到未本地化的
         /// 资源键（"Assets.NAME[...]"——部分资产无本地化名的实机实锤，2026-09-11 Commercial_ChemicalStore）
         /// → 类型词兜底（不硬造，脏键绝不进 prompt）。</summary>
         private string SceneNameOf(Candidate cand)

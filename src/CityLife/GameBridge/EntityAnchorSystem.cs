@@ -223,28 +223,12 @@ namespace CityLife.GameBridge
             return EnvironmentDigestSystem.IsUglyName(name) ? "" : $"（{name}）";
         }
 
-        /// <summary>真路名地址（"115冬青街"，§12 #60 刀⑤）：游戏公共静态方法 BuildingUtils.GetAddress 现算
-        /// （门牌号不存储——调游戏 API 不复制公式，铁律 3；行级实锤 docs/spikes/2026-09-11-building-address-system.md）。
-        /// 路名与选中 UI 同源（GetRenderedLabelName(road)，玩家自定义路名优先）。
-        /// 仅主线程低频用（内部遍历聚合路路段 buffer，O(路段数)——禁止进渲染热路径）。
-        /// 拿不到（非建筑/临路边未聚合/路名空）→ false，调用方走降级链。</summary>
+        /// <summary>真路名地址（"115冬青街"，§12 #60 刀⑤）：实现已收编 EnvironmentDigestSystem.TryGetAddressLabel
+        /// （一处定义别复制粘贴，语义/实锤见彼处注释）；此处只做惰性 NameSystem 解析的实例包装。</summary>
         private bool TryGetAddressLabel(Entity building, out string label)
         {
-            label = "";
             m_NameSystem ??= World.GetExistingSystemManaged<Game.UI.NameSystem>();
-            if (m_NameSystem == null || !EntityManager.HasComponent<Game.Buildings.Building>(building))
-                return false;
-            if (Game.Buildings.BuildingUtils.GetAddress(EntityManager, building, out var road, out var number)
-                && road != Entity.Null)
-            {
-                var roadName = m_NameSystem.GetRenderedLabelName(road);
-                if (!EnvironmentDigestSystem.IsUglyName(roadName))
-                {
-                    label = $"{number}{roadName}"; // zh 客户端 "Assets.ADDRESS_NAME_FORMAT={NUMBER}{ROAD}" 同款
-                    return true;
-                }
-            }
-            return false;
+            return EnvironmentDigestSystem.TryGetAddressLabel(EntityManager, m_NameSystem, building, out label);
         }
 
         // 方位命名已抽到 Geo.DirectionOf（GameBridge 共享：锚点/场馆/突发定位同一口径）

@@ -1,10 +1,10 @@
 # Spike 报告：≥50 栋建筑普查 dump + 事件监听口探针（#62 场所名分级 / #64 城市记忆层 / #65 玩家动作反应层 的收口工具）
 
-> 日期：2026-09-14 ｜ 对象：Game.dll（只读反编译，ilspycmd 8.2.0.7535，`DOTNET_ROLL_FORWARD=LatestMajor` 绕过本机无 .NET 6 运行时问题）+ 游戏内实机 dump（本报告 §4 待回填）
+> 日期：2026-09-14 ｜ 对象：Game.dll（只读反编译，ilspycmd 8.2.0.7535，`DOTNET_ROLL_FORWARD=LatestMajor` 绕过本机无 .NET 6 运行时问题）+ 游戏内实机 dump（§4 已于当日晚回填：两轮 Ctrl+6 + 一次 Ctrl+7 开关，原始抽取存档 `logs/census-spike-20260914/player-dump-20260914.log`）
 > Game.dll 版本：`Cities2_Data\Managed\Game.dll`，12,055,552 字节，文件时间 2026-06-29；Steam buildid **23700737**（appmanifest_949230.acf）；Unity 引擎 2022.3.71f1（与 2026-09-11 address-spike 同版，本报告头部照抄并当日复核一致）
 > 反编译产物存档：`logs/census-spike-20260914/`（普查字段）+ `logs/event-watch-spike-20260914/`（事件监听口）
 > 收口工具：`src/CityLife/GameBridge/CensusSpikeSystem.cs`（Ctrl+6 普查 dump / Ctrl+7 事件探针开关）
-> 结论先行：**组件层路径全部钉死**（§1 实锤表）；**事件监听口语义实锤**——Created/Deleted 只活一帧、EventJournal 只跟 EventPrefab（建造拆除走它无用）、灾难规模=受害实体 m_Event 回指针计数（§3）。剩 7 项资产层/运行时可见的未实锤（§4），靠玩家实机按两个热键把数据打进 `Logs/CityLife.log` 收口。
+> 结论先行：**组件层路径全部钉死**（§1 实锤表）；**事件监听口语义实锤**——Created/Deleted 只活一帧、EventJournal 只跟 EventPrefab（建造拆除走它无用）、灾难规模=受害实体 m_Event 回指针计数（§3）。§4 七项未实锤已经当日晚实机收口（两轮 Ctrl+6 普查 64+64 栋、一次 Ctrl+7 探针开窗 3 分 43 秒）：**①②⑦ 实锤、④ 证伪、③ 产出读法实锤（标记分布无样本）、⑤⑥ 窗口零命中仍未知**；**#62 小修复查通过、零误伤**（自长建筑渲染名 100% 为 zone 通用名样式，非自长 100% 为正常 prefab 本地化名，无 Assets. 脏键漏网进建筑名）。
 
 ---
 
@@ -83,17 +83,69 @@
 - 玩家种树 = `Game.Objects.Tree + Created`。`Game.Common.Owner { Entity m_Owner }` 组件存在性已补钉实锤（2026-09-14 ilspycmd 定向，ApplyNetSystem/DestroySystem 等多处挂它）。
 - "玩家手种的树无 Owner、庭院树有 Owner（挂在建筑/地块下）"是**推断**未实锤 → §4⑥ 探针逐条打 HasComponent<Owner> 供实机对照。
 
-## 4. 未实锤清单 = 本次实机普查收口项（工具用法 + 结果回填位）
+## 4. 未实锤清单 = 本次实机普查收口项（工具用法 + **结果已回填**）
 
-| # | 未实锤项 | 收口手段 | 回填 |
+| # | 未实锤项 | 收口手段 | 回填结论（2026-09-14 晚实机） |
 |---|---|---|---|
-| ① | 各 prefab Localization 挂接面（多少 prefab 挂了、ID 长什么样） | Ctrl+6 每栋行 `loc=` 字段 | 待玩家实机，结果回填本节 |
-| ② | household 住户姓字面（GetRenderedLabelName(household) 是姓还是全名/脏键） | Ctrl+6 租户行 `住户姓=` | 待玩家实机，结果回填本节 |
-| ③ | extractor/service 公司产出读法（无 IndustrialProcessData 时的标记组件分布） | Ctrl+6 公司租户行 `extractor=/service=/commercial=` | 待玩家实机，结果回填本节 |
-| ④ | GetRenderedLabelName(company) 是否=品牌名（CompanyData.m_Brand 对照） | Ctrl+6 公司租户行 `名=` vs `品牌=` | 待玩家实机，结果回填本节 |
-| ⑤ | 分区自长建筑是否带 Created（自长 vs 玩家手放的判别是否成立） | Ctrl+7 开探针后等分区自长/手动放建筑，看 `自长=` | 待玩家实机，结果回填本节 |
-| ⑥ | 庭院树 Owner 判别（玩家手种树是否无 Owner） | Ctrl+7 开探针后手动种树 vs 分区自长带出的树，`有Owner=` | 待玩家实机，结果回填本节 |
-| ⑦ | 可入刊灾难 prefab 清单（eventPrefabs 实际内容） | Ctrl+6 末尾 `可入刊事件 prefab 共 N：` 行 | 待玩家实机，结果回填本节 |
+| ① | 各 prefab Localization 挂接面（多少 prefab 挂了、ID 长什么样） | Ctrl+6 每栋行 `loc=` 字段 | **实锤：挂接面 0%**——128/128 栋 `loc=无`，详见 §4.1 |
+| ② | household 住户姓字面（GetRenderedLabelName(household) 是姓还是全名/脏键） | Ctrl+6 租户行 `住户姓=` | **实锤：真住户姓**——170/170 全为"X 一家"式本地化姓，详见 §4.2 |
+| ③ | extractor/service 公司产出读法（无 IndustrialProcessData 时的标记组件分布） | Ctrl+6 公司租户行 `extractor=/service=/commercial=` | **产出读法实锤（IndustrialProcessData 通吃 34/34）；标记组件分布无样本**（零公司落入该分支），详见 §4.3 |
+| ④ | GetRenderedLabelName(company) 是否=品牌名（CompanyData.m_Brand 对照） | Ctrl+6 公司租户行 `名=` vs `品牌=` | **证伪：≠ 品牌名，34/34 全是 Assets.NAME 脏键**；品牌名须走 m_Brand，详见 §4.4 |
+| ⑤ | 分区自长建筑是否带 Created（自长 vs 玩家手放的判别是否成立） | Ctrl+7 开探针后等分区自长/手动放建筑，看 `自长=` | **仍未知**——探针开窗 3m43s 零命中（窗口内无建造/拆除/种树，城市零增长），详见 §4.5 |
+| ⑥ | 庭院树 Owner 判别（玩家手种树是否无 Owner） | Ctrl+7 开探针后手动种树 vs 分区自长带出的树，`有Owner=` | **仍未知**——窗口内 Tree+Created 零命中，详见 §4.5 |
+| ⑦ | 可入刊灾难 prefab 清单（eventPrefabs 实际内容） | Ctrl+6 末尾 `可入刊事件 prefab 共 N：` 行 | **实锤：为空**——两轮均 `共 0`，清单体零行、无报错，详见 §4.6 |
+
+### 实机概况（回填数据的口径）
+
+- 存档城市：全城建筑 **2598 栋**，市民 26730；类别分布两轮逐值一致（住宅区=1656 工厂=437 商店=231 未分类=218 公园=43 学校=8 医院=5）。
+- 第一轮 Ctrl+6 19:52:00（抽样 64/2598，175 行）→ Ctrl+7 探针开 19:52:10.764 → 第二轮 Ctrl+6 19:55:52（抽样 64/2598，186 行）→ Ctrl+7 探针关 19:55:53.388。
+- 探针窗口约 **3 分 43 秒**，窗口内游戏确认在跑（闲聊炉第 1→10 炉连续开炉、BubbleW FPS≈45-50、无 ERR/WARN）；两轮普查之间全城建筑数 2598→2598 零增减。
+- 两轮抽样 128 栋仅 2 栋重叠，覆盖 126 个不同建筑实体。
+- 原始抽取：`logs/census-spike-20260914/player-dump-20260914.log`（365 行 = 两轮普查 363 行 [普查] + 2 行 [事件探针] 开关行）。
+
+### 4.1 ① prefab Localization 挂接面 —— 实锤：0%
+
+128/128 栋全部 `loc=无`，横跨所有类别（住宅区 85、工厂 22、商店 12、未分类 7、医院 1、公园 1；自长 119 / 非自长 9）无一例外。**本体 prefab 没有一家挂 `Game.Prefabs.Localization` 组件**；而渲染名全是正常中文（北美低密度住宅、小型医疗诊所、回收中心……），说明显示名全部走 §1 #2 的 fallback——PrefabUISystem 拼 `Assets.NAME[prefab名]` 键再查游戏本地化库。**推论**：#62 场所名分级的"prefab 名"档不需要走 Localization 组件，`NameSystem.GetRenderedLabelName` 的解析结果或 prefab 内部名+本地化表即可；`pb.TryGet<Localization>` 这条路在本体资产上可弃用（DLC/mod 资产另说，本次无样本）。
+
+### 4.2 ② household 住户姓 —— 实锤：真住户姓
+
+170/170 住户行全是"X 一家"式本地化真姓，零脏键零乱码零全名。字面实例（照抄）：**汉密尔顿一家、克罗斯比一家、莱德利一家、哈德利一家、兰德里一家、基顿一家、奥尔特加一家、钱伯斯一家、法利一家、霍洛韦一家、莫斯利一家、马利一家、迪亚兹一家、蒙托亚一家、皮尔森一家、约翰逊一家、普莱斯一家、桑莫斯一家、霍普金斯一家**。`GetRenderedLabelName(household)` 可直接当"住户姓"用，无需任何后处理。
+
+### 4.3 ③ extractor/service 公司产出 —— 产出读法实锤，标记分布无样本
+
+34/34 家抽样公司**全部有 IndustrialProcessData**（工具只在无它时才打 `extractor=/service=/commercial=` 标记行——该格式本轮一行未出，标记组件分布无直接观测）。分业态读法：
+
+- **加工类**：正常投入产出，如 `Ore×10→Metals×8`（MetalSmelter）、`Petrochemicals×10+Chemicals×10→Plastics×16`、`Vegetables×10+Livestock×10→Food×16`。
+- **开采类**：`Industrial_LivestockExtractor 投入=NoResource×0+NoResource×0 产出=Livestock×20`——**修正 §1 #10 的反编译推断**：`ExtractorCompany.GetPrefabComponents` 虽只挂 ExtractorCompanyData 空标记，但实机上开采公司 prefab 另有 IndustrialProcessData（应来自公司 prefab 基座其他组件），**产出直接可读**，投入恒空即是"从地里/水里长出来"的语义。
+- **商业类**：投入=产出=所售商品×1（如 `Textiles×1→Textiles×1`、`Beverages×1→Entertainment×1` 是酒吧把酒水变娱乐），进货转售语义可读。
+- **办公类**：虚货产出可读：`Electronics×1→Software×3`、`Electronics×2+Software×1→Telecom×4`、`Software×1→Media×3 / Financial×3`。
+- `import=0` 全场。
+
+### 4.4 ④ GetRenderedLabelName(company) —— 证伪：不是品牌名，是 100% 脏键
+
+34/34 公司 `名=` 全是 **`Assets.NAME[prefab内部名]` 未解析键**（中文客户端下 NameSystem 对公司实体不解析该键），如 `名=Assets.NAME[Commercial_FashionStore] prefab=Commercial_FashionStore 品牌=Cheap & Random`。而 `品牌=`（CompanyData.m_Brand → 品牌 prefab 名）全是真品牌：Cheap & Random、Smelt 'n Blast、Lehto Electronics、Maito、Limzabar、Pteropus、Neckbeard、InstaLOD……（英文虚构品牌，中文客户端保持原文）。**#62 公司档定稿：店名取 m_Brand 品牌名，GetRenderedLabelName(company) 不可用作显示名**。附带观测：品牌是"虚构集团"可跨业态复用——Crapfish Granules 同挂 PlasticsStore 与 PlasticsFactory。
+
+### 4.5 ⑤⑥ 探针窗口零命中 —— 仍未知（不硬编结论）
+
+`[事件探针]` 全日志仅 2 行：19:52:10.764 **开**、19:55:53.388 **关**，开窗约 3 分 43 秒期间**零命中**（无新建建筑/新路/新树/拆建筑任何一条）。窗口内游戏确认在跑（闲聊炉连开 10 炉、FPS≈45-50、无 ERR/WARN），两轮普查全城建筑数 2598→2598 零增长互洽——结论只能是**窗口内玩家无建造/拆除/种树动作、城市也无分区自长新建筑**，探针未经正样本验证。⑤自长是否带 Created、⑥庭院树 Owner 判别，**两项仍未知**，留待下一轮实机开窗时按 §4 工具用法第 3 步做一轮正样本操作。
+
+### 4.6 ⑦ 可入刊事件 prefab 清单 —— 实锤：为空
+
+两轮普查末尾均 `可入刊事件 prefab 共 0：`——清单体零行、无报错。即本存档该时刻 `EventJournalSystem.eventPrefabs` 是**空枚举**：与 §1 #12"源查询只有灾难类 EventPrefab"不矛盾（城市无灾难史/灾难内容未加载时即为空），但给 #64 灾难 watcher 提了个醒：**不能假定清单非空**，要么容忍空清单运行时懒等，要么另找 prefab 源。
+
+### 4.7 #62 小修复查（本轮回填重点）—— 通过，零误伤
+
+- **自长=是 119 栋**：渲染名 **100% 是 zone 通用名样式**——北美低密度住宅 45、北美低密度滨水住宅 12、北美中密度联排住宅 12、工业设施 12、北美低密度商业 9、低密度办公楼 9、北美中密度住宅 8、欧洲中密度联排住宅 4、欧洲中密度住宅 3、北美低密度滨水商业 3、廉租住宅 1、农业区枢纽 1。**无一反例**（无真名/自定义名/脏键）。
+- **自长=否 9 栋**：渲染名全是正常 prefab 本地化名——小型医疗诊所、回收中心、摩托停车场×2、小微公园、采集器 水产养殖养鱼场 04/08、石冢 03、农业加工温室 05。**零 Assets. 脏键漏网**（脏键全部出现在公司租户行而非建筑行，属 ④ 的范畴，不在 #62 斩断逻辑覆盖面内）。
+- 附带观测：`IsZoneGrown` 会把**农业区枢纽**（IndustrialAgricultureHub02_L3，有 SpawnableBuildingData）与**廉租住宅**也判为自长——其渲染名仍是通用类别名，斩断无害；但今后若要给自长建筑补真名，注意 hub 类也会落入"功能区标签"档。
+- **结论：#62 斩断逻辑（自长建筑的 zone 通用名不当店名）在 128 栋样本上零误伤、零漏网，判定成立。**
+
+### 4.8 意外发现
+
+1. **实体侧 Flags 全场同值**：128/128 栋清一色 `实体侧Flags=StreetLightsOff, Illuminated`——连石冢废墟、水产养鱼场都是同值。"路灯关+已亮化"并存且全场一致，疑似工具读法或该时刻全局状态问题，存疑待查（不影响其他字段结论）。
+2. **采集器建筑无租户**：ExtractorAquacultureFishFarm04/08、ExtractorAgricultureGreenhouse05 三栋零租户行；开采公司（LivestockExtractor）实际挂在自长的"农业区枢纽"（IndustrialAgricultureHub02_L3）里当租户——开采业的"建筑→公司"挂靠与直觉不同，做业态叙事时别去养鱼场找公司。
+3. **`地址=n/a` 恰为 4 栋 = 全部 NoRoadConnection prefab**（石冢 03、养鱼场×2、温室 05）——GetAddress 对无路连接建筑返回空是游戏行为，字段自洽，非工具 bug。
+4. **大户型住宅租户规模**：L5 5x5 中密度住宅 75 户、L4 6x6 达 94 户（`…另有 71/90 个租户未打`）——按"≤4 租户/栋"的普查口径会漏掉绝大多数住户，今后做住户层叙事需注意此采样偏差（生产代码无此限制，仅 dump 工具截断）。
 
 ### 工具用法（玩家照跑）
 

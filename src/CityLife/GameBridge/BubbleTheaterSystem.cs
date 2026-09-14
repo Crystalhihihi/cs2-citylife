@@ -612,7 +612,7 @@ namespace CityLife.GameBridge
             for (var li = 0; li < script.Lines.Count; li++)
             {
                 var (sp, text) = script.Lines[li];
-                t.Script.Add((sp, FillSlots(text, t.Participants, sceneName))); // 刀⑥槽位化：绑定即填真人真名场景名
+                t.Script.Add((sp, FillSlots(text, t.Participants, sceneName, sp))); // 刀⑥槽位化：绑定即填真人真名场景名（自称守卫随槽走）
             }
             foreach (var p in t.Participants)
                 if (!t.Lines.ContainsKey(p.Anchor))
@@ -623,8 +623,8 @@ namespace CityLife.GameBridge
             var (s0, t0) = t.Script[0];
             t.Lines[t.Participants[s0].Anchor] = t.Participants[s0].Name + "：" + t0; // 名字前缀（§12 #50：多人/共锚分辨说话人，顺带成剧场视觉标识）
             t.Cursor = 1;
-            if (t.Cursor >= t.Script.Count)
-                t.Finished = true; // 纯防御（有效 ≥2 句到不了这）
+            // 这里不置 Finished（哪怕单句剧本）：Finished 语义=末句被读完，在 OnAnchorRotated 里置——
+            // 推句时置会让 TryGetLine 的 !Finished 闸把末句挡在渲染外（2026-09-14"屋里人回话被吃"实锤）
             m_Active.Add(t);
             foreach (var a in t.Anchors)
                 m_ByAnchor[a] = t;
@@ -650,9 +650,14 @@ namespace CityLife.GameBridge
 
         /// <summary>占位填充（§12 #60 刀⑥剧场槽位化）：{place}→场景真名、{nameN}→第 N 个参与者真人名
         /// （生成时写槽、放送时填——库存剧本的通用性与在地具体感的换层解）。
-        /// N 越界（模型写嗨了）落"朋友"salvage 不丢句；填充后超长不截（名字短，气泡排版自适应）。</summary>
-        private static string FillSlots(string text, System.Collections.Generic.List<Participant> participants, string sceneName)
+        /// N 越界（模型写嗨了）落"朋友"salvage 不丢句；填充后超长不截（名字短，气泡排版自适应）。
+        /// 自称守卫（2026-09-14 实机"大卫：大卫，垃圾又堆门口了"实锤——prompt 样子曾把 speaker 1 的台词
+        /// 写成 {name1}，模型照镜像）：speaker（0 基）自己的 {nameN} 槽改填下一位参与者（2 人局=对方）。</summary>
+        private static string FillSlots(string text, System.Collections.Generic.List<Participant> participants, string sceneName, int speaker)
         {
+            var selfSlot = "{name" + (speaker + 1) + "}";
+            if (text.Contains(selfSlot) && participants.Count > 1)
+                text = text.Replace(selfSlot, participants[(speaker + 1) % participants.Count].Name);
             if (text.Contains("{place}"))
                 text = text.Replace("{place}", sceneName);
             for (var n = 1; n <= 3; n++)
@@ -699,18 +704,22 @@ namespace CityLife.GameBridge
 
         /// <summary>气泡生命周期回调（BubbleWorldSpikeSystem.TickLifecycle 在任一剧场锚点到时换文案前调）：
         /// 剧本推进一句——下一句写到其说话人的锚点上，并让该锚点立即换文案（RefreshAnchorText：
-        /// 上条读完下条接话，不等说话人自己的时钟）。播完置 Finished（OnUpdate 统一收尾）。</summary>
+        /// 上条读完下条接话，不等说话人自己的时钟）。
+        /// <b>Finished 只在"末句被读完"（游标尽头的锚点再次轮换）时置</b>——推末句时就置会让
+        /// TryGetLine 的 !Finished 闸把末句挡在渲染外（2026-09-14 实机实锤：窗口剧场 2 句制，
+        /// 屋里人回话 100% 被吃）。播完后 OnUpdate 统一收尾。</summary>
         internal void OnAnchorRotated(Entity anchor)
         {
             if (!m_ByAnchor.TryGetValue(anchor, out var t) || t.Finished)
                 return;
             if (t.Cursor >= t.Script.Count)
+            {
+                t.Finished = true; // 末句读完，剧终
                 return;
+            }
             var (speaker, text) = t.Script[t.Cursor++];
             var speakerAnchor = t.Participants[speaker].Anchor;
             t.Lines[speakerAnchor] = t.Participants[speaker].Name + "：" + text; // 名字前缀（§12 #50）
-            if (t.Cursor >= t.Script.Count)
-                t.Finished = true;
             if (speakerAnchor != anchor)
             {
                 m_BubbleWorld ??= World.GetExistingSystemManaged<BubbleWorldSpikeSystem>();

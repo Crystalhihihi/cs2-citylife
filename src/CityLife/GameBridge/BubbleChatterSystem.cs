@@ -16,6 +16,9 @@ namespace CityLife.GameBridge
     /// S5 接气泡世界层后刷屏不再花 token（本任务不接世界层，只备好池子）。
     /// S6 环境圈摘要：组炉时对每张被选中的处境卡按市民实体现位查一次 EnvironmentDigestSystem.BuildDigest
     /// （40m 半径四叉树聚类蒸馏），非空缀"｜旁边：X、Y"进卡的 prompt 文本；每炉查询次数=卡片数（≤14），不进热路径。
+    /// §12 #63 对话场景卡：组炉时对 Walk 卡约 60% 槽位（炉计数+卡序锚定）复用环境圈现位 CollectAround(12m)
+    /// 找步行市民 B 组双人卡（卡文缀"｜对：B处境"），LLM 对该卡输出 a/b 两句各 ≤12 字的对话，
+    /// 收炉执行层拼"名字A：a\n名字B：b"单条 Text（渲染零改动），凑不到 B 天然降级独白；车辆卡保持独白。
     ///
     /// 节拍锚游戏时间（#48：与信息流同尺——暂停=零成本、倍速=生成消费同速放大）：
     /// Now = SimulationSystem.frameIndex（模拟 tick，暂停即停走），游戏分钟 = TicksPerHour/60
@@ -41,6 +44,7 @@ namespace CityLife.GameBridge
         private const int k_MinCards = 12;      // 每炉处境卡 12-16 张（炉计数取模确定性变化）×每卡 2-3 句（§12 #53 一次性供给侧加产）
         private const int k_MinVehicleCards = 3; // 每炉 Vehicle 场合保底卡数（池里有才保——场合供给侧保底，治车载泡被吃回归）
         private const int k_MinWalkCards = 3;    // 每炉 Walk 场合保底卡数（同上）
+        private const float k_PairRadius = 12f;  // 配对半径（§12 #63：Walk 卡身边 12m 内找步行 B——擦肩/并肩能搭上话的距离）
 
         private EntityQuery m_CitizenQuery = default!;
         private EntityQuery m_VehicleQuery = default!; // 车卡源（载具本体采样——司机多是过境/服务人口，市民池天然车 0，[Pool] 日志实锤）
@@ -60,6 +64,7 @@ namespace CityLife.GameBridge
         private DateTime m_ForgeSince;        // 发炉墙钟（UTC）：网关过期丢弃不回包，TTL+60s 兜底解锁
         private readonly List<string> m_CurrentZones = new(); // 在飞炉的话题分区（与处境卡序对齐，收炉按 card 回填 Zone 用）
         private readonly List<Content.BubbleOccasion> m_CurrentOccasions = new(); // 在飞炉的场合（与处境卡序对齐，§12 #60 刀①执行层盖章，收炉按 card 回填）
+        private readonly List<(string NameA, string NameB)?> m_CurrentPairs = new(); // 在飞炉的配对（与处境卡序对齐，§12 #63：null=该卡独白；收炉拼"名字A：a\n名字B：b"用）
 
         /// <summary>气泡片段池（S5 展示层取泡口；主线程只读）。</summary>
         public Content.BubbleSnippetPool Snippets => m_Pool;
@@ -134,7 +139,13 @@ namespace CityLife.GameBridge
             var topics = new List<string>(count);
             m_CurrentZones.Clear();
             m_CurrentOccasions.Clear();
+            m_CurrentPairs.Clear();
+            // §12 #63 配对：本炉已选市民集合——B 不得与炉内任何卡撞人（同一市民不能既独白又对话）
+            var pickedSet = new HashSet<Entity>();
+            for (int k = 0; k < picked.Count; k++)
+                pickedSet.Add(picked[k].Entity);
             var digested = 0; // 本炉带环境摘要的卡数（[环境圈] 每炉一行计数用）
+            var paired = 0;   // 本炉配对成功的双人卡数（开炉日志用）
             for (int k = 0; k < picked.Count; k++)
             {
                 var entry = picked[k];
@@ -151,7 +162,22 @@ namespace CityLife.GameBridge
                         digested++;
                     }
                 }
+                // §12 #63 对话场景卡：Walk 卡约 60% 槽位尝试配对（炉计数+卡序锚定，确定性）——
+                // 复用上面环境圈已解出的现位做圆心（成本零新增数量级），凑不到 B 天然降级独白（不硬凑）
+                (string NameA, string NameB)? pair = null;
+                if (entry.Occasion == Content.BubbleOccasion.Walk && pos.HasValue
+                    && (m_ForgeCount + (uint)k) % 5u < 3u)
+                {
+                    var b = TryPairWalker(pos.Value, entry.Entity, pickedSet, m_ForgeCount + (uint)k);
+                    if (b.HasValue)
+                    {
+                        card += "｜对：" + b.Value.Card;
+                        pair = (entry.Name, b.Value.Name);
+                        paired++;
+                    }
+                }
                 cards.Add(card);
+                m_CurrentPairs.Add(pair);
                 m_CurrentOccasions.Add(entry.Occasion); // 场合随卡盖章（§12 #60 刀①：采样时已确定，收炉按 card 回填）
                 // 弱卡配强题（刀③）：低熵卡避开萌宠/沙雕万能安全区，否则模型必逃中文语料最安全题材
                 var topic = m_Director.Topics.TopicFor(m_ForgeCount, k, avoidSafeZones: IsWeakCard(card));
@@ -164,12 +190,12 @@ namespace CityLife.GameBridge
 
             m_Pool.CurrentCycle = m_ForgeCount; // BornCycle 基准锚本炉
             var rumorsNow = Content.CityRumors.Recent(3); // 刀②城市记忆：最新 3 条传闻当话料
-            var prompt = Content.PromptBuilder.BuildChatterPrompt(m_Head, snapshot, cards, topics, rumorsNow);
+            var prompt = Content.PromptBuilder.BuildChatterPrompt(m_Head, snapshot, cards, topics, rumorsNow, paired);
             Mod.FastGateway!.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Low, k_ForgeTtl, "chatter:" + m_ForgeCount)); // 快轨（§12 #59）
             m_ForgePending = true;
             m_ForgeSince = DateTime.UtcNow;
             var occTally = TallyOccasions();
-            Mod.Log.Info($"[闲聊炉] 开炉：处境卡 {count} 张（走{occTally[1]}/车{occTally[2]}/室{occTally[3]}/通{occTally[0]}，第 {m_ForgeCount + 1} 炉，池存 {m_Pool.Count}）");
+            Mod.Log.Info($"[闲聊炉] 开炉：处境卡 {count} 张（走{occTally[1]}/车{occTally[2]}/室{occTally[3]}/通{occTally[0]}，配对 {paired} 对，第 {m_ForgeCount + 1} 炉，池存 {m_Pool.Count}）");
             if (rumorsNow.Count > 0)
                 Mod.Log.Info($"[闲聊炉] 本炉传闻：{string.Join(" / ", rumorsNow)}"); // 城市记忆可观测性：直接看到它在干活
             Mod.Log.Info($"[环境圈] 本炉摘要：{digested} 条非空（共 {count} 卡）"); // 每炉最多一行计数（首炉样例行在 EnvironmentDigestSystem）
@@ -183,6 +209,8 @@ namespace CityLife.GameBridge
         /// JSONL salvage 解析（坏行跳过计数）→ 场合/话题分区按 card 号逐条回填（§12 #60 刀①：
         /// 场合采样时已盖章、分区执行层查表，模型只报归属；card 缺失/越界的孤儿行落 Any/留空，
         /// 不再整批连坐）→ 入 BubbleSnippetPool（池内同文本去重）。
+        /// §12 #63 对话条：对卡行（a/b 双全）且该卡确为配对卡 → 执行层拼"名字A：a\n名字B：b"
+        /// （名字前缀执行层加，LLM 不碰名字，单向阀门守住）；拼装超长/配对缺失有 text 回退独白。
         /// 失败只记日志不致命，下一炉自然会再产。
         /// </summary>
         public void OnChatterResult(Llm.CliCompletedResult r)
@@ -196,23 +224,52 @@ namespace CityLife.GameBridge
             var parsed = Content.BubbleSnippetPool.ParseBatch(r.Result.Text, out var skipped);
             var added = 0;
             var orphan = 0;
-            foreach (var (text, card) in parsed)
+            var dialogues = 0;
+            foreach (var p in parsed)
             {
                 var occasion = Content.BubbleOccasion.Any;
                 string? zone = null;
-                if (card >= 1 && card <= m_CurrentOccasions.Count)
+                (string NameA, string NameB)? pair = null;
+                if (p.Card >= 1 && p.Card <= m_CurrentOccasions.Count)
                 {
-                    occasion = m_CurrentOccasions[card - 1];
-                    zone = m_CurrentZones[card - 1];
+                    occasion = m_CurrentOccasions[p.Card - 1];
+                    zone = m_CurrentZones[p.Card - 1];
+                    pair = m_CurrentPairs[p.Card - 1];
                 }
                 else
                 {
                     orphan++;
                 }
+                // 对卡行 + 该卡确为配对卡 → 拼对话条；配对缺失（模型给独白卡写了 a/b）/拼装超长 → 有 text 落独白
+                string? text = null;
+                if (p.IsDialogue && pair.HasValue)
+                {
+                    text = ComposeDialogue(pair.Value.NameA, p.A!, pair.Value.NameB, p.B!);
+                    if (text != null)
+                        dialogues++;
+                }
+                text ??= p.Text;
+                if (text == null)
+                {
+                    skipped++; // 对卡行无 text 可回退（拼装超长/a b 写给非配对卡）——与解析丢弃同口径计数
+                    continue;
+                }
                 if (m_Pool.Add(text, occasion, zone))
                     added++;
             }
-            Mod.Log.Info($"[闲聊炉] 入库 {added} 条（解析丢 {skipped} 条，去重丢 {parsed.Count - added} 条，无归属 {orphan} 条，池现 {m_Pool.Count} 条）");
+            Mod.Log.Info($"[闲聊炉] 入库 {added} 条（对话 {dialogues} 条，解析丢 {skipped} 条，去重丢 {parsed.Count - added} 条，无归属 {orphan} 条，池现 {m_Pool.Count} 条）");
+        }
+
+        /// <summary>
+        /// 对话条拼装（§12 #63）："名字A：台词A\n名字B：台词B"——单条 Text 内嵌 \n 两行，
+        /// 渲染零改动（WrapForBake 原生支持 \n）；名字前缀格式同剧场（BubbleTheaterSystem 全角冒号先例）。
+        /// 防线：台词内嵌换行压成空格（JSON \n 解码脏数据防版式炸）；总长超 40（气泡排版硬顶，
+        /// 与 ParseBatch 同尺）→ null，调用方有 text 回退独白、无则丢弃计数。
+        /// </summary>
+        private static string? ComposeDialogue(string nameA, string a, string nameB, string b)
+        {
+            var text = string.Concat(nameA, "：", a.Replace('\n', ' '), "\n", nameB, "：", b.Replace('\n', ' '));
+            return text.Length <= 40 ? text : null;
         }
 
         /// <summary>题面 → 话题分区（TopicReservoir.Entries 线性查表，取首个同题面条目；查不到返回 ""）。</summary>
@@ -306,6 +363,7 @@ namespace CityLife.GameBridge
                 }
                 cards.Add(card);
                 m_CurrentOccasions.Add(Content.BubbleOccasion.Vehicle); // 车卡场合恒 Vehicle（采样时已确定）
+                m_CurrentPairs.Add(null); // 车卡保持独白（§12 #63：配对只限 Walk 人卡；平行表与 cards 等长对齐）
                 var topic = m_Director.Topics.TopicFor(m_ForgeCount, cards.Count - 1, avoidSafeZones: parked); // 停车=弱卡（无处可去），避开萌宠/沙雕
                 topics.Add(topic);
                 m_CurrentZones.Add(ZoneOf(topic));
@@ -364,6 +422,53 @@ namespace CityLife.GameBridge
             if (EntityManager.HasComponent<Transform>(citizen))
                 return EntityManager.GetComponentData<Transform>(citizen).m_Position;
             return null;
+        }
+
+        /// <summary>
+        /// 配对（§12 #63 对话场景卡）：在 A 现位 k_PairRadius 内找另一位步行市民 B，组双人卡。
+        /// movers 滤 Human+Resident 回指市民（BubbleTheaterSystem.BindOutdoorRoster 先例）；
+        /// B 排除口径=CitizenPoolSystem 采样同款（儿童/MovingAway/无名，DescribeCitizen 一支全含）
+        /// + 对话特有排除三条：A 自己、乘车市民（Game.Creatures.CurrentVehicle——乘车不算步行，
+        /// BubbleWorldSpikeSystem 人查询同款）、本炉已选卡市民（一人只出一声）。
+        /// 多候选取 salt（=炉计数+卡序）取模确定性选一（同炉次+同街况必同选）。
+        /// 找不到/名字系统不可用 → null（天然降级独白，不硬凑）。
+        /// 主线程组炉级低频调用（每炉 ≤ 人卡数 次四叉树半径查询），禁入热路径。
+        /// </summary>
+        private (Entity B, string Name, string Card)? TryPairWalker(float3 pos, Entity self, HashSet<Entity> pickedSet, uint salt)
+        {
+            m_NameSystem ??= World.GetExistingSystemManaged<Game.UI.NameSystem>();
+            if (m_NameSystem == null)
+                return null; // 名字是拼装硬需求（收炉名字前缀），拿不到则不配对
+            var statics = new Unity.Collections.NativeList<Entity>(Unity.Collections.Allocator.Temp);
+            var movers = new Unity.Collections.NativeList<Entity>(Unity.Collections.Allocator.Temp);
+            m_Environment.CollectAround(pos, k_PairRadius, statics, movers);
+            statics.Dispose(); // 配对只找人（movers）；statics 是 CollectAround 追加语义的副产物，收掉
+            var cands = new List<(Entity B, string Name, string Card)>();
+            for (int i = 0; i < movers.Length; i++)
+            {
+                var agent = movers[i];
+                if (!EntityManager.HasComponent<Game.Creatures.Human>(agent)
+                    || !EntityManager.HasComponent<Game.Creatures.Resident>(agent))
+                    continue;
+                var b = EntityManager.GetComponentData<Game.Creatures.Resident>(agent).m_Citizen;
+                if (b == Entity.Null || b == self || pickedSet.Contains(b))
+                    continue;
+                if (EntityManager.HasComponent<Game.Creatures.CurrentVehicle>(b))
+                    continue; // 乘车市民不算步行
+                // 儿童/MovingAway/无 Citizen 一支全含（池采样同一口径，一处定义别复制粘贴）；
+                // 场合不回章——B 的卡文只当"对："段处境描述（moving 树行人 agent 即走路状态）
+                var cardB = CitizenPoolSystem.DescribeCitizen(EntityManager, b, out _, m_NameSystem);
+                if (cardB == null)
+                    continue;
+                var name = m_NameSystem.GetRenderedLabelName(b);
+                if (string.IsNullOrEmpty(name))
+                    continue; // 无名（池采样同款口径）
+                cands.Add((b, name, cardB));
+            }
+            movers.Dispose();
+            if (cands.Count == 0)
+                return null;
+            return cands[(int)(salt % (uint)cands.Count)];
         }
     }
 }

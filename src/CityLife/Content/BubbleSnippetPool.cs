@@ -21,7 +21,35 @@ namespace CityLife.Content
     }
 
     /// <summary>
-    /// 一条气泡片段：Text=正文（≤40 字硬顶；§12 #60 刀④长短句规格：短 ≤15 纯反应/长 20-40 带信息骨架）；
+    /// 闲聊炉一行的解析结果（§12 #63 对话场景卡）：独白行只有 Text；对卡行（{"card":N,"a":..,"b":..}）
+    /// A/B 非空（台词本身，不含名字——名字前缀由执行层收炉拼装，LLM 不碰名字，单向阀门）。
+    /// </summary>
+    public readonly struct ParsedChatterLine
+    {
+        /// <summary>独白正文（≤40 字；对卡行可空——缺半句/超长的降级独白才带）。</summary>
+        public readonly string? Text;
+        /// <summary>归属处境卡号（1 起；缺失/非正数=0 无归属，场合/分区由调用方落 Any/留空）。</summary>
+        public readonly int Card;
+        /// <summary>对卡甲台词（≤12 字；非对卡行为 null）。</summary>
+        public readonly string? A;
+        /// <summary>对卡乙台词（≤12 字；非对卡行为 null）。</summary>
+        public readonly string? B;
+
+        public ParsedChatterLine(string? text, int card, string? a, string? b)
+        {
+            Text = text;
+            Card = card;
+            A = a;
+            B = b;
+        }
+
+        /// <summary>是否对卡行（a/b 双全且合规）。</summary>
+        public bool IsDialogue => A != null && B != null;
+    }
+
+    /// <summary>
+    /// 一条气泡片段：Text=正文（≤40 字硬顶；§12 #60 刀④长短句规格：短 ≤15 纯反应/长 20-40 带信息骨架；
+    /// §12 #63 对话条=执行层拼"名字A：台词\n名字B：台词"单条 Text 内嵌 \n 两行，渲染零改动）；
     /// Occasion=场合（S5 按锚点匹配的主键；§12 #60 刀①起由处境卡执行层盖章，card 缺失/越界落 Any）；
     /// Zone=话题分区（收炉时按 card 号逐条对齐回填，孤儿行留空）；BornCycle=出生炉次（新鲜度基准，
     /// S5 轮换/衰减可用；衰减口径未定，v1 只记不判）。
@@ -109,14 +137,15 @@ namespace CityLife.Content
 
         /// <summary>
         /// 闲聊炉 JSONL 批量解析（JsonMini 同款 salvage 纪律——RimTalk 教训：LLM 输出非法 JSON 是最高频故障）：
-        /// 逐行解析 {"text":..,"card":N}；空行/注释行跳过不计数；text 缺失/空白/超 40 字
-        /// （气泡排版硬顶：13 格×4 行≈52 格，留余量取 40）计 skipped 丢弃——markdown 围栏行/残行
-        /// 天然没有合法 text 字段，自动落进 skipped；card 缺失/非数/负数不丢整行、落 0（=无归属，
-        /// 场合/分区由调用方落 Any/留空——§12 #60 刀①：场合由处境卡执行层盖章，LLM 只报归属）。
+        /// 独白行 {"text":..,"card":N}——text 缺失/空白/超 40 字（气泡排版硬顶：13 格×4 行≈52 格，留余量取 40）
+        /// 计 skipped 丢弃；对卡行（§12 #63）{"card":N,"a":..,"b":..}——a/b 双全且各 ≤12 字才成立，
+        /// 缺半句或超长降级：有合规 text 落独白、无 text 计 skipped 丢弃。
+        /// markdown 围栏行/残行天然没有合法字段，自动落进 skipped；card 缺失/非数/负数不丢整行、落 0
+        /// （=无归属，场合/分区由调用方落 Any/留空——§12 #60 刀①：场合由处境卡执行层盖章，LLM 只报归属）。
         /// </summary>
-        public static List<(string Text, int Card)> ParseBatch(string jsonl, out int skipped)
+        public static List<ParsedChatterLine> ParseBatch(string jsonl, out int skipped)
         {
-            var list = new List<(string, int)>();
+            var list = new List<ParsedChatterLine>();
             skipped = 0;
             if (string.IsNullOrWhiteSpace(jsonl))
                 return list;
@@ -125,6 +154,22 @@ namespace CityLife.Content
                 var line = raw.Trim();
                 if (line.Length == 0 || line.StartsWith("#") || line.StartsWith("//"))
                     continue;
+                var card = JsonMini.GetInt(line, "card") ?? 0;
+                if (card < 0)
+                    card = 0;
+                // §12 #63 对卡行优先：a/b 双全且各 ≤12 字 → 对话（text 顺带保留，拼装失败可回退独白）
+                var a = JsonMini.GetStr(line, "a")?.Trim();
+                var b = JsonMini.GetStr(line, "b")?.Trim();
+                if (!string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b)
+                    && a!.Length <= 12 && b!.Length <= 12)
+                {
+                    var fallback = JsonMini.GetStr(line, "text")?.Trim();
+                    list.Add(new ParsedChatterLine(
+                        string.IsNullOrEmpty(fallback) || fallback!.Length > 40 ? null : fallback,
+                        card, a, b));
+                    continue;
+                }
+                // 独白路径（对卡缺半句/超长也落这里——salvage 纪律：有合规 text 就不丢）
                 var text = JsonMini.GetStr(line, "text");
                 if (string.IsNullOrWhiteSpace(text))
                 {
@@ -137,8 +182,7 @@ namespace CityLife.Content
                     skipped++;
                     continue;
                 }
-                var card = JsonMini.GetInt(line, "card") ?? 0;
-                list.Add((text, card > 0 ? card : 0));
+                list.Add(new ParsedChatterLine(text, card > 0 ? card : 0, null, null));
             }
             return list;
         }

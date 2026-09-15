@@ -141,6 +141,8 @@ namespace CityLife.Content
         /// 缓存纪律同主头（BubbleChatterSystem.OnCreate 拼一次复用，逐字节稳定：禁时间戳/随机内容，动态全压尾部）。
         /// 语域定案（§12 #60 刀④长短句规格）：每卡至少一短（≤15字纯反应）一长（20-40字带信息骨架——
         /// 数字/物件/店名/价签，主头【别空】纪律下沉）；禁 hashtag/禁@/禁"家人们"直播腔。
+        /// §12 #63 对话场景卡：卡文带"｜对："的是双人卡（两人正走在一起），输出 {"card":N,"a":..,"b":..}
+        /// 各 ≤12 字的来回对话，名字前缀执行层收炉拼装（LLM 不碰名字，单向阀门）。
         /// 正例 > 禁令（2026-08-20 治僵硬主药，主头同款）：样子只学语气，内容物件不许照抄；
         /// 样子本身长短混排（few-shot 镜像句长——全是短例子就永远只产短句，实机"全是短句"实锤后修）。
         /// 场合不再由模型判（§12 #60 刀① Plan B）：乘车/在建筑/走路是采样时已确定事实，
@@ -164,7 +166,9 @@ namespace CityLife.Content
             sb.Append("【写法】每张处境卡写 2-3 条（至少一短一长）：就照这个人的处境和配给他的话头写，必须是从这个人嘴里能说出来的话；每条必须带 card 标明出自哪张处境卡（1 起）。可以顺势吐槽【城市此刻】里的天气/通勤/物价或【城里最近在传】里的事。卡里若带\"｜旁边：\"（S6 环境圈摘要），是这人边上此刻真实有的东西，可以顺手当话料，没有就是没有。\n");
             sb.Append("【名字】卡里和\"｜旁边：\"摘要里「」内才是真实场所名（店名/地名），可以点名吐槽；没加「」的场所词（商店/工厂/住宅区/办公楼…）只是业态类别不是名字，禁止当店名念——别编全名、别加引号，要提就说\"那家店\"\"这附近\"。\n");
             sb.Append("【配额】萌宠题材（猫/狗/宠物）全炉至多 1 条——它最安全最容易写滥，写超判废。\n");
-            sb.Append("【输出】只输出 JSONL：一行一条 {\"text\":\"话\",\"card\":卡号}；禁止 markdown 围栏、禁止解释、禁止序号。\n");
+            // §12 #63 对话场景卡小节（语域措辞借 BuildTheaterStockHead 当面聊天段：有来有回、别喊名字别自称）
+            sb.Append("【对话】处境卡带\"｜对：\"的是双人卡——\"｜对：\"后是正和这人走在一起的另一人的处境。双人卡只写一条两人对话，不写独白：{\"card\":卡号,\"a\":\"甲说的话\",\"b\":\"乙接的话\"}，a/b 各 ≤12 字，一句起一句应，像街坊擦肩接话那么自然；可以聊两人的处境/旁边的东西/题里的话头。台词里禁止喊名字、禁止自称名字（显示名系统会自动加）、禁止动作神态描写，只写说出口的话。\n");
+            sb.Append("【输出】只输出 JSONL：独白卡一行一条 {\"text\":\"话\",\"card\":卡号}，双人卡一行一条 {\"card\":卡号,\"a\":\"…\",\"b\":\"…\"}；禁止 markdown 围栏、禁止解释、禁止序号。\n");
             return sb.ToString();
         }
 
@@ -172,16 +176,20 @@ namespace CityLife.Content
         /// 闲聊炉完整 prompt = 闲聊头 + 动态尾：【城市此刻】（DescribeCity 同款，别重复造）
         /// + 处境卡（每张配一题）+ 条数任务。cards/topics 等长对齐（BubbleChatterSystem 从
         /// CitizenPoolSystem.Entries 抽样 + TopicReservoir.TopicFor 配题）。
+        /// pairCards=其中双人卡数（§12 #63：卡文已带"｜对："段，此处只为段头说明与条数期望算账）。
         /// </summary>
         public static string BuildChatterPrompt(string head, in CitySnapshot s,
                                                 IReadOnlyList<string> cards, IReadOnlyList<string> topics,
-                                                IReadOnlyList<string>? rumors = null)
+                                                IReadOnlyList<string>? rumors = null, int pairCards = 0)
         {
             var sb = new StringBuilder(head.Length + 512);
             sb.Append(head);
             sb.Append("【城市此刻】").Append(DescribeCity(s)).Append('\n');
             AppendRumors(sb, rumors, "可以当话料（别逐字复读，别每条都蹭）");
-            sb.Append("【处境卡】一行一张（真实市民此刻的状态），\"｜题：\"后是配给这人的话头：\n");
+            sb.Append("【处境卡】一行一张（真实市民此刻的状态），\"｜题：\"后是配给这人的话头");
+            if (pairCards > 0)
+                sb.Append("，\"｜对：\"后是正和这人走在一起的另一人（双人卡）");
+            sb.Append("：\n");
             for (int i = 0; i < cards.Count; i++)
             {
                 sb.Append(i + 1).Append(". ").Append(cards[i]);
@@ -189,7 +197,12 @@ namespace CityLife.Content
                     sb.Append("｜题：").Append(topics[i]);
                 sb.Append('\n');
             }
-            sb.Append("【任务】每张处境卡写 2-3 条（至少一短一长，长句 20-40 字带一件具体的事），共 ").Append(cards.Count * 2).Append('-').Append(cards.Count * 3).Append(" 条；哪张卡的话用完就换下一张，别复读。\n");
+            var monos = cards.Count - pairCards;
+            sb.Append("【任务】独白卡每张写 2-3 条（至少一短一长，长句 20-40 字带一件具体的事）");
+            if (pairCards > 0)
+                sb.Append("，双人卡每张只写 1 条对话");
+            sb.Append("，共 ").Append(monos * 2 + pairCards).Append('-').Append(monos * 3 + pairCards)
+              .Append(" 条；哪张卡的话用完就换下一张，别复读。\n");
             return sb.ToString();
         }
 

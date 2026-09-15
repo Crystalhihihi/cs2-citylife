@@ -175,11 +175,13 @@ internal static class Program
         var raws = new List<(int Batch, string Raw, long Ms, int? Pt, int? Rt)>();
         var totalSkipped = 0;
         var pairCount = pairs.Count(p => p);
+        // 双人卡号列表（1 起）——与生产侧 BubbleChatterSystem 同名锚定口径，prompt 段头/任务行点名用
+        var pairCardNos = pairs.Select((p, i) => (p, i)).Where(x => x.p).Select(x => x.i + 1).ToArray();
         for (var b = 0; b < k; b++)
         {
             // 每卡配一题：真实 TopicFor 确定性抽题（与实机同一代码路径）
             var topics = cards.Select((_, i) => reservoir.TopicFor(batchBase + (uint)b, i)).ToArray();
-            var prompt = PromptBuilder.BuildChatterPrompt(head, k_Snap, cards, topics, k_Rumors, pairCount);
+            var prompt = PromptBuilder.BuildChatterPrompt(head, k_Snap, cards, topics, k_Rumors, pairCardNos);
             Console.WriteLine($"[Eval·chatter/{setName}] 第 {b + 1}/{k} 炉发出（{prompt.Length} 字符）…");
             var r = await provider.OneShotAsync(prompt, CancellationToken.None);
             if (!r.Success)

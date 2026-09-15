@@ -143,6 +143,8 @@ namespace CityLife.Content
         /// 数字/物件/店名/价签，主头【别空】纪律下沉）；禁 hashtag/禁@/禁"家人们"直播腔。
         /// §12 #63 对话场景卡：卡文带"｜对："的是双人卡（两人正走在一起），输出 {"card":N,"a":..,"b":..}
         /// 各 ≤12 字的来回对话，名字前缀执行层收炉拼装（LLM 不碰名字，单向阀门）。
+        /// 【输出样子】行（2026-09-15 快轨强化）：V3 无 thinking 对"只有对卡才 a/b、每对卡恰好 1 条"
+        /// 跟随不稳（实机漏产/超产实锤）——few-shot 样子行+红线明示，例句中性防镜像照抄（#61 教训）。
         /// 正例 > 禁令（2026-08-20 治僵硬主药，主头同款）：样子只学语气，内容物件不许照抄；
         /// 样子本身长短混排（few-shot 镜像句长——全是短例子就永远只产短句，实机"全是短句"实锤后修）。
         /// 场合不再由模型判（§12 #60 刀① Plan B）：乘车/在建筑/走路是采样时已确定事实，
@@ -166,9 +168,12 @@ namespace CityLife.Content
             sb.Append("【写法】每张处境卡写 2-3 条（至少一短一长）：就照这个人的处境和配给他的话头写，必须是从这个人嘴里能说出来的话；每条必须带 card 标明出自哪张处境卡（1 起）。可以顺势吐槽【城市此刻】里的天气/通勤/物价或【城里最近在传】里的事。卡里若带\"｜旁边：\"（S6 环境圈摘要），是这人边上此刻真实有的东西，可以顺手当话料，没有就是没有。\n");
             sb.Append("【名字】卡里和\"｜旁边：\"摘要里「」内才是真实场所名（店名/地名），可以点名吐槽；没加「」的场所词（商店/工厂/住宅区/办公楼…）只是业态类别不是名字，禁止当店名念——别编全名、别加引号，要提就说\"那家店\"\"这附近\"。\n");
             sb.Append("【配额】萌宠题材（猫/狗/宠物）全炉至多 1 条——它最安全最容易写滥，写超判废。\n");
-            // §12 #63 对话场景卡小节（语域措辞借 BuildTheaterStockHead 当面聊天段：有来有回、别喊名字别自称）
-            sb.Append("【对话】处境卡带\"｜对：\"的是双人卡——\"｜对：\"后是正和这人走在一起的另一人的处境。双人卡只写一条两人对话，不写独白：{\"card\":卡号,\"a\":\"甲说的话\",\"b\":\"乙接的话\"}，a/b 各 ≤12 字，一句起一句应，像街坊擦肩接话那么自然；可以聊两人的处境/旁边的东西/题里的话头。台词里禁止喊名字、禁止自称名字（显示名系统会自动加）、禁止动作神态描写，只写说出口的话。\n");
-            sb.Append("【输出】只输出 JSONL：独白卡一行一条 {\"text\":\"话\",\"card\":卡号}，双人卡一行一条 {\"card\":卡号,\"a\":\"…\",\"b\":\"…\"}；禁止 markdown 围栏、禁止解释、禁止序号。\n");
+            // §12 #63 对话场景卡小节（语域措辞借 BuildTheaterStockHead 当面聊天段：有来有回、别喊名字别自称）。
+            // 2026-09-15 快轨实锤强化（V3 无 thinking 漏产/超产）：加 JSONL 输出样子（few-shot 对无 thinking
+            // 最有效；例句用中性通用句——#61 教训样子会被镜像照抄，内容必须即使照抄也不出戏）+ 两条红线明示。
+            sb.Append("【对话】卡文带\"｜对：\"的是双人卡（\"｜对：\"后是另一人的处境）：两人对话一句起一句应，像街坊擦肩接话，a/b 各 ≤12 字，可聊两人的处境/旁边的东西/题里的话头；台词禁喊名字禁自称（显示名系统自动加）、禁动作神态描写，只写说出口的话。\n");
+            sb.Append("【输出样子】独白卡→{\"text\":\"这儿风真大\",\"card\":2}；双人卡→{\"card\":5,\"a\":\"你也走这条路啊\",\"b\":\"对，天天走\"}。红线：只有带\"｜对：\"的卡才用 a/b，其余卡只许 {\"text\":..} 独白；每张双人卡必须恰好写 1 条 a/b 行且 card 必须等于它的卡号——双人卡不写 a/b、写多条、a/b 行缺 card 或 card 指错卡，全部判废丢弃。\n");
+            sb.Append("【输出】只输出 JSONL，一行一条，格式照【输出样子】；禁止 markdown 围栏、禁止解释、禁止序号。\n");
             return sb.ToString();
         }
 
@@ -176,19 +181,22 @@ namespace CityLife.Content
         /// 闲聊炉完整 prompt = 闲聊头 + 动态尾：【城市此刻】（DescribeCity 同款，别重复造）
         /// + 处境卡（每张配一题）+ 条数任务。cards/topics 等长对齐（BubbleChatterSystem 从
         /// CitizenPoolSystem.Entries 抽样 + TopicReservoir.TopicFor 配题）。
-        /// pairCards=其中双人卡数（§12 #63：卡文已带"｜对："段，此处只为段头说明与条数期望算账）。
+        /// pairCardNos=双人卡卡号列表（§12 #63：卡文已带"｜对："段；2026-09-15 快轨强化——V3 无
+        /// thinking 认不出"哪张是双人卡"致漏产，段头+任务行显式点名卡号双重锚定，消除识别负担）。
         /// </summary>
         public static string BuildChatterPrompt(string head, in CitySnapshot s,
                                                 IReadOnlyList<string> cards, IReadOnlyList<string> topics,
-                                                IReadOnlyList<string>? rumors = null, int pairCards = 0)
+                                                IReadOnlyList<string>? rumors = null,
+                                                IReadOnlyList<int>? pairCardNos = null)
         {
+            var pairCards = pairCardNos?.Count ?? 0;
             var sb = new StringBuilder(head.Length + 512);
             sb.Append(head);
             sb.Append("【城市此刻】").Append(DescribeCity(s)).Append('\n');
             AppendRumors(sb, rumors, "可以当话料（别逐字复读，别每条都蹭）");
             sb.Append("【处境卡】一行一张（真实市民此刻的状态），\"｜题：\"后是配给这人的话头");
             if (pairCards > 0)
-                sb.Append("，\"｜对：\"后是正和这人走在一起的另一人（双人卡）");
+                sb.Append("，\"｜对：\"后是正和这人走在一起的另一人（双人卡=卡 ").Append(string.Join("、", pairCardNos!)).Append("）");
             sb.Append("：\n");
             for (int i = 0; i < cards.Count; i++)
             {
@@ -198,9 +206,11 @@ namespace CityLife.Content
                 sb.Append('\n');
             }
             var monos = cards.Count - pairCards;
-            sb.Append("【任务】独白卡每张写 2-3 条（至少一短一长，长句 20-40 字带一件具体的事）");
+            // 按卡号顺序逐卡写（2026-09-15 快轨强化：顺序锚定治 V3 无 thinking 漏卡——跳卡是漏产首因）
+            sb.Append("【任务】按卡号顺序逐卡写：独白卡每张写 2-3 条（至少一短一长，长句 20-40 字带一件具体的事）");
             if (pairCards > 0)
-                sb.Append("，双人卡每张只写 1 条对话");
+                sb.Append("；卡 ").Append(string.Join("、", pairCardNos!))
+                  .Append(" 是双人卡，每张必须写恰好 1 条 {\"card\":卡号,\"a\":..,\"b\":..} 对话");
             sb.Append("，共 ").Append(monos * 2 + pairCards).Append('-').Append(monos * 3 + pairCards)
               .Append(" 条；哪张卡的话用完就换下一张，别复读。\n");
             return sb.ToString();

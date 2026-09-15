@@ -145,7 +145,7 @@ namespace CityLife.GameBridge
             for (int k = 0; k < picked.Count; k++)
                 pickedSet.Add(picked[k].Entity);
             var digested = 0; // 本炉带环境摘要的卡数（[环境圈] 每炉一行计数用）
-            var paired = 0;   // 本炉配对成功的双人卡数（开炉日志用）
+            var pairCardNos = new List<int>(); // 本炉配对成功的双人卡号（1 起，与卡序对齐；prompt 点名锚定+开炉日志用）
             for (int k = 0; k < picked.Count; k++)
             {
                 var entry = picked[k];
@@ -173,7 +173,7 @@ namespace CityLife.GameBridge
                     {
                         card += "｜对：" + b.Value.Card;
                         pair = (entry.Name, b.Value.Name);
-                        paired++;
+                        pairCardNos.Add(k + 1); // 卡号 1 起，与 prompt 卡序对齐
                     }
                 }
                 cards.Add(card);
@@ -190,12 +190,12 @@ namespace CityLife.GameBridge
 
             m_Pool.CurrentCycle = m_ForgeCount; // BornCycle 基准锚本炉
             var rumorsNow = Content.CityRumors.Recent(3); // 刀②城市记忆：最新 3 条传闻当话料
-            var prompt = Content.PromptBuilder.BuildChatterPrompt(m_Head, snapshot, cards, topics, rumorsNow, paired);
+            var prompt = Content.PromptBuilder.BuildChatterPrompt(m_Head, snapshot, cards, topics, rumorsNow, pairCardNos);
             Mod.FastGateway!.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Low, k_ForgeTtl, "chatter:" + m_ForgeCount)); // 快轨（§12 #59）
             m_ForgePending = true;
             m_ForgeSince = DateTime.UtcNow;
             var occTally = TallyOccasions();
-            Mod.Log.Info($"[闲聊炉] 开炉：处境卡 {count} 张（走{occTally[1]}/车{occTally[2]}/室{occTally[3]}/通{occTally[0]}，配对 {paired} 对，第 {m_ForgeCount + 1} 炉，池存 {m_Pool.Count}）");
+            Mod.Log.Info($"[闲聊炉] 开炉：处境卡 {count} 张（走{occTally[1]}/车{occTally[2]}/室{occTally[3]}/通{occTally[0]}，配对 {pairCardNos.Count} 对，第 {m_ForgeCount + 1} 炉，池存 {m_Pool.Count}）");
             if (rumorsNow.Count > 0)
                 Mod.Log.Info($"[闲聊炉] 本炉传闻：{string.Join(" / ", rumorsNow)}"); // 城市记忆可观测性：直接看到它在干活
             Mod.Log.Info($"[环境圈] 本炉摘要：{digested} 条非空（共 {count} 卡）"); // 每炉最多一行计数（首炉样例行在 EnvironmentDigestSystem）
@@ -225,6 +225,16 @@ namespace CityLife.GameBridge
             var added = 0;
             var orphan = 0;
             var dialogues = 0;
+            // §12 #63 快轨对账计数（2026-09-15 实锤 V3 无 thinking 对卡 schema 跟随不稳：漏产/超产）：
+            // 配对卡收到的合规 a/b 行 / 配对卡收到的独白行（schema 未跟随倾向）/ 非配对卡收到 a/b 行（越界超产）/ 拼装超 40 丢
+            var pairCards = 0;
+            for (int i = 0; i < m_CurrentPairs.Count; i++)
+                if (m_CurrentPairs[i].HasValue)
+                    pairCards++;
+            var pairRows = 0;
+            var pairMonoRows = 0;
+            var strayDialogueRows = 0;
+            var composeOver = 0;
             foreach (var p in parsed)
             {
                 var occasion = Content.BubbleOccasion.Any;
@@ -244,9 +254,20 @@ namespace CityLife.GameBridge
                 string? text = null;
                 if (p.IsDialogue && pair.HasValue)
                 {
+                    pairRows++;
                     text = ComposeDialogue(pair.Value.NameA, p.A!, pair.Value.NameB, p.B!);
                     if (text != null)
                         dialogues++;
+                    else
+                        composeOver++;
+                }
+                else if (p.IsDialogue)
+                {
+                    strayDialogueRows++; // a/b 写给非配对卡：越界超产，无名字可拼必落丢弃/独白回退
+                }
+                else if (pair.HasValue)
+                {
+                    pairMonoRows++; // 配对卡收到独白行：schema 未跟随（模型把它当独白卡写了）
                 }
                 text ??= p.Text;
                 if (text == null)
@@ -258,6 +279,10 @@ namespace CityLife.GameBridge
                     added++;
             }
             Mod.Log.Info($"[闲聊炉] 入库 {added} 条（对话 {dialogues} 条，解析丢 {skipped} 条，去重丢 {parsed.Count - added} 条，无归属 {orphan} 条，池现 {m_Pool.Count} 条）");
+            // §12 #63 对话缺口诊断（轻量一行，不逐行 dump）：配对>0 但入库对话<配对数时粗分原因，
+            // 下次实机直接定位是模型没写 a/b（schema 未跟随/漏产）还是执行层闸拦的（拼装超 40）
+            if (pairCards > 0 && dialogues < pairCards)
+                Mod.Log.Info($"[闲聊炉] 对话缺口：配对 {pairCards} 对入库 {dialogues} 条——对卡合规 a/b 行 {pairRows}、对卡独白行 {pairMonoRows}（schema 未跟随倾向）、越界 a/b 行 {strayDialogueRows}（非对卡超产）、拼装超40丢 {composeOver}、全炉解析丢 {skipped}");
         }
 
         /// <summary>

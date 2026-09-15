@@ -65,6 +65,10 @@ namespace CityLife.GameBridge
             { OptDesc(nameof(CityLifeSetting.BubbleChatterEnabled)), "Chatter furnace feeds bubbles with AI lines on its own game-time cadence, independent of feed mode — bubbles are visible even with the panel closed. Off = placeholder lines only (zero tokens)." },
             { Opt(nameof(CityLifeSetting.BubbleTheaterEnabled)), "Bubble mini-theater" },
             { OptDesc(nameof(CityLifeSetting.BubbleTheaterEnabled)), "Group scripted dialogues at multi-person scenes (stops / shops / parks / homes). Off = no grouping, no furnace (zero tokens)." },
+            { Opt(nameof(CityLifeSetting.StreetTheaterMaxCast)), "Street play · max cast" },
+            { OptDesc(nameof(CityLifeSetting.StreetTheaterMaxCast)), "Max pedestrians grouped into a street chatter play (2-5, default 3). Short-handed scenes simply play smaller — no padding. Set it high and walkers dispersing or leaving the screen may cut the play short, wasting the tokens that wrote it — your call." },
+            { Opt(nameof(CityLifeSetting.StreetTheaterMaxLines)), "Street play · max lines" },
+            { OptDesc(nameof(CityLifeSetting.StreetTheaterMaxLines)), "Max lines played for a street chatter play (2-12, default 6). Shorter scripts play as-is. Overlong plays that never finish waste tokens all the same." },
 
             { Opt(nameof(CityLifeSetting.FeedMode)), "Feed generation mode" },
             { OptDesc(nameof(CityLifeSetting.FeedMode)), "Always = the city lives on its own; OpenOnly = generation stops while the panel is closed (saves tokens); Throttled = reduced rate while closed." },
@@ -146,6 +150,10 @@ namespace CityLife.GameBridge
             { OptDesc(nameof(CityLifeSetting.BubbleChatterEnabled)), "闲聊炉按自己的游戏时间节拍给气泡供文案，不随信息流节拍停——气泡不看面板也在显示。关=只用占位文案（零 token）。" },
             { Opt(nameof(CityLifeSetting.BubbleTheaterEnabled)), "气泡小剧场" },
             { OptDesc(nameof(CityLifeSetting.BubbleTheaterEnabled)), "多人场景（车站/商店/公园/住宅）组剧本轮播对话。关=不成组不开炉（零 token）。" },
+            { Opt(nameof(CityLifeSetting.StreetTheaterMaxCast)), "街头短剧·最大人数" },
+            { OptDesc(nameof(CityLifeSetting.StreetTheaterMaxCast)), "街头闲谈短剧最多抓几个路人同演（2-5，默认 3）。现场人不够就小演，不硬凑。设太高：人走散/出镜头导致演不完，写剧本的 token 就白烧了，量力而行。" },
+            { Opt(nameof(CityLifeSetting.StreetTheaterMaxLines)), "街头短剧·最长句数" },
+            { OptDesc(nameof(CityLifeSetting.StreetTheaterMaxLines)), "街头闲谈短剧最多播几句（2-12，默认 6）。剧本不够长就短演，不硬凑；设太高演不完同样浪费 token。" },
 
             { Opt(nameof(CityLifeSetting.FeedMode)), "信息流生成节拍" },
             { OptDesc(nameof(CityLifeSetting.FeedMode)), "常开=城市自己在活着；仅展开=收起面板即停生成省 token；节流=收起时降频保温。" },

@@ -279,7 +279,7 @@ internal static class Program
         var totalSkipped = 0;
         for (var b = 0; b < k; b++)
         {
-            var prompt = PromptBuilder.BuildTheaterStockPrompt(head, k_Snap, stock, k_Diverse, 4);
+            var prompt = PromptBuilder.BuildTheaterStockPrompt(head, k_Snap, stock, k_Diverse, 4, 3); // streetMaxCast=设置页默认 3（§12 #67）
             Console.WriteLine($"[Eval·theater] 第 {b + 1}/{k} 炉发出（{prompt.Length} 字符）…");
             var r = await provider.OneShotAsync(prompt, CancellationToken.None);
             if (!r.Success)
@@ -331,7 +331,7 @@ internal static class Program
     private static int RegexCount(string text, string slot)
     {
         var n = 0;
-        for (var i = 1; i <= 3; i++)
+        for (var i = 1; i <= 5; i++) // §12 #67：street cast 可到 5，占位槽统计同步放开
             if (text.Contains(slot + i + "}"))
                 n++;
         return n;

@@ -22,7 +22,7 @@ namespace CityLife.GameBridge
     ///
     /// 状态机（一拍一拍走；节拍时钟自 §12 #68 起随设置页选项——默认 unscaledTime 墙钟（现实时间），
     /// 开=游戏时钟（暂停零成本、倍速同速放大，即 #48 原 tick 节拍语义的等值折算）：
-    /// ① 剧本炉（水位触发）：每 3-4-5 游戏分钟评估拍（节拍轮换照抄闲聊炉）查池水位——总库存 &lt;6 且
+    /// ① 剧本炉（水位触发）：每 3-4-5 节奏分钟评估拍（节拍轮换照抄闲聊炉；时钟源 §12 #68——默认墙钟，开=游戏时钟）查池水位——总库存 &lt;6 且
     ///    无在飞+网关可用+非 MUTE+设置页开关开 → 发一炉产 4 部（Normal 优先级：thinking 时代低优先级
     ///    队尾等死，§12 #51 实锤；TTL 300s + 墙钟 TTL+60s 兜底解锁，闲聊炉/S3 同款）。prompt=固定头
     ///    PromptBuilder.BuildTheaterStockHead（启动拼一次缓存，逐字节稳定纪律）+ 动态尾：各场景标签
@@ -35,13 +35,15 @@ namespace CityLife.GameBridge
     ///       WaitingPassengers.m_Count ≥2（候车是计数不是名单，spike §4）；
     ///    b) 公园/景点——圈内带 AttractivenessProvider / SignatureBuildingData 的建筑；
     ///    c) 店内——市民查询按 CurrentBuilding 分组计数 ≥2（剧场级低频全量扫，帧预算内），
-    ///       且建筑须落在某个可见锚点 40m 内（离镜头近优先的落点保证）。
-    /// ③ 绑真名单+取剧本（不绑随机路人）：开放场所（车站/公园）= moving 树圈内带 Human+Resident 的
-    ///    行人 agent 回指市民（S6 实锤候车行人在树里），按离地点距离升序取 2-4 人，锚点=agent 本体；
-    ///    店内 = CurrentBuilding==该建筑的市民 2-4 人，锚点=建筑本体（室内市民无 agent，多人共锚）。
+    ///       且建筑须落在某个可见锚点 40m 内（离镜头近优先的落点保证）；
+    ///    d) 街头闲谈（§12 #67，见⑦）——可见行人锚点圈内抓步行路人组 roster。
+    /// ③ 绑真名单+取剧本（不绑随机路人）：开放场所（车站/公园/街头）= moving 树圈内带 Human+Resident 的
+    ///    行人 agent 回指市民（S6 实锤候车行人在树里），按离地点距离升序取 2-4 人（街头场=设置页上限 2-5），
+    ///    锚点=agent 本体；店内 = CurrentBuilding==该建筑的市民 2-4 人，锚点=建筑本体（室内市民无 agent，多人共锚）。
     ///    参与者已在他组的跳过。场景标签映射：车站候车→station、公园/景点→park、商店→shop、
-    ///    住宅区→home、窗口混编→window（见⑥）；其余室内类型（学校/医院/办公楼等）无标签=本拍跳过。候选成立 →
-    ///    stock.TryTake(标签, 名单人数)：场景严格相符+cast≤人数确定性取一条；无匹配=本拍跳过
+    ///    住宅区→home、窗口混编→window（见⑥）、街头闲谈→street（见⑦）；其余室内类型（学校/医院/办公楼等）无标签=本拍跳过。候选成立 →
+    ///    stock.TryTake(标签, 名单人数)：场景严格相符+cast≤人数确定性取一条（街头场多一段：
+    ///    没有正好演得起的就取大剧本裁着演，见⑦）；无匹配=本拍跳过
     ///    （不打炉！炉只由水位触发，放送侧绝不开炉）。
     /// ④ 开播：取到剧本即绑名单建剧场——Participants/Lines 初始化其余锚点显"……"（在听）+
     ///    第一句带名字前缀落到说话人锚点（§12 #50："安珀尔：……"——多人/共锚分辨说话人，顺带成
@@ -62,6 +64,15 @@ namespace CityLife.GameBridge
     ///    恒值校验在 TheaterScriptStock）。剧本炉每炉至少配 1 部 window（最高频场景，库存没了满街
     ///    没得演）。窗口候选与室外/店内候选同台竞争（DistToCam 近者优先，沿用 best 比较），评估拍
     ///    节奏/同屏 ≤2/冷却不变，开播/播放/终了全部复用现有机制零改动。
+    /// ⑦ 街头闲谈（§12 #67，2026-09-15 定案，#63 形态升级——快轨单泡对话卡不动，两形态并存）：
+    ///    路上闲谈可变人变长。候选=从可见行人锚点出发圈内抓步行路人（BindOutdoorRoster 同款口径，
+    ///    上限=设置页"街头短剧最大人数"2-5 默认 3，现场不足 2 人不开演）；地点=出发锚点本体
+    ///    （街头无固定场所——冷却/占用判它，锚点走远失效自然终了="人散"）；标签 street
+    ///    （剧本 cast 2-5/lines 2-12 可变，槽位化照旧；剧本炉每炉至少配 1 部 street——
+    ///    六场景一炉 4 部装不下，不配额就永远排不上，PromptEval 首轮 street=0 实锤）。向下取不硬凑：剧本 cast>有效人数时取前 N 名
+    ///    小演+丢 speaker 越界台词（丢完不足 2 句弃播退回池）、播放句数截到设置页"最长句数"短演
+    ///    （2-12 默认 6）。权重略低（DistToCam ×1.5）防遍地行人锚点挤掉车站/窗口场；放送闸/冷却/
+    ///    终了/不占同屏上限全部复用现有机制。儿童不特别排除（§12 #66 末段）。
     ///
     /// 上限与降级：同屏活剧场 ≤2（k_MaxActive）；同时在飞最多一炉剧本炉；池空/供给不可用=不开
     /// （不致命，单人吐槽管道照常）。只在评估/收炉低频点查树与扫市民，不进任何每帧/渲染热路径；
@@ -73,11 +84,14 @@ namespace CityLife.GameBridge
     {
         private const double k_ForgeTtl = 300;   // 在飞请求 TTL（秒）：低频补给宁缺毋滥（闲聊炉同值）
         private const int k_MaxActive = 2;       // 同屏活剧场 ≤2（#48 上限定案）
-        private const int k_MinParticipants = 2; // 一组 2-4 人（#48/M5）
+        private const int k_MinParticipants = 2; // 一组 2-4 人（#48/M5）；街头闲谈上限=设置页（§12 #67，2-5 默认 3）
         private const int k_MaxParticipants = 4;
+        private const int k_MinLinesTheater = 2; // 有效剧本最少句数（<2 句不成对话；与 TheaterScriptStock 解析口径一致）
         private const float k_ScanRadius = 40f;  // 选锚点扫描半径（环境圈同尺，S6 定值）
         private const float k_BindRadius = 30f;  // 绑名单半径：参与者须离地点 30m 内（"共位"）
         private const float k_WindowScanRadius = 20f; // 窗口混编找楼半径（§12 #56 定 15-20m，取上沿：树里是楼心不是门脸，临街楼心离人行道常超 15m）
+        private const float k_StreetScanRadius = 30f; // 街头闲谈抓人半径（§12 #67：与 k_BindRadius 同尺——能搭上话的距离）
+        private const float k_StreetScorePenalty = 1.5f; // 街头场权重折扣（§12 #67"与 window 相当或略低"：行人锚点遍地都是，不压会挤掉车站/窗口场）
         private const int k_MaxAnchorScan = 8;   // 每拍最多扫几个可见锚点（帧预算闸）
         private const int k_MinWaiting = 2;      // 车站候车人气门槛（#48"≥2 人"）
         private const uint k_CooldownMinutes = 12; // 锚点冷却 ≈3 炉节拍（3-4-5 分钟轮换 ×3），防连开
@@ -137,7 +151,7 @@ namespace CityLife.GameBridge
             public Entity Location;
             public float3 Pos;
             public string KindLabel = "";
-            public string SceneTag = "";     // 剧本池场景标签（station/park/shop/home/window）；""=无标签（本拍不可用）
+            public string SceneTag = "";     // 剧本池场景标签（station/park/shop/home/window/street）；""=无标签（本拍不可用）
             public float DistToCam;
             public readonly List<(Entity Citizen, Entity Anchor, bool Indoor)> Roster = new();
         }
@@ -259,7 +273,8 @@ namespace CityLife.GameBridge
                     cards.Add(entry.Context);
                 }
             }
-            var prompt = Content.PromptBuilder.BuildTheaterStockPrompt(m_Head, snapshot, m_Stock, cards, k_ForgeBatch);
+            var prompt = Content.PromptBuilder.BuildTheaterStockPrompt(m_Head, snapshot, m_Stock, cards, k_ForgeBatch,
+                Content.ModSettings.StreetTheaterMaxCast); // §12 #67：街头场人数上限进动态尾（设置值天然是动态量，不动固定头）
             Mod.Gateway!.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Normal, k_ForgeTtl, "theater:" + m_ForgeCount)); // Normal 不 Low：thinking 时代低优先级在队尾等死（§12 #51 实机）
             m_ForgePending = true;
             m_ForgeSince = DateTime.UtcNow;
@@ -287,8 +302,9 @@ namespace CityLife.GameBridge
         // —— ② 放送选锚点 ——
 
         /// <summary>放送评估拍主流程：可见锚点快照 → 室外候选（车站/公园景点，按离镜头近扫）+ 窗口混编候选
-        /// （行人锚点旁"有人气"的商店/住宅，§12 #56）+ 店内候选（CurrentBuilding 分组）——窗口与店内共用
-        /// 每拍最多一次的楼内市民分组（BuildIndoorGroups 懒建）。三类同台竞争，取离镜头最近且绑得够人的 →
+        /// （行人锚点旁"有人气"的商店/住宅，§12 #56）+ 街头闲谈候选（行人锚点圈内抓路人，§12 #67）
+        /// + 店内候选（CurrentBuilding 分组）——窗口/街头与店内共用
+        /// 每拍最多一次的楼内市民分组（BuildIndoorGroups 懒建，街头不需要——纯室外抓人）。四类同台竞争，取离镜头最近且绑得够人的 →
         /// 按场景标签向剧本池取件：无匹配剧本=本拍跳过（不打炉！炉只由水位触发）；取到即绑名单开播
         /// （零 LLM 等待，绑定即复核）。</summary>
         private void TryCast()
@@ -319,12 +335,15 @@ namespace CityLife.GameBridge
                 var cand = ScanOutdoor(m_AnchorSnap[i].Pos, camPos, statics, movers);
                 if (cand != null && (best == null || cand.DistToCam < best.DistToCam))
                     best = cand;
-                if (m_AnchorSnap[i].Kind == 0) // 窗口混编只从可见行人锚点出发（§12 #56：1 外 1 内）
+                if (m_AnchorSnap[i].Kind == 0) // 窗口混编/街头闲谈只从可见行人锚点出发（§12 #56/#67）
                 {
                     indoorGroups ??= BuildIndoorGroups();
                     var win = ScanWindow(m_AnchorSnap[i], camPos, statics, movers, indoorGroups);
                     if (win != null && (best == null || win.DistToCam < best.DistToCam))
                         best = win;
+                    var street = ScanStreet(m_AnchorSnap[i], camPos, statics, movers);
+                    if (street != null && (best == null || street.DistToCam < best.DistToCam))
+                        best = street;
                 }
             }
             statics.Dispose();
@@ -339,6 +358,12 @@ namespace CityLife.GameBridge
             if (best.SceneTag.Length == 0)
                 return; // 该场景类型无剧本标签（学校/医院/办公楼等室内）——池无此分区，本拍跳过
             var script = m_Stock.TryTake(best.SceneTag, best.Roster.Count);
+            if (script == null && best.SceneTag == Content.TheaterScriptStock.Street)
+            {
+                // §12 #67 小演第二段：街头场没有正好演得起的剧本时，允许取大剧本裁着演
+                // （StartTheater 里 cast>有效人数取前 N 名+丢 speaker 越界台词，丢完不足 2 句弃播退回池）
+                script = m_Stock.TryTake(best.SceneTag, Content.ModSettings.StreetTheaterMaxCast);
+            }
             if (script == null)
             {
                 // 无匹配剧本=本拍跳过（不打炉！炉只由水位触发）——一行日志供验收区分"没扫到人"与"池里没货"
@@ -411,8 +436,10 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>开放场所绑人：圈内 agent → 带 Human（排动物）+ Resident（排载具）+ Transform（可锚定）
-        /// 的回指市民，按离地点距离升序取前 k_MaxParticipants；市民实体去重+排除在组/在冷却名单。</summary>
-        private void BindOutdoorRoster(float3 locPos, NativeList<Entity> movers, List<(Entity Citizen, Entity Anchor, bool Indoor)> dst)
+        /// 的回指市民，按离地点距离升序取前 maxCount；市民实体去重+排除在组/在冷却名单。
+        /// maxCount 默认 k_MaxParticipants（车站/公园场）；街头闲谈（§12 #67）传设置页"最大人数"（2-5）。
+        /// #66 起儿童不特别排除（街头场 cast 不排儿童，§12 #66 末段）。</summary>
+        private void BindOutdoorRoster(float3 locPos, NativeList<Entity> movers, List<(Entity Citizen, Entity Anchor, bool Indoor)> dst, int maxCount = k_MaxParticipants)
         {
             var scored = new List<(Entity Citizen, Entity Agent, float D2)>(movers.Length);
             for (int i = 0; i < movers.Length; i++)
@@ -438,7 +465,7 @@ namespace CityLife.GameBridge
             }
             scored.Sort((a, b) => a.D2.CompareTo(b.D2));
             var r2 = k_BindRadius * k_BindRadius;
-            for (int i = 0; i < scored.Count && dst.Count < k_MaxParticipants; i++)
+            for (int i = 0; i < scored.Count && dst.Count < maxCount; i++)
                 if (scored[i].D2 <= r2)
                     dst.Add((scored[i].Citizen, scored[i].Agent, false));
         }
@@ -582,6 +609,32 @@ namespace CityLife.GameBridge
             return cand;
         }
 
+        /// <summary>街头闲谈候选（§12 #67，#63 形态升级：路上闲谈可变人变长、复用剧场机制）：
+        /// 从可见行人锚点出发，圈内 30m 抓步行路人组 roster（BindOutdoorRoster 同款口径，
+        /// 上限=设置页"街头短剧最大人数"）——熟人偶遇/陌生人搭话均可，现场不足 2 人不开演（不硬凑）。
+        /// 地点=出发锚点本体（街头无固定场所：冷却/占用判它，锚点走远失效自然终了="人散"）；
+        /// 标签 street；DistToCam ×k_StreetScorePenalty 权重折扣参与同台竞争（别让它刷屏）。
+        /// 锚点在冷却/在演 → null。</summary>
+        private Candidate? ScanStreet((Entity Anchor, byte Kind, float3 Pos) a, float3 camPos,
+                                      NativeList<Entity> statics, NativeList<Entity> movers)
+        {
+            if (OnCooldown(a.Anchor) || LocationInUse(a.Anchor) || m_ByAnchor.ContainsKey(a.Anchor))
+                return null;
+            statics.Clear();
+            movers.Clear();
+            m_Environment.CollectAround(a.Pos, k_StreetScanRadius, statics, movers); // statics 用不上，收在调用方
+            var cand = new Candidate
+            {
+                Location = a.Anchor,
+                Pos = a.Pos,
+                KindLabel = "街头",
+                SceneTag = Content.TheaterScriptStock.Street,
+                DistToCam = math.distance(camPos, a.Pos) * k_StreetScorePenalty, // 权重略低（§12 #67：与 window 相当或略低）
+            };
+            BindOutdoorRoster(a.Pos, movers, cand.Roster, Content.ModSettings.StreetTheaterMaxCast);
+            return cand.Roster.Count >= k_MinParticipants ? cand : null;
+        }
+
         /// <summary>地点是否落在任一可见锚点 k_ScanRadius 内（店内候选的"离镜头近"判据）。</summary>
         private bool NearAnyVisibleAnchor(float3 pos)
         {
@@ -607,9 +660,11 @@ namespace CityLife.GameBridge
             _ => "",
         };
 
-        /// <summary>取到剧本即开播：绑名单（roster 前 script.Cast 人——室外已按离地点升序，室内=楼内市民；
-        /// 名单是这一拍刚扫出来的活人，绑定即复核，无飞行窗口）→ Participants/Lines 初始化（其余锚点"……"在听，
-        /// 第一句带名字前缀落说话人锚点，§12 #50）→ Anchors/m_ByAnchor 登记 → EnsureAnchor 五道闸。
+        /// <summary>取到剧本即开播：绑名单（roster 前 castN 人——castN=min（剧本人数， 现场有效人数），
+        /// §12 #67 小演：剧本人多就裁着演，丢 speaker 越界台词，丢完不足 2 句弃播退回池；街头场句数
+        /// 再截到设置页"最长句数"短演——全部向下取不硬凑；名单是这一拍刚扫出来的活人，绑定即复核，
+        /// 无飞行窗口）→ Participants/Lines 初始化（其余锚点"……"在听，第一句带名字前缀落说话人锚点，
+        /// §12 #50）→ Anchors/m_ByAnchor 登记 → EnsureAnchor 五道闸。
         /// 剧本开播才消耗：任一锚点不可锚=回滚登记+Return 退回池+日志开播中止，不上冷却（#52：冷却只在终了后上）。</summary>
         private void StartTheater(Candidate cand, Content.TheaterScript script)
         {
@@ -623,23 +678,38 @@ namespace CityLife.GameBridge
 
             var sceneName = SceneNameOf(cand);
             var t = new Theater { Location = cand.Location, SceneName = sceneName };
-            var names = new List<string>(script.Cast);
-            for (var i = 0; i < script.Cast && i < cand.Roster.Count; i++) // TryTake 已保证 cast ≤ roster.Count，双上界纯防御
+            // §12 #67 小演：剧本 cast > 现场有效人数时取前 N 名（街头场二段取件会拿到大剧本；
+            // 其余场景 TryTake 已保证 cast ≤ roster，这里等值不裁）。室外名单已按离地点升序，前 N 名=最近的真人
+            var castN = Math.Min(script.Cast, cand.Roster.Count);
+            if (castN < k_MinParticipants)
+            {
+                m_Stock.Return(script); // 理论到不了（候选门槛 ≥2 人），纯防御——名单不足退回不消耗
+                return;
+            }
+            var names = new List<string>(castN);
+            for (var i = 0; i < castN; i++)
             {
                 var (citizen, anchor, indoor) = cand.Roster[i];
                 var name = m_NameSystem != null ? m_NameSystem.GetRenderedLabelName(citizen) : null;
                 t.Participants.Add(new Participant { Citizen = citizen, Anchor = anchor, Name = string.IsNullOrEmpty(name) ? "市民" : name, Indoor = indoor });
                 names.Add(t.Participants[t.Participants.Count - 1].Name);
             }
-            if (t.Participants.Count < script.Cast)
-            {
-                m_Stock.Return(script); // 理论到不了，纯防御——名单不足退回不消耗
-                return;
-            }
-            for (var li = 0; li < script.Lines.Count; li++)
+            // §12 #67 短演：街头场句数截到设置页"最长句数"（其余场景不截——池解析已有 12 句硬顶）；
+            // 小演丢 speaker 越界台词（指着被裁角色的句子没人说）
+            var maxLines = cand.SceneTag == Content.TheaterScriptStock.Street
+                ? Content.ModSettings.StreetTheaterMaxLines : int.MaxValue;
+            for (var li = 0; li < script.Lines.Count && t.Script.Count < maxLines; li++)
             {
                 var (sp, text) = script.Lines[li];
+                if (sp >= castN)
+                    continue; // 越界台词丢弃（§12 #67 向下取）
                 t.Script.Add((sp, FillSlots(text, t.Participants, sceneName, sp))); // 刀⑥槽位化：绑定即填真人真名场景名（自称守卫随槽走）
+            }
+            if (t.Script.Count < k_MinLinesTheater)
+            {
+                m_Stock.Return(script); // 小演丢完不足 2 句=弃播：退回池不消耗（与绑锚失败同口径，不上冷却）
+                Mod.Log.Info($"[剧场] 弃播：{sceneName}（{cand.KindLabel}，cast {script.Cast} 小演到 {castN} 人后不足 2 句，剧本退回池存 {m_Stock.Count}）");
+                return;
             }
             foreach (var p in t.Participants)
                 if (!t.Lines.ContainsKey(p.Anchor))
@@ -676,7 +746,8 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>占位填充（§12 #60 刀⑥剧场槽位化）：{place}→场景真名、{nameN}→第 N 个参与者真人名
-        /// （生成时写槽、放送时填——库存剧本的通用性与在地具体感的换层解）。
+        /// （生成时写槽、放送时填——库存剧本的通用性与在地具体感的换层解；§12 #67 起槽位放开到 name5，
+        /// street cast 可到 5）。
         /// N 越界（模型写嗨了）落"朋友"salvage 不丢句；填充后超长不截（名字短，气泡排版自适应）。
         /// 自称守卫（2026-09-14 实机"大卫：大卫，垃圾又堆门口了"实锤——prompt 样子曾把 speaker 1 的台词
         /// 写成 {name1}，模型照镜像）：speaker（0 基）自己的 {nameN} 槽改填下一位参与者（2 人局=对方）。</summary>
@@ -687,7 +758,7 @@ namespace CityLife.GameBridge
                 text = text.Replace(selfSlot, participants[(speaker + 1) % participants.Count].Name);
             if (text.Contains("{place}"))
                 text = text.Replace("{place}", sceneName);
-            for (var n = 1; n <= 3; n++)
+            for (var n = 1; n <= 5; n++)
             {
                 var slot = "{name" + n + "}";
                 if (text.Contains(slot))

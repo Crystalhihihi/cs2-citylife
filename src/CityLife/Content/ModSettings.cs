@@ -60,6 +60,12 @@ namespace CityLife.Content
         /// §12 #68：开=游戏时钟（暂停冻结、倍速同速放大）；世界泡驻留/剧场换句/评估拍/冷却统一走它。</summary>
         public static bool BubblePaceFollowsGameSpeed => Mod.Options?.BubblePaceFollowsGameSpeed ?? false;
 
+        /// <summary>街头短剧最大人数（默认 3，钳 2-5）——透传设置页。§12 #67：街头闲谈抓人上限，现场不足就小演（不硬凑）。</summary>
+        public static int StreetTheaterMaxCast => System.Math.Clamp(Mod.Options?.StreetTheaterMaxCast ?? 3, 2, 5);
+
+        /// <summary>街头短剧最长句数（默认 6，钳 2-12）——透传设置页。§12 #67：街头闲谈播放句数上限，不足就短演（不硬凑）。</summary>
+        public static int StreetTheaterMaxLines => System.Math.Clamp(Mod.Options?.StreetTheaterMaxLines ?? 6, 2, 12);
+
         /// <summary>突发事件报道总开关（默认开）。</summary>
         public static bool BreakingNews { get; private set; } = true;
         /// <summary>热议档闸门：两次"全城集中讨论"的最小间隔（游戏小时，默认 12，钳 1-72）。</summary>

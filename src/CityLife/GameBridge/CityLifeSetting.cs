@@ -120,6 +120,18 @@ namespace CityLife.GameBridge
         [SettingsUISection(kTab, kGroupBubble)]
         public bool BubbleTheaterEnabled { get; set; } = true;
 
+        /// <summary>街头短剧最大人数（§12 #67，默认 3，滑杆 2-5）：街头闲谈剧场抓人上限——现场人不够就小演
+        /// （不硬凑）。设太高：人走散/出镜头导致演不完会浪费 token，量力而行。</summary>
+        [SettingsUISection(kTab, kGroupBubble)]
+        [SettingsUISlider(min = 2f, max = 5f, step = 1f, unit = "integer")]
+        public int StreetTheaterMaxCast { get; set; } = 3;
+
+        /// <summary>街头短剧最长句数（§12 #67，默认 6，滑杆 2-12）：街头闲谈剧场播放句数上限——剧本句数不足
+        /// 就短演（不硬凑）。设太高演不完同样浪费 token。</summary>
+        [SettingsUISection(kTab, kGroupBubble)]
+        [SettingsUISlider(min = 2f, max = 12f, step = 1f, unit = "integer")]
+        public int StreetTheaterMaxLines { get; set; } = 6;
+
         // —— 信息流组（四键自 settings.json 迁移，Content.ModSettings 同名字段改透传本实例） ——
 
         /// <summary>信息流生成节拍（默认 Always 常开）。</summary>
@@ -218,6 +230,8 @@ namespace CityLife.GameBridge
             BubbleAutoHidePhotoMode = true;
             BubbleChatterEnabled = true;
             BubbleTheaterEnabled = true;
+            StreetTheaterMaxCast = 3;  // §12 #67：街头短剧默认 3 人
+            StreetTheaterMaxLines = 6; // §12 #67：街头短剧默认 6 句
             FeedMode = FeedModeOption.Always;
             T0Fallback = false;
             WriteBackTier = WriteBackTierOption.Normal;

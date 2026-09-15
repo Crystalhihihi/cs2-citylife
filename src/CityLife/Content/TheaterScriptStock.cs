@@ -7,10 +7,10 @@ namespace CityLife.Content
     /// <summary>
     /// 一部库存剧本（§12 #52 炉→池→放送）：剧本不再为具体市民定制，是"场景标签+人数+台词"的
     /// 库存货；放送时哪组真人成立就绑给谁演。
-    /// Scene=场景标签（station/park/shop/home/window，见 <see cref="TheaterScriptStock.Scenes"/>）；
-    /// Cast=人数（2-3，放送时绑这么多真人；window 恒 2——1 外 1 内，§12 #56）；
+    /// Scene=场景标签（station/park/shop/home/window/street，见 <see cref="TheaterScriptStock.Scenes"/>）；
+    /// Cast=人数（2-3，放送时绑这么多真人；window 恒 2——1 外 1 内，§12 #56；street 2-5 可变，§12 #67）；
     /// Lines=台词队列，Speaker=0 基角色序号（&lt; Cast）。
-    /// 台词可带占位符（§12 #60 刀⑥剧场槽位化）：{place}=场景真名、{name1..3}=第 N 个参与者真人名——
+    /// 台词可带占位符（§12 #60 刀⑥剧场槽位化）：{place}=场景真名、{name1..5}=第 N 个参与者真人名——
     /// 生成时写槽、放送时填（BubbleTheaterSystem.FillSlots），库存通用性与在地具体感的换层解；
     /// 解析侧不校验占位符（纯文本透传，40 字硬顶照常）。
     /// </summary>
@@ -34,7 +34,7 @@ namespace CityLife.Content
     /// 如何扩展（社区贡献点）：
     ///   · 新场景标签：Scenes 加常量 + 剧本炉 prompt 头（PromptBuilder.BuildTheaterStockHead）
     ///     【场景】段补一条映射 + BubbleTheaterSystem 候选侧场景标签推导（ScanOutdoor/ScanIndoor/
-    ///     ScanWindow 的 SceneTag 赋值）——三处必须同炉改，漏一处=新标签剧本永远绑不出去或永远产不出；
+    ///     ScanWindow/ScanStreet 的 SceneTag 赋值）——三处必须同炉改，漏一处=新标签剧本永远绑不出去或永远产不出；
     ///   · 新取件策略（按新鲜度/随机等）：加 TryTake 重载，别改既有 TryTake 的确定性语义
     ///     （同池状态必同条——"取最旧匹配"与 FIFO 逐出配对，库存自然轮换）。
     /// </summary>
@@ -50,14 +50,17 @@ namespace CityLife.Content
         public const string Home = "home";
         /// <summary>场景标签：窗口混编（§12 #56——路人经过店门口/人家窗前搭话一句，屋里人接一句；cast/lines 恒 2）。</summary>
         public const string Window = "window";
+        /// <summary>场景标签：街头闲谈（§12 #67——路上行人偶遇/搭话，熟人陌生人均可；cast 2-5、lines 2-12 可变，放送侧向下取小演/短演）。</summary>
+        public const string Street = "street";
 
         /// <summary>全部合法场景标签（schema 校验白名单 + 剧本炉 prompt 库存计数迭代用）。</summary>
-        public static readonly string[] Scenes = { Station, Park, Shop, Home, Window };
+        public static readonly string[] Scenes = { Station, Park, Shop, Home, Window, Street };
 
         private const int k_MinCast = 2;   // 人数下限（小剧场定义即 ≥2 人）
         private const int k_MaxCast = 3;   // 人数上限：2-3 人好绑定（#52——开放场所绑得到真人的概率随人数陡降）
+        private const int k_MaxCastStreet = 5; // 街头闲谈人数上限（§12 #67：cast 2-5 可变；玩家设置页上限 ≤ 此值）
         private const int k_MinLines = 2;  // 有效剧本最少句数（<2 句不成对话，作废）
-        private const int k_MaxLines = 12; // 单部句数硬顶（prompt 目标 6-8 句；气泡一句一泡，拖太长地点早散了）
+        private const int k_MaxLines = 12; // 单部句数硬顶（prompt 目标 6-8 句；street 2-12 可变；气泡一句一泡，拖太长地点早散了）
         private const int k_WindowLines = 2; // 窗口混编句数硬顶（§12 #56：1 轮短剧路人不逗留，多写截断）
         private const int k_MaxTextLen = 40; // 单句硬顶（气泡排版硬顶，与片段池同口径）
 
@@ -121,8 +124,8 @@ namespace CityLife.Content
 
         /// <summary>
         /// 剧本 JSONL salvage 解析（JsonMini 同款纪律——LLM 输出非法 JSON 是最高频故障）：
-        /// 一行一整部 {"scene":"station|park|shop|home|window","cast":2,"lines":[{"speaker":1,"text":"…"}]}；
-        /// 空行/注释行跳过不计数；scene 非法/cast 缺或越界（2-3）/有效台词 &lt;2 句的整行丢弃计数；
+        /// 一行一整部 {"scene":"station|park|shop|home|window|street","cast":2,"lines":[{"speaker":1,"text":"…"}]}；
+        /// 空行/注释行跳过不计数；scene 非法/cast 缺或越界（常规 2-3、street 2-5）/有效台词 &lt;2 句的整行丢弃计数；
         /// window 额外恒值校验（§12 #56）：cast 必须=2（1 外 1 内，多写永远绑不出去），台词超 2 句截断。
         /// 台词句内 salvage：speaker 越界（1..cast）/text 空/超 40 字的单句丢弃不丢整部；超 k_MaxLines 截断。
         /// </summary>
@@ -139,7 +142,8 @@ namespace CityLife.Content
                     continue;
                 var scene = JsonMini.GetStr(line, "scene");
                 var cast = JsonMini.GetInt(line, "cast");
-                if (scene == null || !IsScene(scene) || cast == null || cast.Value < k_MinCast || cast.Value > k_MaxCast
+                if (scene == null || !IsScene(scene) || cast == null || cast.Value < k_MinCast
+                    || cast.Value > (scene == Street ? k_MaxCastStreet : k_MaxCast) // 街头闲谈 cast 2-5 可变（§12 #67）
                     || (scene == Window && cast.Value != 2)) // 窗口混编 cast 恒 2（§12 #56）
                 {
                     skipped++;
@@ -159,7 +163,7 @@ namespace CityLife.Content
             return list;
         }
 
-        /// <summary>场景标签白名单校验（schema 的 scene 字段只认 Scenes 白名单五值）。</summary>
+        /// <summary>场景标签白名单校验（schema 的 scene 字段只认 Scenes 白名单值）。</summary>
         private static bool IsScene(string s)
         {
             for (int i = 0; i < Scenes.Length; i++)

@@ -30,9 +30,9 @@ namespace CityLife.Content
         public readonly string? Text;
         /// <summary>归属处境卡号（1 起；缺失/非正数=0 无归属，场合/分区由调用方落 Any/留空）。</summary>
         public readonly int Card;
-        /// <summary>对卡甲台词（≤12 字；非对卡行为 null）。</summary>
+        /// <summary>对卡甲台词（≤14 字——prompt 目标 12，擦边收编；非对卡行为 null）。</summary>
         public readonly string? A;
-        /// <summary>对卡乙台词（≤12 字；非对卡行为 null）。</summary>
+        /// <summary>对卡乙台词（≤14 字——prompt 目标 12，擦边收编；非对卡行为 null）。</summary>
         public readonly string? B;
 
         public ParsedChatterLine(string? text, int card, string? a, string? b)
@@ -87,6 +87,9 @@ namespace CityLife.Content
         // 猫密度闸（2026-09-11 玩家实机"宠物占比太高"）：模型先验爱写猫——prompt 配额（闲聊炉头【配额】）是劝，
         // 这里是拦。含猫词的片段在池内猫占比 ≥k_CatShareCap 时确定性半数拒收（不删猫，限流）
         private const double k_CatShareCap = 0.05;
+        // §12 #63 对卡单句硬闸：prompt 目标各 ≤12 字，闸放宽到 14 收编擦边球（快轨 V3 句长纪律偏弱
+        // 实测：13-15 字擦边占废品大头，2026-09-15）——拼装仍受 40 字硬顶约束，排版不崩
+        private const int k_DialogueLineMax = 14;
         private static readonly string[] k_CatWords = { "猫", "狗", "宠物", "喵", "汪" };
 
         /// <summary>当前炉次（闲聊炉炉计数同步；BornCycle 的基准）。</summary>
@@ -138,7 +141,7 @@ namespace CityLife.Content
         /// <summary>
         /// 闲聊炉 JSONL 批量解析（JsonMini 同款 salvage 纪律——RimTalk 教训：LLM 输出非法 JSON 是最高频故障）：
         /// 独白行 {"text":..,"card":N}——text 缺失/空白/超 40 字（气泡排版硬顶：13 格×4 行≈52 格，留余量取 40）
-        /// 计 skipped 丢弃；对卡行（§12 #63）{"card":N,"a":..,"b":..}——a/b 双全且各 ≤12 字才成立，
+        /// 计 skipped 丢弃；对卡行（§12 #63）{"card":N,"a":..,"b":..}——a/b 双全且各 ≤k_DialogueLineMax 字才成立，
         /// 缺半句或超长降级：有合规 text 落独白、无 text 计 skipped 丢弃。
         /// markdown 围栏行/残行天然没有合法字段，自动落进 skipped；card 缺失/非数/负数不丢整行、落 0
         /// （=无归属，场合/分区由调用方落 Any/留空——§12 #60 刀①：场合由处境卡执行层盖章，LLM 只报归属）。
@@ -157,11 +160,11 @@ namespace CityLife.Content
                 var card = JsonMini.GetInt(line, "card") ?? 0;
                 if (card < 0)
                     card = 0;
-                // §12 #63 对卡行优先：a/b 双全且各 ≤12 字 → 对话（text 顺带保留，拼装失败可回退独白）
+                // §12 #63 对卡行优先：a/b 双全且各 ≤k_DialogueLineMax 字 → 对话（text 顺带保留，拼装失败可回退独白）
                 var a = JsonMini.GetStr(line, "a")?.Trim();
                 var b = JsonMini.GetStr(line, "b")?.Trim();
                 if (!string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b)
-                    && a!.Length <= 12 && b!.Length <= 12)
+                    && a!.Length <= k_DialogueLineMax && b!.Length <= k_DialogueLineMax)
                 {
                     var fallback = JsonMini.GetStr(line, "text")?.Trim();
                     list.Add(new ParsedChatterLine(

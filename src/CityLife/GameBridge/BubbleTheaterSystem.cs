@@ -230,7 +230,12 @@ namespace CityLife.GameBridge
                 var stride = Math.Max(1, entries.Count / count);
                 var start = (int)(m_ForgeCount % (uint)entries.Count);
                 for (var k = 0; k < count; k++)
-                    cards.Add(entries[(start + k * stride) % entries.Count].Context);
+                {
+                    var entry = entries[(start + k * stride) % entries.Count];
+                    if (entry.Age == CitizenAge.Child)
+                        continue; // §12 #66：灵感卡只借氛围，与信息流主炉同口径滤儿童（街头场绑真人不走这里）
+                    cards.Add(entry.Context);
+                }
             }
             var prompt = Content.PromptBuilder.BuildTheaterStockPrompt(m_Head, snapshot, m_Stock, cards, k_ForgeBatch);
             Mod.Gateway!.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Normal, k_ForgeTtl, "theater:" + m_ForgeCount)); // Normal 不 Low：thinking 时代低优先级在队尾等死（§12 #51 实机）

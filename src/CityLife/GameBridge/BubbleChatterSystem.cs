@@ -427,7 +427,8 @@ namespace CityLife.GameBridge
         /// <summary>
         /// 配对（§12 #63 对话场景卡）：在 A 现位 k_PairRadius 内找另一位步行市民 B，组双人卡。
         /// movers 滤 Human+Resident 回指市民（BubbleTheaterSystem.BindOutdoorRoster 先例）；
-        /// B 排除口径=CitizenPoolSystem 采样同款（儿童/MovingAway/无名，DescribeCitizen 一支全含）
+        /// B 排除口径=CitizenPoolSystem 采样同款（MovingAway/无名，DescribeCitizen 一支全含；
+        /// 儿童自 §12 #66 起放行——气泡=说话不是发帖，孩子可以被配对搭讪）
         /// + 对话特有排除三条：A 自己、乘车市民（Game.Creatures.CurrentVehicle——乘车不算步行，
         /// BubbleWorldSpikeSystem 人查询同款）、本炉已选卡市民（一人只出一声）。
         /// 多候选取 salt（=炉计数+卡序）取模确定性选一（同炉次+同街况必同选）。
@@ -455,7 +456,7 @@ namespace CityLife.GameBridge
                     continue;
                 if (EntityManager.HasComponent<Game.Creatures.CurrentVehicle>(b))
                     continue; // 乘车市民不算步行
-                // 儿童/MovingAway/无 Citizen 一支全含（池采样同一口径，一处定义别复制粘贴）；
+                // MovingAway/无 Citizen 一支全含（池采样同一口径，一处定义别复制粘贴；儿童 §12 #66 起放行）；
                 // 场合不回章——B 的卡文只当"对："段处境描述（moving 树行人 agent 即走路状态）
                 var cardB = CitizenPoolSystem.DescribeCitizen(EntityManager, b, out _, m_NameSystem);
                 if (cardB == null)

@@ -494,6 +494,21 @@ namespace CityLife.GameBridge
             }
         }
 
+        /// <summary>信息流侧取池条目（§12 #66："儿童不发帖"口径收窄至此——主炉处境分配/剧组补人/作者署名
+        /// 统一滤 CitizenAge.Child，气泡侧（闲聊炉/配对/剧场）放行）；从 salt 顺探下一位非儿童，
+        /// 池里全是孩子时落空（调用方按池空回退处理）。</summary>
+        private CitizenContext? FeedEntry(uint salt)
+        {
+            var pool = m_CitizenPool.Entries;
+            for (var k = 0; k < pool.Count; k++)
+            {
+                var e = pool[(int)((salt + (uint)k) % (uint)pool.Count)];
+                if (e.Age != Game.Citizens.CitizenAge.Child)
+                    return e;
+            }
+            return null;
+        }
+
         /// <summary>剧组维护：完结退休 + 从市民池补新人（真名唯一、非 Always 卡）。</summary>
         private void EnsureCast()
         {
@@ -502,7 +517,10 @@ namespace CityLife.GameBridge
             var guard = 0;
             while (m_Cast.Count < k_MaxCast && pool.Count > 0 && guard++ < 64)
             {
-                var entry = pool[m_CastSeed++ % pool.Count];
+                var picked = FeedEntry((uint)m_CastSeed++);
+                if (picked == null)
+                    break; // 池里全是孩子（§12 #66：剧组发帖卡不发给孩子）——下轮再补
+                var entry = picked.Value;
                 if (m_Cast.Exists(c => c.Name == entry.Name))
                     continue;
                 Content.Persona? card = null;
@@ -575,9 +593,15 @@ namespace CityLife.GameBridge
                     m_CurrentCitizenNames.Add(null);
                     continue;
                 }
-                var entry = pool[(int)((m_BatchCount + (uint)i) % (uint)pool.Count)];
-                contexts.Add(entry.Context);
-                m_CurrentCitizenNames.Add(entry.Name);
+                var entry = FeedEntry(m_BatchCount + (uint)i); // §12 #66：主炉处境滤儿童（"儿童不发帖"口径收窄处）
+                if (entry == null)
+                {
+                    contexts.Add(null); // 池里全是孩子——与池空同口径回退（卡本人路径）
+                    m_CurrentCitizenNames.Add(null);
+                    continue;
+                }
+                contexts.Add(entry.Value.Context);
+                m_CurrentCitizenNames.Add(entry.Value.Name);
             }
             return contexts;
         }
@@ -683,9 +707,9 @@ namespace CityLife.GameBridge
                 return p.Names[0];
 
             // 常规作者：真实市民名（原版名）——满屏"热心大妈"的根治
-            var pool = m_CitizenPool.Entries;
-            if (pool.Count > 0)
-                return pool[(int)(m_Seed % pool.Count)].Name;
+            var author = FeedEntry(m_Seed); // §12 #66：署名同滤儿童（孩子不实名发帖）
+            if (author != null)
+                return author.Value.Name;
 
             // 回退：卡候选名 ∪ 全网网名（usernames.jsonl 目前只在这条回退路径用）
             if (p == null)

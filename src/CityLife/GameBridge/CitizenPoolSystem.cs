@@ -10,20 +10,24 @@ namespace CityLife.GameBridge
     /// 内容导演按席位分配给模型当写作处境。Entity 是 S6 环境圈摘要的定位锚（采样时实体就在手上顺带存下；
     /// 市民会死/搬走，消费前必须 EntityManager.Exists 兜底——版本代际自动防复用，见 spike §7）。
     /// Occasion=气泡场合（§12 #60 刀① Plan B：乘车/在建筑/走路是采样时已确定事实，执行层随卡盖章，
-    /// LLM 只报 card 归属不再判场合——错位率归零，Any 只剩卡号缺失/越界的 salvage 兜底）。</summary>
+    /// LLM 只报 card 归属不再判场合——错位率归零，Any 只剩卡号缺失/越界的 salvage 兜底）。
+    /// Age=年龄段（§12 #66 儿童进气泡：池子放开 Child——气泡=说话不是发帖；"儿童不发帖"口径收窄为
+    /// 信息流主炉等消费处按本字段自滤，闲聊炉/对话配对放行）。</summary>
     public readonly struct CitizenContext
     {
         public readonly string Name;
         public readonly string Context;
         public readonly Entity Entity;
         public readonly Content.BubbleOccasion Occasion;
+        public readonly CitizenAge Age;
 
-        public CitizenContext(string name, string context, Entity entity, Content.BubbleOccasion occasion)
+        public CitizenContext(string name, string context, Entity entity, Content.BubbleOccasion occasion, CitizenAge age)
         {
             Name = name;
             Context = context;
             Entity = entity;
             Occasion = occasion;
+            Age = age;
         }
     }
 
@@ -50,7 +54,8 @@ namespace CityLife.GameBridge
     /// 建筑类型=Game.Buildings 的 Residential/Commercial/Industrial/OfficeProperty 四组件（互斥挂其一）
     ///   + Game.Prefabs.SignatureBuildingData（景点/地标，实体侧空标记）+ School/Hospital 服务组件
     ///   + AttractivenessProvider（公园，CityChangeSystem 同款实锤）；全不中=省略，不编"某建筑"（spike §5）。
-    /// 纪律：跨步抽样+整体轮换（同锚点系统）；跳过儿童（不发帖）与 MovingAway；只读不写。
+    /// 纪律：跨步抽样+整体轮换（同锚点系统）；跳过 MovingAway；儿童自 §12 #66 起入池
+    /// （气泡=说话不是发帖，"儿童不发帖"口径收窄到信息流主炉等消费处按 Age 自滤）；只读不写。
     /// </summary>
     public partial class CitizenPoolSystem : GameSystemBase
     {
@@ -101,10 +106,9 @@ namespace CityLife.GameBridge
                 var e = arr[i];
                 var citizen = EntityManager.GetComponentData<Citizen>(e);
 
-                // 年龄=状态位低 2 位（AgeBit1=1/AgeBit2=2 → 0-3 直映 CitizenAge）；儿童不发帖跳过
+                // 年龄=状态位低 2 位（AgeBit1=1/AgeBit2=2 → 0-3 直映 CitizenAge）；
+                // 儿童不跳过（§12 #66：气泡=说话不是发帖，池子放开 Child；信息流主炉在消费处按 Age 滤）
                 var age = (CitizenAge)(int)(citizen.m_State & (CitizenFlags.AgeBit1 | CitizenFlags.AgeBit2));
-                if (age == CitizenAge.Child)
-                    continue;
                 var purpose = EntityManager.HasComponent<TravelPurpose>(e)
                     ? EntityManager.GetComponentData<TravelPurpose>(e).m_Purpose
                     : Purpose.None;
@@ -124,7 +128,7 @@ namespace CityLife.GameBridge
                     continue;
                 if (textCount.TryGetValue(card, out var tc) && tc >= k_SameTextCap)
                     continue;
-                m_Entries.Add(new CitizenContext(name, card, e, occasion));
+                m_Entries.Add(new CitizenContext(name, card, e, occasion, age));
                 occCount[(int)occasion]++;
                 idCount[identity] = ic + 1;
                 textCount[card] = tc + 1;
@@ -143,7 +147,8 @@ namespace CityLife.GameBridge
         /// <summary>
         /// 对任意市民实体出处境卡（与池采样同一条产线同一口径，一处定义别复制粘贴）。
         /// 按实体出卡的公共口：S7 剧场按人开炉曾用，§12 #52 改库存剧本后当前无调用方，
-        /// 保留给 backlog 的定班底剧场等后续形态。无 Citizen 组件/儿童/MovingAway → null（调用方跳过）。
+        /// 保留给 backlog 的定班底剧场等后续形态。无 Citizen 组件/MovingAway → null（调用方跳过）；
+        /// 儿童自 §12 #66 起放行（气泡=说话不是发帖，闲聊炉对话配对可配到孩子）。
         /// 名字不在此处取——NameSystem 归调用方（EnvironmentDigestSystem 同款惰性解析先例）；
         /// nameSystem 只用于场所真名层（§12 #62），传 null = 场所全落类别词。
         /// 场合随卡盖章（§12 #60 刀①），失败路径落 Any。
@@ -154,10 +159,8 @@ namespace CityLife.GameBridge
             if (e == Entity.Null || !em.Exists(e) || !em.HasComponent<Citizen>(e))
                 return null;
             var citizen = em.GetComponentData<Citizen>(e);
-            // 年龄=状态位低 2 位（AgeBit1=1/AgeBit2=2 → 0-3 直映 CitizenAge）；儿童不上镜跳过
+            // 年龄=状态位低 2 位（AgeBit1=1/AgeBit2=2 → 0-3 直映 CitizenAge）；儿童放行（§12 #66）
             var age = (CitizenAge)(int)(citizen.m_State & (CitizenFlags.AgeBit1 | CitizenFlags.AgeBit2));
-            if (age == CitizenAge.Child)
-                return null;
             var purpose = em.HasComponent<TravelPurpose>(e)
                 ? em.GetComponentData<TravelPurpose>(e).m_Purpose
                 : Purpose.None;
@@ -179,6 +182,7 @@ namespace CityLife.GameBridge
             string identity;
             if (tourist) identity = "游客";
             else if (homeless) identity = "无家可归者";
+            else if (age == CitizenAge.Child) identity = "小学生"; // §12 #66：儿童身份档（处境措辞交给 LLM，卡上只落身份+处境事实）
             else if (age == CitizenAge.Elderly) identity = male ? "退休大爷" : "退休大妈";
             else if (age == CitizenAge.Teen || em.HasComponent<Student>(e)) identity = "学生";
             else if (em.HasComponent<Worker>(e))

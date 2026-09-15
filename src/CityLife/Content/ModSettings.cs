@@ -56,6 +56,10 @@ namespace CityLife.Content
         /// <summary>气泡小剧场（默认开）——透传设置页。§12 #49：同闲聊炉口径，独立开关。</summary>
         public static bool BubbleTheaterEnabled => Mod.Options?.BubbleTheaterEnabled ?? true;
 
+        /// <summary>气泡与剧场节奏随游戏倍速（默认关=现实时间墙钟）——透传设置页。
+        /// §12 #68：开=游戏时钟（暂停冻结、倍速同速放大）；世界泡驻留/剧场换句/评估拍/冷却统一走它。</summary>
+        public static bool BubblePaceFollowsGameSpeed => Mod.Options?.BubblePaceFollowsGameSpeed ?? false;
+
         /// <summary>突发事件报道总开关（默认开）。</summary>
         public static bool BreakingNews { get; private set; } = true;
         /// <summary>热议档闸门：两次"全城集中讨论"的最小间隔（游戏小时，默认 12，钳 1-72）。</summary>

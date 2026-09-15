@@ -73,6 +73,12 @@ namespace CityLife.GameBridge
     /// 设置页接入（2026-09-09，§12 #45）：总开关 BubbleEnabled（与 Ctrl+9 AND）、三类距离倍率、
     ///   同屏上限 BubbleVisibleMax（§12 #53 滑杆 2-30 默认 6；§12 #55 起采样池跟随它×4，旧密度三档废止）、
     ///   底板开关 BubblePlate（OnUpdate 每帧同步，改动即时生效）——全部经 Mod.Options 直读，null（主菜单期）回落默认。
+    /// 节奏时钟选项（v5.6，§12 #68，治"3x 下街上气泡过快"）：驻留 NextAt/换文案/滞回保位统一走 PaceNow——
+    ///   关（默认）=unscaledTime 墙钟（#49 原义不变），开=Time.time 游戏时钟（timeScale 缩放：暂停冻结、
+    ///   倍速同速放大）；选项运行中翻转时在场泡 NextAt 全部重定基（错相小延迟，绝不同时切换纪律不破）。
+    ///   高速缓解（打分侧）：倍速 >1x 时中选打分的排序键乘移速惩罚（偏好慢速/静止锚点）——3x 下"气泡
+    ///   变化快"的真因大头是移动锚点 3x 速度离画→提前轮换（物理真相，只缓解不根治）；实测移速仍按
+    ///   墙钟 m/s（阅读舒适度语义，与时钟源无关），速度档口径与 TryPickSnippet 限长同源。
     /// 自动隐藏双闸（v4.6，2026-09-09，§12 #46）：建造工具激活（ToolSystem.activeTool != DefaultToolSystem
     ///   实例；推土机 BulldozeToolSystem 也是独立工具，含在判定内一并隐藏）与拍照模式
     ///   （PhotoModeRenderSystem.Enabled——该系 OnCreate 即置 false，唯一置真路径是
@@ -277,6 +283,21 @@ namespace CityLife.GameBridge
         private readonly HashSet<Entity> m_PrevKept = new();
         private readonly HashSet<Entity> m_KeptSet = new();
 
+        /// <summary>节奏时钟（§12 #68 设置页"节奏随游戏倍速"）：关（默认）=unscaledTime 墙钟秒
+        /// （§12 #49 原义——倍速只加速模拟，不加速人阅读）；开=Time.time 游戏时钟（timeScale 缩放：
+        /// 暂停冻结、倍速同速放大）。驻留 NextAt/换文案/滞回保位全走这一个源——两端必须同时钟比较。</summary>
+        private static double PaceNow => Content.ModSettings.BubblePaceFollowsGameSpeed
+            ? UnityEngine.Time.time
+            : UnityEngine.Time.unscaledTime;
+
+        // 节奏时钟源跟踪（切换检测用）：选项运行中翻转时，旧时钟下的 NextAt 在新时钟下无意义，
+        // 全部重定基到"现在+错相小延迟"（见 OnUpdate；错相沿用 Index 散列，绝不同时切换纪律不破）
+        private bool m_PaceOnGameClock;
+
+        // 游戏倍速读数（§12 #68 高速缓解）：timeScale——§12 #49 实锤倍速走 timeScale 缩放（暂停=0）。
+        // OnUpdate 每帧刷新存字段，OnRender 只读（与自动隐藏双闸同款纪律，渲染热路径不直接读引擎状态）
+        private float m_GameSpeed = 1f;
+
         /// <summary>一帧内一个待画气泡的全部绘制参数（文字矩阵+底板参数+屏幕包围盒+滞回判定用的锚点/驻留期满时刻）。</summary>
         private struct DrawCandidate
         {
@@ -288,7 +309,8 @@ namespace CityLife.GameBridge
             public int Bucket;
             public Rect ScreenRect;
             public Entity Anchor;   // 滞回：上帧在画判定
-            public float NextAt;    // 驻留期满时刻（unscaledTime，与 TrackedBubble 同时钟）
+            public double NextAt;    // 驻留期满时刻（节奏时钟秒，时钟源随 §12 #68 选项，与 TrackedBubble 同时钟）
+            public float AnchorSpeed; // 实测锚点移速 m/s（墙钟口径）——高速档打分偏好慢速锚用（§12 #68）
             public byte Kind;       // 0 人 1 车 2 楼——可见端分类比例上限用（§12 #51）
             public float Score;     // 中选排序键：视深 × 屏缘惩罚（屏心优先，2026-09-11 玩家定案）
         }
@@ -300,7 +322,8 @@ namespace CityLife.GameBridge
             public byte Kind;       // 0 人 1 车 2 楼
             public string Text;     // 当前文案（Add 前必走 SetBubbleText，不会读到 null）
             public int TextIdx;
-            public float NextAt;    // 下次换文案时刻（unscaledTime 墙钟——倍速不缩短驻留，§12 #49）
+            public double NextAt;   // 下次换文案时刻（节奏时钟秒：关=unscaledTime 墙钟——倍速不缩短驻留，§12 #49；
+                                    // 开=Time.time 游戏时钟——暂停冻结、倍速同速放大，§12 #68 设置页选项）
             public float3 LastPos;  // 上次换文案时锚点位（测速用）
             public float LastSetAt; // 上次换文案时刻（unscaledTime；0=未测过）
             public float Speed;     // 实测移速 m/s（换文案间隔的位移/时长点估计；初值 车=3 假设在动，人/楼=0）
@@ -404,6 +427,25 @@ namespace CityLife.GameBridge
 
             // 自动隐藏双闸每帧重算（§12 #46；信号实锤见 UpdateAutoHideGates 注释）
             UpdateAutoHideGates();
+
+            // 游戏倍速每帧存字段（§12 #68 高速缓解打分用；OnRender 只读不直接查引擎）
+            m_GameSpeed = UnityEngine.Time.timeScale;
+
+            // 节奏时钟切换重定基（§12 #68 选项运行中翻转）：旧时钟的 NextAt 在新时钟下无意义——
+            // 全部压到"现在+Index 错相 0-4.75s"，两个方向都平滑过渡（不错过也不整屏同切）
+            var paceOnGameClock = Content.ModSettings.BubblePaceFollowsGameSpeed;
+            if (paceOnGameClock != m_PaceOnGameClock)
+            {
+                m_PaceOnGameClock = paceOnGameClock;
+                var rebaseNow = PaceNow;
+                for (int i = 0; i < m_Bubbles.Count; i++)
+                {
+                    var rb = m_Bubbles[i];
+                    rb.NextAt = rebaseNow + (rb.Anchor.Index % 20) * 0.25;
+                    m_Bubbles[i] = rb;
+                }
+                Mod.Log.Info($"[BubbleW] 节奏时钟切换 → {(paceOnGameClock ? "游戏时钟（暂停冻结、倍速同速放大）" : "墙钟（现实时间）")}，在场 {m_Bubbles.Count} 泡已重定基");
+            }
 
             // FPS 计：每 4 秒一行（开着才有意义）
             m_FpsAccum += UnityEngine.Time.deltaTime;
@@ -598,7 +640,7 @@ namespace CityLife.GameBridge
             }
             arr.Dispose();
             scored.Sort((a, b) => a.d.CompareTo(b.d));
-            var now = UnityEngine.Time.unscaledTime;
+            var now = PaceNow; // 节奏时钟（§12 #68）：关=墙钟/开=游戏时钟
             for (int i = 0; i < scored.Count && i < cap && m_Bubbles.Count < k_MaxBubbles; i++)
             {
                 var b = new TrackedBubble
@@ -719,7 +761,7 @@ namespace CityLife.GameBridge
                 return false;
             var b = new TrackedBubble { Anchor = e, Kind = kind, TextIdx = 0, Speed = kind == 1 ? 3f : 0f };
             SetBubbleText(ref b, 0);
-            b.NextAt = UnityEngine.Time.unscaledTime + HoldFor(e.Index, 0, b.Text.Length); // 时长依赖文案，须在 SetBubbleText 之后
+            b.NextAt = PaceNow + HoldFor(e.Index, 0, b.Text.Length); // 时长依赖文案，须在 SetBubbleText 之后（时钟源 §12 #68）
             m_Bubbles.Add(b);
             return true;
         }
@@ -736,7 +778,7 @@ namespace CityLife.GameBridge
                 var b = m_Bubbles[i];
                 b.TextIdx++;
                 SetBubbleText(ref b, b.TextIdx);
-                b.NextAt = UnityEngine.Time.unscaledTime + HoldFor(b.Anchor.Index, b.TextIdx, b.Text.Length);
+                b.NextAt = PaceNow + HoldFor(b.Anchor.Index, b.TextIdx, b.Text.Length);
                 m_Bubbles[i] = b;
                 return;
             }
@@ -745,7 +787,7 @@ namespace CityLife.GameBridge
         // —— 生命周期：各气泡独立时钟（按字数缩放 + 确定性错相，绝不同时切换）——
         private void TickLifecycle()
         {
-            var now = UnityEngine.Time.unscaledTime;
+            var now = PaceNow; // 节奏时钟（§12 #68 选项统一源；剧场换句节拍跟着这里走）
             for (int i = 0; i < m_Bubbles.Count; i++)
             {
                 var b = m_Bubbles[i];
@@ -981,7 +1023,8 @@ namespace CityLife.GameBridge
 
         /// <summary>气泡驻留时长：阅读时间 4s 起、每字 +0.28s、封顶 30s（话痨段落让人读完），
         /// 再叠 0-4s 确定性抖动（实体×集数散列——全屏绝不同时切换）。
-        /// 墙钟语义（§12 #49）：配 unscaledTime 消费——倍速只加速模拟，不加速人阅读。
+        /// 默认墙钟语义（§12 #49）：配 unscaledTime 消费——倍速只加速模拟，不加速人阅读；
+        /// §12 #68 起时钟源由设置页选项统一（PaceNow：开=Time.time 游戏时钟，暂停冻结、倍速放大）。
         /// 时长倍率读设置页 BubbleHoldScale（默认 1.5×，2026-09-11 玩家实机"更换太快"；封顶同步乘）。</summary>
         private static float HoldFor(int entityIndex, int textIdx, int textLen)
         {
@@ -1443,6 +1486,13 @@ namespace CityLife.GameBridge
                     var ex = (sp.x - Screen.width * 0.5f) / (Screen.width * 0.5f);
                     var ey = (sp.y - Screen.height * 0.5f) / (Screen.height * 0.5f);
                     var edge = math.min(1f, (ex * ex + ey * ey) * 0.5f);
+                    // §12 #68 高速缓解：倍速 >1x 时移动锚点以倍速离画→提前轮换（"3x 下街上气泡过快"的
+                    // 真因大头，物理真相只做缓解不根治）——打分乘移速惩罚偏好慢速/静止锚点，
+                    // 速度档口径与 TryPickSnippet 限长同源（0.6/3 m/s 档），惩罚随倍速线性放大；
+                    // timeScale 即游戏倍速（暂停=0 不罚，§12 #49 实锤倍速走 timeScale 缩放）
+                    var speedPenalty = 1f;
+                    if (m_GameSpeed > 1.05f)
+                        speedPenalty += math.min(b.Speed, 3f) * 0.5f * (m_GameSpeed - 1f);
                     m_Candidates.Add(new DrawCandidate
                     {
                         Entry = entry,
@@ -1454,8 +1504,9 @@ namespace CityLife.GameBridge
                         ScreenRect = new Rect(sp.x - w * 0.5f, sp.y - h * 0.5f, w, h),
                         Anchor = b.Anchor,
                         NextAt = b.NextAt,
+                        AnchorSpeed = b.Speed,
                         Kind = b.Kind,
-                        Score = dist * (1f + edge * 1.5f),
+                        Score = dist * (1f + edge * 1.5f) * speedPenalty,
                     });
                 }
 
@@ -1475,7 +1526,7 @@ namespace CityLife.GameBridge
                 var keptPlain = 0;   // 普通泡计数（上限只闸它）
                 var keptCar = 0;
                 var keptBuilding = 0;
-                var nowU = UnityEngine.Time.unscaledTime;
+                var nowU = PaceNow; // 滞回保位比较必须与 NextAt 同时钟（§12 #68）
                 var theater = Theater;
                 foreach (var c in m_Candidates) // ①② 保位档（候选已近→远排好，保位也近者优先）
                 {

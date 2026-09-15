@@ -20,7 +20,8 @@ namespace CityLife.GameBridge
     /// →开播中止连发、每中止白烧一炉（2026-09-10 实机实锤）。改抄话题炉/闲聊炉同款"炉→池"缓冲：
     /// 分钟级延迟被池子吸收，放送零 LLM 等待、绑定即复核。
     ///
-    /// 状态机（一拍一拍走，全部锚游戏时间——暂停零成本、倍速同速放大，#48 节拍定案）：
+    /// 状态机（一拍一拍走；节拍时钟自 §12 #68 起随设置页选项——默认 unscaledTime 墙钟（现实时间），
+    /// 开=游戏时钟（暂停零成本、倍速同速放大，即 #48 原 tick 节拍语义的等值折算）：
     /// ① 剧本炉（水位触发）：每 3-4-5 游戏分钟评估拍（节拍轮换照抄闲聊炉）查池水位——总库存 &lt;6 且
     ///    无在飞+网关可用+非 MUTE+设置页开关开 → 发一炉产 4 部（Normal 优先级：thinking 时代低优先级
     ///    队尾等死，§12 #51 实锤；TTL 300s + 墙钟 TTL+60s 兜底解锁，闲聊炉/S3 同款）。prompt=固定头
@@ -96,15 +97,16 @@ namespace CityLife.GameBridge
         private readonly Content.TheaterScriptStock m_Stock = new(); // 剧本池（§12 #52：炉→池→放送的池）
         private string m_Head = "";
         private uint m_EvalCount;              // 评估拍计数：3-4-5 分钟轮换的锚
-        private uint m_NextEvalAt;             // 下一评估拍游戏时刻（tick）
+        private double m_NextEvalAt;           // 下一评估拍节奏时刻（秒；时钟源随 §12 #68 选项，见 PaceNow）
         private bool m_ClockInitialized;
+        private bool m_PaceOnGameClock;        // 节奏时钟源跟踪（选项运行中翻转时重定基，见 OnUpdate）
         private uint m_ForgeCount;             // 剧本炉计数：灵感卡抽样的锚 / requestId 后缀
         private bool m_ForgePending;           // 在飞标志（同时在飞最多一炉）
         private DateTime m_ForgeSince;         // 发炉墙钟（UTC）：网关过期丢弃不回包，TTL+60s 兜底解锁
 
         private readonly List<Theater> m_Active = new();  // 活剧场（≤k_MaxActive）
         private readonly Dictionary<Entity, Theater> m_ByAnchor = new(); // 锚点→剧场（插队查询主键）
-        private readonly Dictionary<Entity, uint> m_CooldownUntil = new(); // 地点→解禁时刻（tick）
+        private readonly Dictionary<Entity, double> m_CooldownUntil = new(); // 地点→解禁时刻（节奏时钟秒，§12 #68；原 tick 语义等值折算）
         private readonly List<(Entity Anchor, byte Kind, float3 Pos)> m_AnchorSnap = new(); // 可见锚点快照（复用）
 
         /// <summary>一名参与者：真名单市民 + 气泡锚点（室外=行人 agent，室内=建筑本体）+ 显示名（日志/台词前缀用）。</summary>
@@ -174,27 +176,47 @@ namespace CityLife.GameBridge
         public override int GetUpdateInterval(SystemUpdatePhase phase) => 128; // 2 的幂；只是节拍检查粒度
 
         private uint Now => (uint)m_SimulationSystem.frameIndex;
-        private static uint TicksPerHour => (uint)Math.Max(1, TimeSystem.kTicksPerDay / 24);
-        private static uint TicksPerMinute => Math.Max(1u, TicksPerHour / 60u);
+
+        /// <summary>节奏时钟（§12 #68，与世界泡 PaceNow 同一设置页选项）：关（默认）=unscaledTime 墙钟秒
+        /// （现实时间——3x 下剧场换句/轮播不加速，治"3x 下街上气泡过快"）；开=游戏时钟
+        /// （frameIndex 折算游戏秒——暂停冻结、倍速同速放大，即本系原 tick 节拍语义，#48 定案等值）。
+        /// 换句节拍本身挂在世界泡 TickLifecycle 的 NextAt 上（OnAnchorRotated），与本系共用同一选项源。</summary>
+        private double PaceNow => Content.ModSettings.BubblePaceFollowsGameSpeed
+            ? Now * (86400.0 / TimeSystem.kTicksPerDay)
+            : UnityEngine.Time.unscaledTime;
 
         protected override void OnUpdate()
         {
+            // 节奏时钟切换重定基（§12 #68 选项运行中翻转）：旧时钟时刻在新时钟下无意义——
+            // 评估拍顺延 1 分钟、冷却表清零（保守放行，比"卡死一小时不评"或"瞬演连发"安全）
+            var paceOnGameClock = Content.ModSettings.BubblePaceFollowsGameSpeed;
+            if (paceOnGameClock != m_PaceOnGameClock)
+            {
+                m_PaceOnGameClock = paceOnGameClock;
+                if (m_ClockInitialized)
+                {
+                    m_NextEvalAt = PaceNow + 60.0;
+                    m_CooldownUntil.Clear();
+                    Mod.Log.Info($"[剧场] 节奏时钟切换 → {(paceOnGameClock ? "游戏时钟（暂停冻结、倍速同速放大）" : "墙钟（现实时间）")}，地点冷却清零");
+                }
+            }
             if (!m_ClockInitialized)
             {
-                m_NextEvalAt = Now + TicksPerMinute; // 进城 1 游戏分钟后首评（让气泡层先采样一轮）
+                m_NextEvalAt = PaceNow + 60.0; // 进城 1 节奏分钟后首评（让气泡层先采样一轮）
                 m_ClockInitialized = true;
             }
 
-            // 在飞兜底解锁：网关过期丢弃不回包（闲聊炉/S3 同款墙钟兜底）
+            // 在飞兜底解锁：网关过期丢弃不回包（闲聊炉/S3 同款墙钟兜底——真实网络超时，与节奏时钟无关）
             if (m_ForgePending && (DateTime.UtcNow - m_ForgeSince).TotalSeconds > k_ForgeTtl + 60)
                 m_ForgePending = false;
 
             SweepTheaters(); // 终了判定每拍都查（播完/失效/离屏不等评估节拍）
 
-            if ((int)(Now - m_NextEvalAt) < 0)
-                return; // 还没到点（uint 差值比较，tick 回绕安全）
+            var now = PaceNow;
+            if (now < m_NextEvalAt)
+                return; // 还没到点
             // 无论本拍成败都先排下一拍——扫描频率被节拍硬限，候选落空不空转
-            m_NextEvalAt = Now + (3u + m_EvalCount % 3u) * TicksPerMinute;
+            m_NextEvalAt = now + (3u + m_EvalCount % 3u) * 60.0; // 3-4-5 节奏分钟轮换（原 tick 语义等值折算）
             m_EvalCount++;
 
             // 开关闸（§12 #49 + #52）：独立于 feedMode 的设置页开关，默认开；一闸同时闸住剧本炉与放送——关=零 token 也零播出
@@ -784,15 +806,16 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>地点冷却（锚点失效即锁 #28 + §12 #52：只在终了后上 ≈3 炉节拍冷却防连开；
-        /// 开播中止不上冷却——中止是锚点侧问题不是地点的锅，剧本已退回池）。</summary>
-        private void SetCooldown(Entity loc) => m_CooldownUntil[loc] = Now + k_CooldownMinutes * TicksPerMinute;
+        /// 开播中止不上冷却——中止是锚点侧问题不是地点的锅，剧本已退回池）。
+        /// 时刻走节奏时钟（§12 #68：分钟数在墙钟/游戏时钟下等值折算）。</summary>
+        private void SetCooldown(Entity loc) => m_CooldownUntil[loc] = PaceNow + k_CooldownMinutes * 60.0;
 
         /// <summary>地点是否在冷却中（过期条目顺带清，表恒小）。</summary>
         private bool OnCooldown(Entity loc)
         {
             if (!m_CooldownUntil.TryGetValue(loc, out var until))
                 return false;
-            if ((int)(Now - until) < 0)
+            if (PaceNow < until)
                 return true;
             m_CooldownUntil.Remove(loc);
             return false;

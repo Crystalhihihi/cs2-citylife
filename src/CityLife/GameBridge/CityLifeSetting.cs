@@ -93,6 +93,12 @@ namespace CityLife.GameBridge
         [SettingsUISlider(min = 50f, max = 300f, step = 25f, unit = "percentage", scalarMultiplier = 100f)]
         public float BubbleHoldScale { get; set; } = 1.5f;
 
+        /// <summary>气泡与剧场节奏随游戏倍速（默认关=现实时间，§12 #68）：关=驻留/换句/轮播按现实秒走，
+        /// 3x 下街上气泡不加速读得完；开=跟游戏时钟走（暂停冻结、倍速同速放大，与模拟节拍一致）。
+        /// 注意：3x 下"气泡变化快"的大头是移动锚点 3x 速度离画导致提前轮换（物理真相），本开关只管文字节奏。</summary>
+        [SettingsUISection(kTab, kGroupBubble)]
+        public bool BubblePaceFollowsGameSpeed { get; set; } = false;
+
         /// <summary>气泡底板开关（默认开）：文字下垫深色圆角底板。</summary>
         [SettingsUISection(kTab, kGroupBubble)]
         public bool BubblePlate { get; set; } = true;
@@ -206,6 +212,7 @@ namespace CityLife.GameBridge
             BubbleDistBuilding = 1f;
             BubbleVisibleMax = 4; // 2026-09-11 玩家实机"有些阅读不过来"：稀疏默认 6→4
             BubbleHoldScale = 1.5f;
+            BubblePaceFollowsGameSpeed = false; // §12 #68：默认现实时间（墙钟），3x 下气泡不加速
             BubblePlate = true;
             BubbleAutoHideBuildTool = true;
             BubbleAutoHidePhotoMode = true;

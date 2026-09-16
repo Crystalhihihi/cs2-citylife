@@ -139,9 +139,24 @@ namespace CityLife.GameBridge
 
             // 实机肉眼验收用：每轮采样结束打一条样例卡+场合分布（配额成效看这里）
             if (m_Entries.Count > 0)
+            {
                 Mod.Log.Info($"[Pool] 本轮 {m_Entries.Count} 条（走{occCount[1]}/车{occCount[2]}/室{occCount[3]}/通{occCount[0]}，扫描{scanned}），样例：\"{m_Entries[0].Context}\"（{m_Entries[0].Name}）");
+                // 身份分布一行（§12 #66 儿童验收观测：小学生进没进池看这里；idCount 采样时已累计，只排个序）
+                var ids = new List<KeyValuePair<string, int>>(idCount);
+                ids.Sort((a, b) => b.Value.CompareTo(a.Value)); // 多的在前
+                var sb = new System.Text.StringBuilder();
+                foreach (var kv in ids)
+                {
+                    if (sb.Length > 0)
+                        sb.Append('、');
+                    sb.Append(kv.Key).Append('×').Append(kv.Value);
+                }
+                Mod.Log.Info($"[Pool] 身份分布：{sb}");
+            }
             else
+            {
                 Mod.Log.Info("[Pool] 本轮 0 条（市民皆被跳过或城市无人）");
+            }
         }
 
         /// <summary>

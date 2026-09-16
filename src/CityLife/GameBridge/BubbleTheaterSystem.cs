@@ -43,10 +43,10 @@ namespace CityLife.GameBridge
     ///    行人 agent 回指市民（S6 实锤候车行人在树里），按离地点距离升序取 2-4 人（街头场=设置页上限 2-5），
     ///    锚点=agent 本体；店内 = CurrentBuilding==该建筑的市民 2-4 人，锚点=建筑本体（室内市民无 agent，多人共锚）。
     ///    参与者已在他组的跳过。场景标签映射：车站候车→station、公园/景点→park、商店→shop、
-    ///    住宅区→home、窗口混编→window（见⑥）、街头闲谈→street（见⑦）；其余室内类型（学校/医院/办公楼等）无标签=本拍跳过。候选成立 →
+    ///    住宅区→home、窗口混编→window（见⑥）、街头闲谈→street（见⑦）；其余室内类型（学校/医院/办公楼等）无标签=让贤。候选成立 →
+    ///    best 竞争前先过"池有匹配剧本"闸（让贤机制，2026-09-16 修正注记挂⑦：没剧本的分区不吞拍）→
     ///    stock.TryTake(标签, 名单人数)：场景严格相符+cast≤人数确定性取一条（街头场多一段：
-    ///    没有正好演得起的就取大剧本裁着演，见⑦）；无匹配=本拍跳过
-    ///    （不打炉！炉只由水位触发，放送侧绝不开炉）。
+    ///    没有正好演得起的就取大剧本裁着演，见⑦）；炉只由水位触发，放送侧绝不开炉。
     /// ④ 开播：取到剧本即绑名单建剧场——Participants/Lines 初始化其余锚点显"……"（在听）+
     ///    第一句带名字前缀落到说话人锚点（§12 #50："安珀尔：……"——多人/共锚分辨说话人，顺带成
     ///    剧场视觉标识）+ Anchors/m_ByAnchor 登记 + EnsureAnchor 五道闸。<b>剧本开播才消耗</b>：
@@ -296,8 +296,11 @@ namespace CityLife.GameBridge
         /// （行人锚点旁"有人气"的商店/住宅，§12 #56）+ 街头闲谈候选（行人锚点圈内抓路人，§12 #67）
         /// + 店内候选（CurrentBuilding 分组）——窗口/街头与店内共用
         /// 每拍最多一次的楼内市民分组（BuildIndoorGroups 懒建，街头不需要——纯室外抓人）。四类同台竞争，取离镜头最近且绑得够人的 →
-        /// 按场景标签向剧本池取件：无匹配剧本=本拍跳过（不打炉！炉只由水位触发）；取到即绑名单开播
-        /// （零 LLM 等待，绑定即复核）。</summary>
+        /// 按场景标签向剧本池取件：取到即绑名单开播（零 LLM 等待，绑定即复核）。
+        /// 让贤机制（2026-09-16 修正注记挂 §12 #67）：<b>池里没匹配剧本的分区不参与 best 竞争</b>——
+        /// 原写法是 best 选定后才 TryTake，空配分区（典型：home/shop 剧本被消耗完）每拍赢下 best 再空转跳过，
+        /// 有剧本的分区（street）永远排不上（实机日志 20 连拍空转实锤）。距离折扣逻辑不变
+        /// （street DistToCam ×1.5 照算），只是没剧本时让贤而不是吞拍。</summary>
         private void TryCast()
         {
             m_BubbleWorld ??= World.GetExistingSystemManaged<BubbleWorldSpikeSystem>();
@@ -317,37 +320,52 @@ namespace CityLife.GameBridge
             m_NameSystem ??= World.GetExistingSystemManaged<Game.UI.NameSystem>();
 
             Candidate? best = null;
+            var skippedNoScript = new List<string>(); // 让贤分区计数（无剧本候选的标签，重复各记一次；日志用）
+            // 有剧本才参与竞争（让贤）：无标签场景（学校/医院内等）天然无剧本，一并让贤
+            bool HasScript(Candidate c)
+                => c.SceneTag.Length > 0
+                   && (m_Stock.HasMatch(c.SceneTag, c.Roster.Count)
+                       || (c.SceneTag == Content.TheaterScriptStock.Street
+                           && m_Stock.HasMatch(c.SceneTag, Content.ModSettings.StreetTheaterMaxCast))); // 街头场二段取件同口径（大剧本裁着演）
+            void Consider(Candidate? c)
+            {
+                if (c == null)
+                    return;
+                if (!HasScript(c))
+                {
+                    skippedNoScript.Add(c.SceneTag.Length > 0 ? c.SceneTag : c.KindLabel);
+                    return; // 让贤：池里没货/无标签的分区不占拍
+                }
+                if (best == null || c.DistToCam < best.DistToCam)
+                    best = c;
+            }
+
             var scanCount = math.min(k_MaxAnchorScan, m_AnchorSnap.Count);
             var statics = new NativeList<Entity>(32, Allocator.Temp);
             var movers = new NativeList<Entity>(32, Allocator.Temp);
             Dictionary<Entity, IndoorGroup>? indoorGroups = null; // 楼内市民分组：窗口/店内候选共用，每拍最多全量扫一次（懒建）
             for (int i = 0; i < scanCount; i++)
             {
-                var cand = ScanOutdoor(m_AnchorSnap[i].Pos, camPos, statics, movers);
-                if (cand != null && (best == null || cand.DistToCam < best.DistToCam))
-                    best = cand;
+                Consider(ScanOutdoor(m_AnchorSnap[i].Pos, camPos, statics, movers));
                 if (m_AnchorSnap[i].Kind == 0) // 窗口混编/街头闲谈只从可见行人锚点出发（§12 #56/#67）
                 {
                     indoorGroups ??= BuildIndoorGroups();
-                    var win = ScanWindow(m_AnchorSnap[i], camPos, statics, movers, indoorGroups);
-                    if (win != null && (best == null || win.DistToCam < best.DistToCam))
-                        best = win;
-                    var street = ScanStreet(m_AnchorSnap[i], camPos, statics, movers);
-                    if (street != null && (best == null || street.DistToCam < best.DistToCam))
-                        best = street;
+                    Consider(ScanWindow(m_AnchorSnap[i], camPos, statics, movers, indoorGroups));
+                    Consider(ScanStreet(m_AnchorSnap[i], camPos, statics, movers));
                 }
             }
             statics.Dispose();
             movers.Dispose();
 
-            var indoor = ScanIndoor(camPos, indoorGroups ?? BuildIndoorGroups());
-            if (indoor != null && (best == null || indoor.DistToCam < best.DistToCam))
-                best = indoor;
+            Consider(ScanIndoor(camPos, indoorGroups ?? BuildIndoorGroups()));
 
             if (best == null)
-                return; // 本拍无候选（城市安静/都在冷却），下拍自然再试
-            if (best.SceneTag.Length == 0)
-                return; // 该场景类型无剧本标签（学校/医院/办公楼等室内）——池无此分区，本拍跳过
+            {
+                // 本拍无可演：全落空（城市安静/都在冷却）不打日志；有候选但都没剧本才打一行（让贤可观测）
+                if (skippedNoScript.Count > 0)
+                    Mod.Log.Info($"[剧场] 本拍 {skippedNoScript.Count} 个候选池无匹配剧本，全部让贤（{string.Join("、", skippedNoScript)}，池存 {m_Stock.Count}），本拍不开播");
+                return;
+            }
             var script = m_Stock.TryTake(best.SceneTag, best.Roster.Count);
             if (script == null && best.SceneTag == Content.TheaterScriptStock.Street)
             {
@@ -357,8 +375,8 @@ namespace CityLife.GameBridge
             }
             if (script == null)
             {
-                // 无匹配剧本=本拍跳过（不打炉！炉只由水位触发）——一行日志供验收区分"没扫到人"与"池里没货"
-                Mod.Log.Info($"[剧场] 候选成立但池无匹配剧本：{best.KindLabel}（标签 {best.SceneTag}，{best.Roster.Count} 人，池存 {m_Stock.Count}），本拍跳过");
+                // 理论到不了（HasScript 已保证有匹配），纯防御——HasMatch 与 TryTake 同口径扫描
+                Mod.Log.Info($"[剧场] 候选成立但取件失败：{best.KindLabel}（标签 {best.SceneTag}，{best.Roster.Count} 人，池存 {m_Stock.Count}），本拍跳过");
                 return;
             }
             StartTheater(best, script);

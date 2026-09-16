@@ -120,6 +120,17 @@ namespace CityLife.Content
         /// <summary>退回口（绑锚失败/开播中止专用）：塞回队首——它是该标签下最旧匹配，下拍仍优先被取。</summary>
         public void Return(TheaterScript script) => m_Entries.Insert(0, script);
 
+        /// <summary>纯查询（不消耗）：该场景标签下是否存在 cast ≤ rosterMax 的可取剧本。
+        /// 放送侧"让贤"判定用（2026-09-16 修正注记挂 §12 #67：没剧本的分区候选不参与 best 竞争，
+        /// 否则空配分区每拍吞掉放送节拍，有剧本的分区——如 street——永远排不上，实机实锤）。</summary>
+        public bool HasMatch(string scene, int rosterMax)
+        {
+            for (int i = 0; i < m_Entries.Count; i++)
+                if (m_Entries[i].Scene == scene && m_Entries[i].Cast <= rosterMax)
+                    return true;
+            return false;
+        }
+
         /// <summary>
         /// 剧本炉产出批量入库（收炉装载口）：JSONL salvage 解析（坏行跳过计数）→ 逐部入库，
         /// 超容先进先出逐出最旧。返回入库部数。

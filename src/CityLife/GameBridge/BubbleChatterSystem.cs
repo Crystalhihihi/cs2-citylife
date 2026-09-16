@@ -19,6 +19,9 @@ namespace CityLife.GameBridge
     /// §12 #63 对话场景卡：组炉时对 Walk 卡约 60% 槽位（炉计数+卡序锚定）复用环境圈现位 CollectAround(12m)
     /// 找步行市民 B 组双人卡（卡文缀"｜对：B处境"），LLM 对该卡输出 a/b 两句各 ≤12 字的对话，
     /// 收炉执行层拼"名字A：a\n名字B：b"单条 Text（渲染零改动），凑不到 B 天然降级独白；车辆卡保持独白。
+    /// §12 #69 写法规格签（2026-09-16 玩家拍板，三变体实验定案）：每张处境卡（人卡+车卡）尾缀系统分配
+    /// 规格"｜写：句型｜情：情绪"（ChatterSpec 确定性抽签：炉计数+卡序锚定，同炉同签顺延去重）——
+    /// 多样性不靠模型自觉；固定头已删【样子】内容例句（镜像不实锤、句长锚功能移交规格签）。
     ///
     /// 节拍锚游戏时间（#48：与信息流同尺——暂停=零成本、倍速=生成消费同速放大）：
     /// Now = SimulationSystem.frameIndex（模拟 tick，暂停即停走），游戏分钟 = TicksPerHour/60
@@ -146,6 +149,7 @@ namespace CityLife.GameBridge
                 pickedSet.Add(picked[k].Entity);
             var digested = 0; // 本炉带环境摘要的卡数（[环境圈] 每炉一行计数用）
             var pairCardNos = new List<int>(); // 本炉配对成功的双人卡号（1 起，与卡序对齐；prompt 点名锚定+开炉日志用）
+            var usedSpecs = new HashSet<(int Shape, int Mood)>(); // §12 #69：本炉已占规格签组合（同炉同签顺延去重——实验"困得眼皮打架"×2 撞车实锤）
             for (int k = 0; k < picked.Count; k++)
             {
                 var entry = picked[k];
@@ -176,6 +180,9 @@ namespace CityLife.GameBridge
                         pairCardNos.Add(k + 1); // 卡号 1 起，与 prompt 卡序对齐
                     }
                 }
+                // §12 #69 写法规格签：卡尾缀"｜写：句型｜情：情绪"（ChatterSpec 执行层确定性抽签，
+                // 炉计数+卡序锚定+同炉同签顺延去重；LLM 只服从不参与分配——多样性不靠模型自觉）
+                card += Content.ChatterSpec.TagFor(m_ForgeCount, k, usedSpecs);
                 cards.Add(card);
                 m_CurrentPairs.Add(pair);
                 m_CurrentOccasions.Add(entry.Occasion); // 场合随卡盖章（§12 #60 刀①：采样时已确定，收炉按 card 回填）
@@ -186,7 +193,7 @@ namespace CityLife.GameBridge
             }
             // 车卡（车载泡根治 v2：车里多是过境/服务司机，市民池天然车 0——[Pool] 日志实锤连续车 0，
             // 人卡保底找不到候选；车锚的声源必须是车自己：从载具本体采样组卡，场合恒 Vehicle）
-            AppendVehicleCards(cards, topics, ref digested);
+            AppendVehicleCards(cards, topics, ref digested, usedSpecs);
 
             m_Pool.CurrentCycle = m_ForgeCount; // BornCycle 基准锚本炉
             var rumorsNow = Content.CityRumors.Recent(3); // 刀②城市记忆：最新 3 条传闻当话料
@@ -364,8 +371,10 @@ namespace CityLife.GameBridge
 
         /// <summary>车卡组卡追加（车载泡根治 v2）：从载具本体采样 ≤k_MinVehicleCards 张，场合恒 Vehicle。
         /// 只收四类民用载具（私家车/出租车/公交/货车——警车/垃圾车等服务车说话="空车说话"同款诡异，不收）；
-        /// 跨步抽样+炉计数锚定（与人卡同款确定性）；车也吃 S6 环境圈摘要（Transform 现位直读，不进热路径）。</summary>
-        private void AppendVehicleCards(List<string> cards, List<string> topics, ref int digested)
+        /// 跨步抽样+炉计数锚定（与人卡同款确定性）；车也吃 S6 环境圈摘要（Transform 现位直读，不进热路径）；
+        /// 车卡同缀 §12 #69 规格签（usedSpecs 与人卡同一本炉去重集）。</summary>
+        private void AppendVehicleCards(List<string> cards, List<string> topics, ref int digested,
+                                        HashSet<(int Shape, int Mood)> usedSpecs)
         {
             var arr = m_VehicleQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
             var n = System.Math.Min(k_MinVehicleCards, arr.Length);
@@ -386,6 +395,7 @@ namespace CityLife.GameBridge
                         digested++;
                     }
                 }
+                card += Content.ChatterSpec.TagFor(m_ForgeCount, cards.Count, usedSpecs); // §12 #69 规格签（卡序=当前尾位）
                 cards.Add(card);
                 m_CurrentOccasions.Add(Content.BubbleOccasion.Vehicle); // 车卡场合恒 Vehicle（采样时已确定）
                 m_CurrentPairs.Add(null); // 车卡保持独白（§12 #63：配对只限 Walk 人卡；平行表与 cards 等长对齐）

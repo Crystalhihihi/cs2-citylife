@@ -6,8 +6,8 @@
 //   dotnet run --project tools/PromptEval -- [--scenario chatter|topics|all] [--k N]
 //        [--set collapsed|diverse|both] [--count 30] [--config llm.json路径]
 //        [--model 覆盖] [--thinking disabled|""] [--out 报告目录]
-//        [--variant v0|v1|v2|all]（闲聊炉 prompt 变体实验 2026-09-16：v0 生产原样/v1 去【样子】例句/
-//         v2 去例句+卡尾系统分配句型情绪规格；仅 chatter 场景有效）
+//        [--variant v0|v1|v2|all]（闲聊炉规格签对照 2026-09-16 §12 #69 落地后：v0/v2=生产形态含系统规格签/
+//         v1=无签对照组；实验期"去例句"语义已随生产头删【样子】而退役——镜像率基准例句冻结在 harness 内）
 // 纪律：API key 只从 llm.json 读入内存，绝不打印不落盘；报告只记供给名/模型名/thinking 状态。
 using System;
 using System.Collections.Generic;
@@ -106,55 +106,22 @@ internal static class Program
     private static readonly string[] k_CatWords = { "猫", "狗", "宠物", "喵", "汪" };
 
     // —— 闲聊炉 prompt 变体实验支持（2026-09-16，§12 #60 既定用途：固定卡具离线发炉、改动前后对比）——
-    // 玩家假设：①【样子】6 行内容例句被镜像照抄锁死多样性 ②规则段（铁律/语域/写法/配额）要保留防 AI 腔
-    // ③句型/情绪也该系统分配（变本加厉版"｜题："）④【输出】JSONL 格式 few-shot 是 schema 跟随救命索必须留。
-    // V0=生产原样；V1=删【样子】整段（字符串手术从生产头切，标记漂移直接抛错人工对齐）；V2=V1+卡尾规格。
-    // 生产 PromptBuilder 零改动——变体头/规格说明全部只在本 harness 内组装。
+    // 实验已定案落生产（§12 #69）：生产头删【样子】例句、组卡缀系统规格签。harness 语义随之切换：
+    // v0/v2=生产形态（含规格签，v2 为实验历史编号保留别名）；v1=去规格对照组（无签，回归用——
+    // 对照"规格签到底有没有用"）。例句手术已退役（生产头里【样子】已不存在）。
     private const int k_V0 = 0, k_V1 = 1, k_V2 = 2;
 
-    /// <summary>变体闲聊头：V0 原样返回生产头；V1/V2 把【样子】段（内容例句）从生产头切掉，其余逐字节不动。</summary>
-    private static string BuildVariantHead(int variant)
+    /// <summary>镜像率基准例句（历史 6 行【样子】内容例句的冻结副本，2026-09-16 §12 #69 后生产头已删——
+    /// 冻结在此只为镜像率回归基准：新版本输出对它们算相似度，照镜子倾向永不许回潮）。</summary>
+    private static readonly string[] k_ExampleLines =
     {
-        var head = PromptBuilder.BuildChatterHead();
-        if (variant == k_V0)
-            return head;
-        var from = head.IndexOf("【样子】", StringComparison.Ordinal);
-        var to = head.IndexOf("【写法】", StringComparison.Ordinal);
-        if (from < 0 || to < 0 || to <= from)
-            throw new InvalidOperationException("生产闲聊头的【样子】/【写法】锚点没找到——生产头结构漂移，变体手术先人工对齐");
-        return head.Substring(0, from) + head.Substring(to);
-    }
-
-    /// <summary>镜像率基准例句（从生产头【样子】段现解，不与生产脱节）：每行 "- …" 收一条。</summary>
-    private static readonly string[] k_ExampleLines = ExtractExamples();
-
-    private static string[] ExtractExamples()
-    {
-        var head = PromptBuilder.BuildChatterHead();
-        var from = head.IndexOf("【样子】", StringComparison.Ordinal);
-        var to = head.IndexOf("【写法】", StringComparison.Ordinal);
-        if (from < 0 || to < 0 || to <= from)
-            throw new InvalidOperationException("生产闲聊头的【样子】段没解到——镜像率基准缺失，先人工对齐");
-        return head.Substring(from, to - from).Split('\n')
-            .Select(l => l.Trim()).Where(l => l.StartsWith("- ")).Select(l => l.Substring(2))
-            .ToArray();
-    }
-
-    // V2 系统分配规格词表（简短为要；确定性抽签——同具同炉次同卡号必同规格，可复现）
-    private static readonly string[] k_Shapes = { "短反应", "带数字长句", "带物件长句", "带因果长句", "吐槽一句", "自言自语" };
-    private static readonly string[] k_Moods = { "烦", "乐", "麻木", "急", "馋", "困" };
-
-    /// <summary>V2 卡的规格签（确定性：与卡号/炉次锚定）。返回 (写, 情)。</summary>
-    private static (string Shape, string Mood) SpecFor(uint batchBase, int batch, int cardIdx)
-    {
-        var shape = k_Shapes[(batchBase + (uint)batch * 7 + (uint)cardIdx * 13) % k_Shapes.Length];
-        var mood = k_Moods[(batchBase + (uint)batch * 5 + (uint)cardIdx * 7) % k_Moods.Length];
-        return (shape, mood);
-    }
-
-    /// <summary>V2 prompt 末尾追加的规格说明段（生产 tail 不动，harness 侧后贴——若 V2 落生产再挪进 BuildChatterPrompt 尾部）。</summary>
-    private const string k_SpecLegend =
-        "【规格】卡尾\"｜写：\"是系统分配的句型规格（短反应=≤15字脱口而出；带数字长句=20-40字必须带数字；带物件长句=带一个具体物件；带因果长句=带前因后果；吐槽一句=一句牢骚；自言自语=低声嘟囔），\"｜情：\"是情绪底色——必须服从，规格之外自由发挥。\n";
+        "这雨啥时候停啊，鞋全湿透了",
+        "解放路那个红灯九十秒，我数了三回才过去",
+        "又堵死了，今儿第三回",
+        "楼下包子从一块五涨到两块，老板说面也贵了，没法子",
+        "公交再不来我真走回去了",
+        "这花开得还行，拍一张",
+    };
 
     // AI 腔巡检词表（直播腔/书面腔/动作神态描写——【语域】明令禁止的残留探针；emoji 另按代理对判）
     private static readonly string[] k_AiToneWords =
@@ -236,27 +203,21 @@ internal static class Program
     /// <summary>闲聊炉场景：真实 BuildChatterPrompt 发 K 炉，ParseBatch 解析后打分。
     /// occs=具卡场合真值（§12 #60 刀①后实机由 CitizenPoolSystem 盖章）——按 card 号映射验证归属质量。
     /// pairs/pairNames=双人卡真值与拼装假名（§12 #63：模拟执行层 m_CurrentPairs，验证对话行产出与 40 硬顶拼装防线）。
-    /// variant=闲聊头变体（2026-09-16 变体实验）：V0 生产原样 / V1 删【样子】例句 / V2=V1+卡尾"｜写：｜情："系统分配规格
-    /// （规格签确定性锚定具名+炉次+卡号，可复现；规格说明段 harness 侧后贴，生产 BuildChatterPrompt 不动）。</summary>
+    /// variant=规格签对照（§12 #69 落地后）：v0/v2=生产形态（卡尾缀 ChatterSpec 系统签，每炉重抽与生产同链）/
+    /// v1=无签对照组。指标对照（镜像率/规格服从）三变体同口径计算，v1 的规格指标=假设性无签对照。</summary>
     private static async Task<int> RunChatter(ICliProvider provider, TopicReservoir reservoir,
                                               string setName, int variant, string[] cards, BubbleOccasion[] occs,
                                               bool[] pairs, (string A, string B)[] pairNames,
                                               uint batchBase, int k, StringBuilder report)
     {
-        var head = BuildVariantHead(variant);
+        var head = PromptBuilder.BuildChatterHead(); // 生产头（§12 #69 后已无【样子】例句段）
         var label = $"v{variant}/{setName}";
-        // V2：卡尾缀系统分配规格（"｜写：短反应｜情：烦"）；规格抽签对三变体同口径计算（V0/V1 作对照组测量用）
-        var effCards = cards;
-        if (variant == k_V2)
-        {
-            effCards = new string[cards.Length];
-            for (var i = 0; i < cards.Length; i++)
-            {
-                var (shape, mood) = SpecFor(batchBase, 0, i); // 规格只按卡号锚定（跨炉不变，模拟"系统按卡配"）
-                effCards[i] = cards[i] + $"｜写：{shape}｜情：{mood}";
-            }
-        }
+        // 规格签（§12 #69 落生产后口径）：v0/v2=生产形态（卡尾缀"｜写：｜情："，ChatterSpec 与生产同一条分配链，
+        // 每炉按 具基址+炉次 重抽——同生产炉计数锚定）；v1=无签对照组。规格对三变体同口径计算（对照组测量用）
+        var specOn = variant != k_V1;
         var all = new List<ParsedChatterLine>();
+        var lineForge = new List<int>(); // 每条解析行出自哪炉（规格签按炉重抽，指标对照要按炉对号）
+        var forgeShapes = new List<int[]>(); // 每炉每卡的句型签索引（对照指标用；v1 也照算=假设性对照）
         var raws = new List<(int Batch, string Raw, long Ms, int? Pt, int? Rt)>();
         var totalSkipped = 0;
         var pairCount = pairs.Count(p => p);
@@ -266,9 +227,18 @@ internal static class Program
         {
             // 每卡配一题：真实 TopicFor 确定性抽题（与实机同一代码路径）
             var topics = cards.Select((_, i) => reservoir.TopicFor(batchBase + (uint)b, i)).ToArray();
+            // §12 #69 规格签：走生产同一条 ChatterSpec 分配链（具基址+炉次锚定、同炉同签顺延去重）
+            var used = new HashSet<(int Shape, int Mood)>();
+            var shapes = new int[cards.Length];
+            var effCards = new string[cards.Length];
+            for (var i = 0; i < cards.Length; i++)
+            {
+                var (s, m) = ChatterSpec.Assign(batchBase + (uint)b, i, used);
+                shapes[i] = s;
+                effCards[i] = specOn && s >= 0 ? cards[i] + $"｜写：{ChatterSpec.Shapes[s]}｜情：{ChatterSpec.Moods[m]}" : cards[i];
+            }
+            forgeShapes.Add(shapes);
             var prompt = PromptBuilder.BuildChatterPrompt(head, k_Snap, effCards, topics, k_Rumors, pairCardNos);
-            if (variant == k_V2)
-                prompt += k_SpecLegend;
             Console.WriteLine($"[Eval·chatter/{label}] 第 {b + 1}/{k} 炉发出（{prompt.Length} 字符）…");
             var r = await provider.OneShotAsync(prompt, CancellationToken.None);
             if (!r.Success)
@@ -279,6 +249,8 @@ internal static class Program
             var parsed = BubbleSnippetPool.ParseBatch(r.Text, out var skipped);
             totalSkipped += skipped;
             all.AddRange(parsed);
+            for (var i = 0; i < parsed.Count; i++)
+                lineForge.Add(b);
             raws.Add((b, r.Text, r.LatencyMs, r.PromptTokens, r.ResponseTokens));
             Console.WriteLine($"[Eval·chatter/{label}] 第 {b + 1} 炉：{parsed.Count} 条（丢 {skipped}）{r.LatencyMs / 1000.0:0.0}s");
         }
@@ -366,15 +338,25 @@ internal static class Program
         // AI 腔巡检：直播腔/书面腔/动作描写词表 + emoji（代理对）
         var aiHits = bodies.Where(b => k_AiToneWords.Any(w => b.Contains(w)) || b.Any(char.IsSurrogate)).ToArray();
 
-        // 规格服从对照：锚定"带数字长句"规格的卡（三变体同口径抽签），其条目带数字占比——
-        // V2 是规格生效实测，V0/V1 是同卡无规格对照。
+        // 规格服从对照：锚定"带数字长句"规格的卡（三变体同口径按炉抽签），其条目带数字占比——
+        // v0/v2 是规格生效实测，v1 是无签对照。
         // 数字口径=ASCII 数字 ∪ 中文数词（零~十/百/千/万/两/几）——中文语料里"两天/三点七"才是常态，
         // 只认 char.IsDigit 会把中文数字表达全漏掉（2026-09-16 变体实验首轮 0% 误报实锤）
         const string cjkDigits = "零一二三四五六七八九十百千万两几";
         bool HasDigit(string s) => s.Any(c => char.IsDigit(c) || cjkDigits.Contains(c));
-        var digitCardLines = all.Where(e => e.Card >= 1 && e.Card <= cards.Length
-                                            && SpecFor(batchBase, 0, e.Card - 1).Shape == "带数字长句").ToArray();
-        var digitHit = digitCardLines.Count(e => HasDigit(BodyOf(e)));
+        var digitShapeIdx = Array.IndexOf(ChatterSpec.Shapes, "带数字长句");
+        var digitTotal = 0; var digitHit = 0;
+        for (var i = 0; i < all.Count; i++)
+        {
+            var e = all[i];
+            if (e.Card < 1 || e.Card > cards.Length)
+                continue;
+            if (forgeShapes[lineForge[i]][e.Card - 1] != digitShapeIdx)
+                continue;
+            digitTotal++;
+            if (HasDigit(BodyOf(e)))
+                digitHit++;
+        }
 
         Console.WriteLine($"\n== chatter/{label} 汇总（{all.Count} 条，解析丢 {totalSkipped}）==");
         Console.WriteLine($"  猫密度     : {catHits}/{all.Count} = {Pct(catHits, n)}");
@@ -386,7 +368,7 @@ internal static class Program
         Console.WriteLine($"  镜像率     : 均值 {mirrorMean:0.00}，≥0.5 嫌疑 {mirror50}/{bodies.Length}，≥0.7 实锤 {mirror70}/{bodies.Length}");
         Console.WriteLine($"  词汇多样性 : 去重句 {distinctLines}/{bodies.Length}，相异bigram {vocabRate:P0}");
         Console.WriteLine($"  AI腔       : {aiHits.Length}/{bodies.Length}{(aiHits.Length > 0 ? "（" + aiHits[0] + "）" : "")}");
-        Console.WriteLine($"  规格对照   : \"带数字长句\"锚定卡 {digitCardLines.Length} 条带数字 {Pct(digitHit, Math.Max(1, digitCardLines.Length))}");
+        Console.WriteLine($"  规格对照   : \"带数字长句\"锚定卡 {digitTotal} 条带数字 {Pct(digitHit, Math.Max(1, digitTotal))}（v0/v2=实测 v1=无签对照）");
 
         report.Append("## chatter / ").Append(label).Append("\n\n");
         report.Append("- 条数：").Append(all.Count).Append("（解析丢 ").Append(totalSkipped).Append("）\n");
@@ -399,7 +381,7 @@ internal static class Program
         report.Append($"- 镜像率：均值 {mirrorMean:0.00}，≥0.5 嫌疑 {Pct(mirror50, n)}，≥0.7 实锤 {Pct(mirror70, n)}（对 {k_ExampleLines.Length} 行例句字符 bigram Jaccard）\n");
         report.Append($"- 词汇多样性：去重句 {distinctLines}/{bodies.Length}，相异 bigram 占比 {vocabRate:P0}\n");
         report.Append($"- AI腔巡检：{aiHits.Length}/{bodies.Length} 命中\n");
-        report.Append($"- 规格对照（\"带数字长句\"锚定卡条目数字出现率，含中文数词）：{Pct(digitHit, Math.Max(1, digitCardLines.Length))} ({digitHit}/{digitCardLines.Length})\n");
+        report.Append($"- 规格对照（\"带数字长句\"锚定卡条目数字出现率，含中文数词；v0/v2=实测 v1=无签对照）：{Pct(digitHit, Math.Max(1, digitTotal))} ({digitHit}/{digitTotal})\n");
         if (topMirror.Count > 0)
         {
             report.Append("- 镜像最高分样本：\n");

@@ -21,6 +21,7 @@
     <Compile Include="..\..\src\CityLife\Content\TheaterScriptStock.cs" Link="Content\TheaterScriptStock.cs" />
     <Compile Include="..\..\src\CityLife\Content\TopicReservoir.cs" Link="Content\TopicReservoir.cs" />
     <Compile Include="..\..\src\CityLife\Content\BubbleSnippetPool.cs" Link="Content\BubbleSnippetPool.cs" />
+    <Compile Include="..\..\src\CityLife\Content\ChatterSpec.cs" Link="Content\ChatterSpec.cs" />
     <Compile Include="..\..\src\CityLife\Util\JsonMini.cs" Link="Util\JsonMini.cs" />
     <Compile Include="..\..\src\CityLife\Llm\ICliProvider.cs" Link="Llm\ICliProvider.cs" />
     <Compile Include="..\..\src\CityLife\Llm\ProviderConfig.cs" Link="Llm\ProviderConfig.cs" />

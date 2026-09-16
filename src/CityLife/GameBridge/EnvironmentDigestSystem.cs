@@ -37,7 +37,7 @@ namespace CityLife.GameBridge
     /// a. 半径内建筑带 AccidentSite（位标志读法照 EventNewsSystem）→ 事件点（遭窃优先于车祸）；
     /// b. 签名建筑（SignatureBuildingData，CityChangeSystem 先例）→ 景点点（带真实地名）；
     /// c. 候车 max(WaitingPassengers.m_Count) ≥5 → 候车点；离道市民数 &gt;15 → "人挤人"点；
-    /// d. 其余建筑按 CitizenPoolSystem.ClassifyBuilding 聚类计数，数量最多且 ≥2 的一类报代表
+    /// d. 其余建筑按 CitizenPoolSystem.ClassifyBuilding 聚类计数（§12 #62 起商/工/办升级业态词聚类），数量最多且 ≥2 的一类报代表
     ///    （真实店名=租户 Renter 的 NameSystem.GetRenderedLabelName，EntityAnchorSystem 先例）。
     /// 如何扩展：新戏点=在 Distill 里按戏值位次插入一条候选文案即可，别动查询层。
     ///
@@ -162,8 +162,9 @@ namespace CityLife.GameBridge
         private string Distill(NativeList<Entity> statics, NativeList<Entity> moving, NativeList<Entity> routeStops, int maxPoints)
         {
             string? crimePoint = null, trafficPoint = null, signaturePoint = null;
-            var clusterCounts = new Dictionary<string, int>();      // 类词 → 栋数
-            var clusterRep = new Dictionary<string, Entity>();      // 类词 → 代表建筑（取名用，首个）
+            var clusterCounts = new Dictionary<string, int>();      // 聚类键（粗类/业态词）→ 栋数
+            var clusterRep = new Dictionary<string, Entity>();      // 聚类键 → 代表建筑（取名用，首个）
+            var clusterKind = new Dictionary<string, string>();     // 聚类键 → 粗类名（量词后缀用，§12 #62 业态细分）
             var maxWaiting = 0;
 
             for (int i = 0; i < statics.Length; i++)
@@ -195,9 +196,17 @@ namespace CityLife.GameBridge
                 var kind = CitizenPoolSystem.ClassifyBuilding(EntityManager, e);
                 if (kind == null || kind == "景点")
                     continue; // 景点（第二处起的签名建筑）单独优先报过了，不进聚类计数
-                clusterCounts[kind] = clusterCounts.TryGetValue(kind, out var c) ? c + 1 : 1;
-                if (!clusterRep.ContainsKey(kind))
-                    clusterRep[kind] = e;
+                // §12 #62 业态细分（2026-09-16）：商/工/办聚类键升级业态词（餐饮店/软件公司/服装厂…），
+                // 读不出业态回落粗类名；粗类名记进 clusterKind 供量词后缀查
+                var group = kind is "商店" or "工厂" or "办公楼"
+                    ? ShopOutput.BusinessWordOf(EntityManager, e) ?? kind
+                    : kind;
+                clusterCounts[group] = clusterCounts.TryGetValue(group, out var c) ? c + 1 : 1;
+                if (!clusterRep.ContainsKey(group))
+                {
+                    clusterRep[group] = e;
+                    clusterKind[group] = kind;
+                }
             }
 
             // Routes 树兜底扫候车（车站若没进 static 树从这里补；取 max 幂等）
@@ -232,7 +241,8 @@ namespace CityLife.GameBridge
             if (bestKind != null)
             {
                 var name = ShopNameOf(EntityManager, m_NameSystem, clusterRep[bestKind]);
-                var suffix = ClusterSuffix(bestKind);
+                // 业态词聚类量词通用"家"（"3家餐饮店"）；粗类聚类走原后缀表（"4家店"）
+                var suffix = clusterKind[bestKind] == bestKind ? ClusterSuffix(bestKind) : "家" + bestKind;
                 clusterPoint = name != null ? $"「{name}」等{bestCount}{suffix}" : $"旁边有{bestCount}{suffix}";
             }
 
@@ -356,7 +366,8 @@ namespace CityLife.GameBridge
         internal static bool IsUglyName(string? name)
             => string.IsNullOrEmpty(name) || name.StartsWith("Assets.", System.StringComparison.Ordinal);
 
-        /// <summary>聚类文案量词后缀（类词出自 CitizenPoolSystem.ClassifyBuilding，一处定义）。</summary>
+        /// <summary>聚类文案量词后缀（粗类词出自 CitizenPoolSystem.ClassifyBuilding，一处定义；
+        /// 业态词聚类不走这里——调用方通用"家"+业态词，§12 #62）。</summary>
         private static string ClusterSuffix(string kind) => kind switch
         {
             "商店" => "家店",
@@ -366,6 +377,7 @@ namespace CityLife.GameBridge
             "公园" => "个公园",
             "学校" => "所学校",
             "医院" => "家医院",
+            "车站" => "个车站",
             _ => "处建筑",
         };
 

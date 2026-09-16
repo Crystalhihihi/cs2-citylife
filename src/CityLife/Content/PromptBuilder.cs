@@ -195,6 +195,7 @@ namespace CityLife.Content
             sb.Append("【城市此刻】").Append(DescribeCity(s)).Append('\n');
             AppendRumors(sb, rumors, "可以当话料（别逐字复读，别每条都蹭）");
             sb.Append("【处境卡】一行一张（真实市民此刻的状态），\"｜题：\"后是配给这人的话头");
+            sb.Append("；卡里场所词已细分到真实业态（餐饮店/软件公司/服装厂这类——§12 #62），话题贴着这个人的场所业态写，别把餐饮店和学校写成一个味儿");
             if (pairCards > 0)
                 sb.Append("，\"｜对：\"后是正和这人走在一起的另一人（双人卡=卡 ").Append(string.Join("、", pairCardNos!)).Append("）");
             sb.Append("：\n");

@@ -222,7 +222,8 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>处境半句：在室内→"在 XX（里）+动作"；在途中→"乘什么+路程短语+（去 XX）"。
-        /// 场所显示词走 §12 #62 分级：真名（NameSystem，「」括注）>类别词——真名经 ShopNameOf 取
+        /// 场所显示词走 §12 #62 分级：真名（NameSystem，「」括注）>业态词（商/工/办按租户产出分，
+        /// 2026-09-16 落地）>粗类词——真名经 ShopNameOf 取
         /// （zone 通用名已在那层斩断）；住宅是自己家不落名（住宅无业态），恒落类别词"住宅区"。
         /// 场合随路盖章（§12 #60 刀①）：室内=Indoor（公园/景点是开放空间=Walk，#57 公园归人）；
         /// 途中乘真载具=Vehicle，否则走路=Walk——采样时已确定的事实，LLM 不再推。</summary>
@@ -237,7 +238,12 @@ namespace CityLife.GameBridge
                 if (place != null)
                 {
                     var real = place == "住宅区" ? null : EnvironmentDigestSystem.ShopNameOf(em, nameSystem, curBuilding);
-                    var where = real != null ? $"「{real}」" : place;
+                    // §12 #62 业态细分（2026-09-16）：商/工/办的类别词升级为业态词（餐饮店/软件公司/服装厂…，
+                    // 读不出业态回落粗类）；真名仍优先（分级链：真名>业态类别，住宅无业态）
+                    var category = real == null && place is "商店" or "工厂" or "办公楼"
+                        ? ShopOutput.BusinessWordOf(em, curBuilding) ?? place
+                        : place;
+                    var where = real != null ? $"「{real}」" : category;
                     // "在商店里上班" vs "在住宅区呆着"：片区/开放场所不加"里"（带真名时按类别同判）
                     var at = place is "住宅区" or "景点" ? $"在{where}" : $"在{where}里";
                     return at + IndoorActivity(purpose);
@@ -277,9 +283,10 @@ namespace CityLife.GameBridge
             return vehicle != Entity.Null && em.HasComponent<Game.Vehicles.Vehicle>(vehicle) ? vehicle : Entity.Null;
         }
 
-        /// <summary>目的地建筑显示词（§12 #62 分级）：真名（NameSystem，「」括注）优先、类别词（"商店"）兜底；
+        /// <summary>目的地建筑显示词（§12 #62 分级）：真名（NameSystem，「」括注）优先、业态词
+        /// （餐饮店/软件公司…，商/工/办按租户产出资源分，2026-09-16 落地）居中、粗类词（"商店"）兜底；
         /// 住宅是自己家不落名=类别词"住宅区"。无 Target/非建筑/未分类 → null（该维度省略）。
-        /// nameSystem 传 null = 真名层整体关闭（全落类别词）。
+        /// nameSystem 传 null = 真名层整体关闭（业态层不受影响，粗类→业态照常升级）。
         /// internal static 共享：BubbleChatterSystem 车卡组卡（载具目的地）同用（一处定义别复制粘贴）。</summary>
         internal static string? DestinationPlace(EntityManager em, Entity e, Game.UI.NameSystem? nameSystem = null)
         {
@@ -292,13 +299,20 @@ namespace CityLife.GameBridge
             if (em.HasComponent<Game.Buildings.PropertyRenter>(target))
                 target = em.GetComponentData<Game.Buildings.PropertyRenter>(target).m_Property;
             var place = ClassifyBuilding(em, target);
-            if (place == null || place == "住宅区" || nameSystem == null)
+            if (place == null || place == "住宅区")
                 return place;
+            // §12 #62 业态细分（2026-09-16）：商/工/办目的地类别词升级为业态词（"（去餐饮店）"）；
+            // 业态层不依赖 nameSystem（真名层关闭时业态照样生效），真名仍优先（分级链：真名>业态类别）
+            var category = place is "商店" or "工厂" or "办公楼"
+                ? ShopOutput.BusinessWordOf(em, target) ?? place
+                : place;
+            if (nameSystem == null)
+                return category;
             var real = EnvironmentDigestSystem.ShopNameOf(em, nameSystem, target);
-            return real != null ? $"「{real}」" : place;
+            return real != null ? $"「{real}」" : category;
         }
 
-        /// <summary>建筑类型词：景点/学校/医院/住宅区/商店/工厂/办公楼/公园；非建筑（外部连接等）与未分类 → null。
+        /// <summary>建筑类型词：景点/学校/医院/车站/住宅区/商店/工厂/办公楼/公园；非建筑（外部连接等）与未分类 → null。
         /// internal static 共享：EnvironmentDigestSystem 聚类计数直接用（一处定义，别复制粘贴）。</summary>
         internal static string? ClassifyBuilding(EntityManager em, Entity building)
         {
@@ -307,6 +321,9 @@ namespace CityLife.GameBridge
             if (em.HasComponent<Game.Prefabs.SignatureBuildingData>(building)) return "景点";
             if (em.HasComponent<Game.Buildings.School>(building)) return "学校";
             if (em.HasComponent<Game.Buildings.Hospital>(building)) return "医院";
+            // 车站（§12 #62 粗类名补齐 2026-09-16）：TransportStop 与 WaitingPassengers 同实体共存
+            // （2026-09-09 spike §4 实锤）； Building 门已把 bus 站牌等非建筑物件挡在外面，只剩真车站建筑
+            if (em.HasComponent<Game.Routes.TransportStop>(building)) return "车站";
             if (em.HasComponent<Game.Buildings.ResidentialProperty>(building)) return "住宅区";
             if (em.HasComponent<Game.Buildings.CommercialProperty>(building)) return "商店";
             if (em.HasComponent<Game.Buildings.IndustrialProperty>(building)) return "工厂";

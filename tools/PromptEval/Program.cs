@@ -281,7 +281,9 @@ internal static class Program
         var totalSkipped = 0;
         for (var b = 0; b < k; b++)
         {
-            var prompt = PromptBuilder.BuildTheaterStockPrompt(head, k_Snap, stock, k_Diverse, 4, 3); // streetMaxCast=设置页默认 3（§12 #67）
+            // 缺口分区走真实 DeficitScenes（2026-09-16 分区水位修正）：空库=六分区全缺口，与生产冷启动同形
+            var prompt = PromptBuilder.BuildTheaterStockPrompt(head, k_Snap, stock, k_Diverse, 4, 3, // streetMaxCast=设置页默认 3（§12 #67）
+                stock.DeficitScenes(2));
             Console.WriteLine($"[Eval·theater] 第 {b + 1}/{k} 炉发出（{prompt.Length} 字符）…");
             var r = await provider.OneShotAsync(prompt, CancellationToken.None);
             if (!r.Success)

@@ -85,6 +85,20 @@ namespace CityLife.Content
             return n;
         }
 
+        /// <summary>分区水位判定（2026-09-16 实机修正，注记挂 §12 #67）：水位从"只认总数"改为"分区计数"——
+        /// 总数够但某分区归零会饿死该场景（实锤：home/shop 各 1 部被消耗后总库存 6 不触发补炉，
+        /// 放送侧候选每拍空转、street 永远排不上）。返回库存 &lt; perSceneLowWater 的场景标签表
+        /// （缺口分区，补炉定向配题用；按 Scenes 白名单序），全够=空表。总数兜底天然被涵盖：
+        /// 总数低必然有分区低于下限。每次评估拍调一次，低频可分配。</summary>
+        public List<string> DeficitScenes(int perSceneLowWater)
+        {
+            var deficits = new List<string>(Scenes.Length);
+            for (var i = 0; i < Scenes.Length; i++)
+                if (CountOf(Scenes[i]) < perSceneLowWater)
+                    deficits.Add(Scenes[i]);
+            return deficits;
+        }
+
         /// <summary>
         /// 放送取件口：场景标签严格相符 + cast ≤ rosterMax（绑得到的人才演得起），确定性取最旧一条
         /// （与 FIFO 逐出配对，库存自然轮换）。<b>取出即离池</b>——绑锚失败须由调用方 Return 退回；

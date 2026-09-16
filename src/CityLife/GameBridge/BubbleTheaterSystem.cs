@@ -20,13 +20,15 @@ namespace CityLife.GameBridge
     /// →开播中止连发、每中止白烧一炉（2026-09-10 实机实锤）。改抄话题炉/闲聊炉同款"炉→池"缓冲：
     /// 分钟级延迟被池子吸收，放送零 LLM 等待、绑定即复核。
     ///
-    /// 状态机（一拍一拍走；节拍时钟自 §12 #68 起随设置页选项——默认 unscaledTime 墙钟（现实时间），
-    /// 开=游戏时钟（暂停零成本、倍速同速放大，即 #48 原 tick 节拍语义的等值折算）：
-    /// ① 剧本炉（水位触发）：每 3-4-5 游戏分钟评估拍（节拍轮换照抄闲聊炉，恒锚游戏时间 #48——供给节奏不走 #68 选项，选项只管逐句显示时钟）查池水位——总库存 &lt;6 且
+    /// 状态机（一拍一拍走；供给节拍（评估拍/冷却）恒锚游戏时间——暂停零成本、倍速同速放大（#48；
+    /// 2026-09-15 实机修正：不走 #68 墙钟档——墙钟把 3-4-5 游戏分钟放大成现实分钟，剧场 9 分钟零开播实锤）；
+    /// 逐句显示时钟才走 §12 #68 选项，挂世界泡 PaceNow）：
+    /// ① 剧本炉（水位触发）：每 3-4-5 游戏分钟评估拍（节拍轮换照抄闲聊炉，恒锚游戏时间 #48——供给节奏不走 #68 选项，选项只管逐句显示时钟）查池水位——任一场景标签库存 &lt;2
+    ///    （分区水位，2026-09-16 修正注记挂 §12 #67：原"总库存 &lt;6"只认总数，分区归零会饿死该场景）且
     ///    无在飞+网关可用+非 MUTE+设置页开关开 → 发一炉产 4 部（Normal 优先级：thinking 时代低优先级
     ///    队尾等死，§12 #51 实锤；TTL 300s + 墙钟 TTL+60s 兜底解锁，闲聊炉/S3 同款）。prompt=固定头
     ///    PromptBuilder.BuildTheaterStockHead（启动拼一次缓存，逐字节稳定纪律）+ 动态尾：各场景标签
-    ///    现存部数（低水位分区多配题）+ 城市快照 + 3-5 张处境卡当灵感池（禁写真名/真店名，只写氛围）。
+    ///    现存部数 + 缺口分区定向补给 + 城市快照 + 3-5 张处境卡当灵感池（禁写真名/真店名，只写氛围）。
     ///    结果走 ContentDirectorSystem 按 "theater:" 前缀转交 OnTheaterResult（不自己 TryDequeueResult
     ///    ——两个消费者轮询同一队列会互相偷包）；到货只做 JSONL salvage 解析入池。
     /// ② 放送选锚点（零 token 纯执行层，与播前绑定时代同一套扫描）：候选只从 BubbleWorldSpikeSystem
@@ -95,7 +97,8 @@ namespace CityLife.GameBridge
         private const int k_MaxAnchorScan = 8;   // 每拍最多扫几个可见锚点（帧预算闸）
         private const int k_MinWaiting = 2;      // 车站候车人气门槛（#48"≥2 人"）
         private const uint k_CooldownMinutes = 12; // 锚点冷却 ≈3 炉节拍（3-4-5 分钟轮换 ×3），防连开
-        private const int k_StockLowWater = 6;   // 剧本池水位线：总库存 <6 触发剧本炉（§12 #52）
+        private const int k_SceneLowWater = 2;   // 分区水位下限：任一场景标签库存 <2 即触发剧本炉（2026-09-16 修正，
+                                                 // 注记挂 §12 #67——原"总库存 <6"只认总数，分区归零饿死 street 实锤）
         private const int k_ForgeBatch = 4;      // 一炉产几部剧本（§12 #52）
 
         private EntityQuery m_CitizenQuery = default!;
@@ -222,12 +225,14 @@ namespace CityLife.GameBridge
             if (!Content.ModSettings.BubbleTheaterEnabled)
                 return;
 
-            // ① 剧本炉水位补给：总库存 <6 且无在飞+网关可用+非 MUTE 才烧 token（池是缓冲，放送侧绝不开炉）
-            if (m_Stock.Count < k_StockLowWater && !m_ForgePending && Mod.Gateway != null && !Llm.CliGateway.Mute)
+            // ① 剧本炉水位补给：分区水位（任一场景标签库存 <k_SceneLowWater，2026-09-16 修正注记挂 §12 #67）
+            // 且无在飞+网关可用+非 MUTE 才烧 token（池是缓冲，放送侧绝不开炉）
+            var deficits = m_Stock.DeficitScenes(k_SceneLowWater); // 缺口分区（低频分配可接受）
+            if (deficits.Count > 0 && !m_ForgePending && Mod.Gateway != null && !Llm.CliGateway.Mute)
             {
                 var snapshot = m_Radar.Latest;
                 if (snapshot.Citizens != 0) // 雷达还没采到样则本拍不开炉（快照要进 prompt）
-                    FireStockForge(snapshot);
+                    FireStockForge(snapshot, deficits);
             }
 
             // ② 放送评估：纯执行层零 token——扫描绑人成立即从池取匹配剧本即时开播
@@ -238,10 +243,11 @@ namespace CityLife.GameBridge
 
         // —— ① 剧本炉（水位触发，产库存入池） ——
 
-        /// <summary>剧本炉开炉：固定头 + 动态尾（各场景库存数低水位多配题 + 城市快照 + 3-5 张处境卡灵感池，
+        /// <summary>剧本炉开炉：固定头 + 动态尾（各场景库存数 + 缺口分区定向补给 + 城市快照 + 3-5 张处境卡灵感池，
         /// 禁写真名/真店名只写氛围——剧本是库存货不针对具体市民，#52 代价明账：味道靠场景标签+城市热点+灵感卡保）。
-        /// 灵感卡从市民池跨步抽样（炉计数锚定，确定性——同炉次+同池状态必同批卡）。</summary>
-        private void FireStockForge(in Content.CitySnapshot snapshot)
+        /// 灵感卡从市民池跨步抽样（炉计数锚定，确定性——同炉次+同池状态必同批卡）。
+        /// deficits=缺口分区（分区水位低于下限的标签，2026-09-16 修正注记挂 §12 #67）：补炉配额定向给缺口。</summary>
+        private void FireStockForge(in Content.CitySnapshot snapshot, IReadOnlyList<string> deficits)
         {
             var entries = m_CitizenPool.Entries;
             var cards = new List<string>(5);
@@ -259,11 +265,11 @@ namespace CityLife.GameBridge
                 }
             }
             var prompt = Content.PromptBuilder.BuildTheaterStockPrompt(m_Head, snapshot, m_Stock, cards, k_ForgeBatch,
-                Content.ModSettings.StreetTheaterMaxCast); // §12 #67：街头场人数上限进动态尾（设置值天然是动态量，不动固定头）
+                Content.ModSettings.StreetTheaterMaxCast, deficits); // 设置上限+缺口分区都进动态尾（固定头逐字节稳定不动）
             Mod.Gateway!.Enqueue(new Llm.CliRequest(prompt, Llm.CliPriority.Normal, k_ForgeTtl, "theater:" + m_ForgeCount)); // Normal 不 Low：thinking 时代低优先级在队尾等死（§12 #51 实机）
             m_ForgePending = true;
             m_ForgeSince = DateTime.UtcNow;
-            Mod.Log.Info($"[剧场] 剧本炉开炉：池存 {m_Stock.Count}（第 {m_ForgeCount + 1} 炉，产 {k_ForgeBatch} 部）");
+            Mod.Log.Info($"[剧场] 剧本炉开炉：池存 {m_Stock.Count}（缺口：{string.Join("、", deficits)}，第 {m_ForgeCount + 1} 炉，产 {k_ForgeBatch} 部）");
             m_ForgeCount++;
         }
 

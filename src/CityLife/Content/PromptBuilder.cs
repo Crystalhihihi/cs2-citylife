@@ -256,14 +256,15 @@ namespace CityLife.Content
 
         /// <summary>
         /// 剧本炉完整 prompt = 剧本头 + 动态尾：【城市此刻】（DescribeCity 同款，别重复造）
-        /// +【库存】（各场景标签现存部数——迭代 TheaterScriptStock.Scenes 白名单，window/street 自动进低水位配题循环；
-        /// 执行层确定性计数——低水位分区多配题）+【灵感】处境卡（真实市民此刻状态抽样，只借氛围，禁真名真店名）
-        /// + 部数任务（每炉至少 1 部 window（窗口最高频，§12 #56）+ 1 部 street（街头第二高频，§12 #67——
-        /// 六场景一炉 4 部装不下，不配额就永远排不上））。
+        /// +【库存】（各场景标签现存部数——迭代 TheaterScriptStock.Scenes 白名单，执行层确定性计数）
+        /// +【灵感】处境卡（真实市民此刻状态抽样，只借氛围，禁真名真店名）
+        /// + 部数任务（缺口分区定向补给，2026-09-16 修正注记挂 §12 #67：炉只由分区水位触发，deficits 恒非空——
+        /// 配额定向给缺口分区；window/street 在缺口中时至少各 1 部，它俩最高频）。
         /// streetMaxCast=街头闲谈人数上限（§12 #67 设置页值进动态尾——头部逐字节稳定纪律不动，设置值天然是动态量）。
         /// </summary>
         public static string BuildTheaterStockPrompt(string head, in CitySnapshot s, TheaterScriptStock stock,
-                                                     IReadOnlyList<string> inspiration, int count, int streetMaxCast)
+                                                     IReadOnlyList<string> inspiration, int count, int streetMaxCast,
+                                                     IReadOnlyList<string> deficits)
         {
             var sb = new StringBuilder(head.Length + 512);
             sb.Append(head);
@@ -276,15 +277,26 @@ namespace CityLife.Content
                 var sc = TheaterScriptStock.Scenes[i];
                 sb.Append(sc).Append(' ').Append(stock.CountOf(sc)).Append(" 部");
             }
-            sb.Append("——库存少的场景多写。\n");
+            sb.Append("。\n");
             if (inspiration.Count > 0)
             {
                 sb.Append("【灵感】此刻真实市民的状态（只借氛围，禁止照抄人名/店名/原话，禁止把卡里的人写进剧本）：\n");
                 foreach (var c in inspiration)
                     sb.Append("- ").Append(c).Append('\n');
             }
-            sb.Append("【任务】写 ").Append(count).Append(" 部新剧本，一行一部；每部 6-8 句（street 2-12 句可变、别每部都顶格；window 例外：固定 2 句——speaker 1 路人一句、speaker 2 屋里人接一句）；库存少的场景优先，且至少写 1 部 window（窗口是最高频场景）+ 1 部 street（街头是第二高频场景——不配额就永远排不上，六分一场景一炉 4 部装不下）。street 人数最多 ")
-              .Append(streetMaxCast).Append(" 人（当前玩家设置上限，超出的人数现场演不了）。\n");
+            sb.Append("【任务】写 ").Append(count).Append(" 部新剧本，一行一部；每部 6-8 句（street 2-12 句可变、别每部都顶格；window 例外：固定 2 句——speaker 1 路人一句、speaker 2 屋里人接一句）。");
+            if (deficits.Count > 0)
+            {
+                sb.Append("库存见底的分区：");
+                for (var i = 0; i < deficits.Count; i++)
+                {
+                    if (i > 0)
+                        sb.Append('、');
+                    sb.Append(deficits[i]);
+                }
+                sb.Append("——只给这些分区写，每区至少 1 部；window/street 若在列必须各至少 1 部（它俩最高频），写不下时 window/street 优先。");
+            }
+            sb.Append("street 人数最多 ").Append(streetMaxCast).Append(" 人（当前玩家设置上限，超出的人数现场演不了）。\n");
             return sb.ToString();
         }
 

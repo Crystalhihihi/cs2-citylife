@@ -52,8 +52,9 @@ namespace CityLife.GameBridge
     ///    剧场视觉标识）+ Anchors/m_ByAnchor 登记 + EnsureAnchor 五道闸。<b>剧本开播才消耗</b>：
     ///    任一锚点不可锚=开播中止+剧本 Return 退回池+不上冷却（#52：冷却只在终了后上——中止
     ///    不是地点的锅）；全过=RefreshAnchorText 全锚点立即换文案开播。轮次推进挂气泡换文案节拍：
-    ///    BubbleWorldSpikeSystem.TickLifecycle 里任一剧场锚点到时 → OnAnchorRotated → 下一句写到
-    ///    其说话人锚点 + RefreshAnchorText 立即换文案（上条读完下条接话）；SetBubbleText 的插队
+    ///    BubbleWorldSpikeSystem.TickLifecycle 里<b>当前说话人锚点</b>到时 → OnAnchorRotated → 下一句写到
+    ///    其说话人锚点 + RefreshAnchorText 立即换文案（上条读完下条接话）；旁听锚点到期不推轮次——
+    ///    严格串行，同剧组同屏只 1 泡（2026-09-16 玩家定案，注记挂⑦）；SetBubbleText 的插队
     ///    分支 TryGetLine 是**纯查询**，绝不推轮次。
     /// ⑤ 终了：剧本播完 / 任一参与者实体失效 / 任一锚点离屏（气泡系统 Resample 裁掉即检测不到）
     ///    / 地点实体失效（车站被拆）——锚点失效即锁（#28）：终了即给地点上冷却 ≈3 炉节拍防连开；
@@ -74,7 +75,7 @@ namespace CityLife.GameBridge
     ///    六场景一炉 4 部装不下，不配额就永远排不上，PromptEval 首轮 street=0 实锤）。向下取不硬凑：剧本 cast>有效人数时取前 N 名
     ///    小演+丢 speaker 越界台词（丢完不足 2 句弃播退回池）、播放句数截到设置页"最长句数"短演
     ///    （2-12 默认 6）。权重略低（DistToCam ×1.5）防遍地行人锚点挤掉车站/窗口场；放送闸/冷却/
-    ///    终了/不占同屏上限全部复用现有机制。儿童不特别排除（§12 #66 末段）。
+    ///    终了全部复用现有机制（名额账按 2026-09-16 修正注记：剧场泡计入同屏上限但必留）。儿童不特别排除（§12 #66 末段）。
     ///
     /// 上限与降级：同屏活剧场 ≤2（k_MaxActive）；同时在飞最多一炉剧本炉；池空/供给不可用=不开
     /// （不致命，单人吐槽管道照常）。只在评估/收炉低频点查树与扫市民，不进任何每帧/渲染热路径；
@@ -134,7 +135,10 @@ namespace CityLife.GameBridge
             public bool Indoor; // true=锚点是建筑（多人共锚）；false=锚点是行人 agent
         }
 
-        /// <summary>一个活剧场：名单 + 剧本队列 + 当前各锚点在显的台词。</summary>
+        /// <summary>一个活剧场：名单 + 剧本队列 + 当前各锚点在显的台词。
+        /// 严格串行（2026-09-16 玩家定案，注记挂 §12 #67）：同一时刻一个剧组只有一泡在屏上——
+        /// 只有 CurrentAnchor（当前说话人锚点）的 Lines 是真实台词，其余参与者恒"……"（隐身）；
+        /// 上一句 HoldFor 播完才接下一句，接话瞬间上一句立即回"……"让位。</summary>
         private sealed class Theater
         {
             public Entity Location;
@@ -142,9 +146,10 @@ namespace CityLife.GameBridge
             public readonly List<Participant> Participants = new();
             public readonly List<(int Speaker, string Text)> Script = new(); // Speaker=0 基参与者序号
             public int Cursor;              // 下一句待播下标
+            public Entity CurrentAnchor;    // 当前说话人锚点（严格串行：只有它出泡；共锚=恒为那栋建筑）
             public bool Finished;           // 播完标记（OnAnchorRotated 置位，OnUpdate 收尾）
             public readonly List<Entity> Anchors = new();            // 去重后的锚点实体
-            public readonly Dictionary<Entity, string> Lines = new(); // 锚点→当前台词（共锚=最新一句）
+            public readonly Dictionary<Entity, string> Lines = new(); // 锚点→当前台词（共锚=最新一句；非当前说话人恒"……"）
         }
 
         /// <summary>选锚点候选：地点实体 + 已绑名单（≥2 人才算候选成立）+ 剧本场景标签（取件主键）。</summary>
@@ -728,6 +733,7 @@ namespace CityLife.GameBridge
                 }
             var (s0, t0) = t.Script[0];
             t.Lines[t.Participants[s0].Anchor] = t.Participants[s0].Name + "：" + t0; // 名字前缀（§12 #50：多人/共锚分辨说话人，顺带成剧场视觉标识）
+            t.CurrentAnchor = t.Participants[s0].Anchor; // 严格串行（2026-09-16 注记挂 §12 #67）：只有当前说话人出泡
             t.Cursor = 1;
             // 这里不置 Finished（哪怕单句剧本）：Finished 语义=末句被读完，在 OnAnchorRotated 里置——
             // 推句时置会让 TryGetLine 的 !Finished 闸把末句挡在渲染外（2026-09-14"屋里人回话被吃"实锤）
@@ -748,7 +754,8 @@ namespace CityLife.GameBridge
                     return;
                 }
             }
-            // 立即换文案开播（不等各锚点自己的时钟——第一拍就全是剧场台词）
+            // 立即换文案开播（不等各锚点自己的时钟——第一拍说话人就位；旁听者刷成"……"隐身，
+            // 严格串行从开播即成立：同剧组同屏只 1 泡，2026-09-16 注记挂 §12 #67）
             foreach (var a in t.Anchors)
                 bubbles.RefreshAnchorText(a);
             Mod.Log.Info($"[剧场] 开播：{sceneName}（{cand.KindLabel}），{t.Participants.Count} 人 {t.Script.Count} 句：{string.Join("、", names)}");
@@ -809,9 +816,13 @@ namespace CityLife.GameBridge
         internal bool HasActiveOn(Entity anchor)
             => m_ByAnchor.TryGetValue(anchor, out var t) && !t.Finished;
 
-        /// <summary>气泡生命周期回调（BubbleWorldSpikeSystem.TickLifecycle 在任一剧场锚点到时换文案前调）：
+        /// <summary>气泡生命周期回调（BubbleWorldSpikeSystem.TickLifecycle 在剧场锚点到时换文案前调）：
         /// 剧本推进一句——下一句写到其说话人的锚点上，并让该锚点立即换文案（RefreshAnchorText：
         /// 上条读完下条接话，不等说话人自己的时钟）。
+        /// 严格串行（2026-09-16 玩家定案，注记挂 §12 #67）：<b>只有当前说话人锚点（CurrentAnchor）的轮换
+        /// 才推轮次</b>——隐身旁听锚点到期不推（不然旁听者"……"短驻留会抢拍推句）；接话瞬间其余锚点
+        /// 全部回"……"隐身，同一时刻一个剧组只有一泡在屏上（原写法说完的句子挂在各锚点重播，多人句子
+        /// 同屏重叠、占满上限互顶，实机实锤）。共锚（室内多人一栋楼）天然单泡串行，同一套代码覆盖。
         /// <b>Finished 只在"末句被读完"（游标尽头的锚点再次轮换）时置</b>——推末句时就置会让
         /// TryGetLine 的 !Finished 闸把末句挡在渲染外（2026-09-14 实机实锤：窗口剧场 2 句制，
         /// 屋里人回话 100% 被吃）。播完后 OnUpdate 统一收尾。</summary>
@@ -819,6 +830,8 @@ namespace CityLife.GameBridge
         {
             if (!m_ByAnchor.TryGetValue(anchor, out var t) || t.Finished)
                 return;
+            if (anchor != t.CurrentAnchor)
+                return; // 严格串行：只有当前说话人播完（HoldFor 到期）才接下一句；旁听锚点到期不推轮次
             if (t.Cursor >= t.Script.Count)
             {
                 t.Finished = true; // 末句读完，剧终
@@ -826,11 +839,24 @@ namespace CityLife.GameBridge
             }
             var (speaker, text) = t.Script[t.Cursor++];
             var speakerAnchor = t.Participants[speaker].Anchor;
+            // 接话瞬间上一句让位：除新说话人外的锚点全部回"……"隐身（同剧组同屏只 1 泡）
+            foreach (var a in t.Anchors)
+            {
+                if (a == speakerAnchor || t.Lines[a] == "……")
+                    continue;
+                t.Lines[a] = "……";
+                if (a != anchor) // 触发本轮换的锚点由 TickLifecycle 随后的 SetBubbleText 自然落"……"，别重复刷新
+                {
+                    m_BubbleWorld ??= World.GetExistingSystemManaged<BubbleWorldSpikeSystem>();
+                    m_BubbleWorld?.RefreshAnchorText(a); // 立即隐身上一句（RefreshAnchorText 不推轮次，纯换文案）
+                }
+            }
+            t.CurrentAnchor = speakerAnchor;
             t.Lines[speakerAnchor] = t.Participants[speaker].Name + "：" + text; // 名字前缀（§12 #50）
             if (speakerAnchor != anchor)
             {
                 m_BubbleWorld ??= World.GetExistingSystemManaged<BubbleWorldSpikeSystem>();
-                m_BubbleWorld?.RefreshAnchorText(speakerAnchor); // 推轮即时换文案（纯查询路径，无递归）
+                m_BubbleWorld?.RefreshAnchorText(speakerAnchor); // 接话人立即出泡（不等它自己的时钟；纯查询路径，无递归）
             }
         }
 

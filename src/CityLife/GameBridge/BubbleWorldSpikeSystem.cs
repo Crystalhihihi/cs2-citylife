@@ -54,7 +54,9 @@ namespace CityLife.GameBridge
     ///     Ctrl+7/8 底板开关/数量档于设置页上线后砍除（2026-09-09，§12 #45）——改由设置页承载）
     /// 密度/重叠治理（v4.4）：屏幕矩形互斥（底板 footprint 投影、视深为尺）+ 同屏可见上限=采样池/6；
     ///   中选优先级 v5.2 起改滞回（§12 #49，实机"近者优先帧帧翻盘、人堆互顶读不完"的根治）：
-    ///   剧场参与者必留 > 在画泡驻留期内保位（换文案时刻才重新竞争）> 近者优先填坑。
+    ///   剧场参与者必留 > 在画泡驻留期内保位（换文案时刻才重新竞争）> 近者优先填坑；
+    ///   剧场泡计入同屏上限账（2026-09-16 玩家定案，注记挂 §12 #67：占用名额从普通泡预算扣，
+    ///   必留档不变——外部泡顶不掉剧场，剧场叠屏也不再顶掉别人；取代 #55"剧场不占同屏上限"的名额部分）。
     ///   v5.3 起叠加可见端分类比例（§12 #51，"不是所有一起冒"）：楼/车各 ≤上限/3，人不限（人为主）；
     ///   车站不当楼说话（楼查询排除 Game.Routes.WaitingPassengers，车站声音归候车行人/小剧场）；
     ///   长文稳锚：换文案时实测锚点移速，动的限长（>3m/s ≤16 字 / >0.6 ≤32 / 静止 ≤48），楼不限；
@@ -93,7 +95,8 @@ namespace CityLife.GameBridge
     ///   占位文案池自 v5.0 降级为池空兜底（开局炉未出时气泡仍有话）。
     /// 小剧场插队（v5.1，S7，§12 #48 多人小剧场段）：SetBubbleText 最前先问 BubbleTheaterSystem——
     ///   锚点挂在活剧场 → 显示剧本台词而非池片段（TryGetLine 是**纯查询**，绝不推轮次）；
-    ///   轮次推进只走 TickLifecycle 的 OnAnchorRotated 回调（任一参与者气泡到时换下一条→下一人），
+    ///   轮次推进只走 TickLifecycle 的 OnAnchorRotated 回调（当前说话人锚点气泡到时换下一条→下一人，
+    ///   严格串行同剧组同屏 1 泡，2026-09-16 注记挂 §12 #67），
     ///   剧场侧再把新台词经 RefreshAnchorText 推到说话人锚点上（上条读完下条立即接话）。
     ///   供剧场系统的最小 internal 口：HasAnchor（验活）/SnapshotAnchors（选锚点低频快照）/
     ///   EnsureAnchor（绑名单建组，带层开关+存在性+Transform+屏内+容量五道闸）/RefreshAnchorText。
@@ -796,12 +799,13 @@ namespace CityLife.GameBridge
                 if (now >= b.NextAt)
                 {
                     b.TextIdx++;
-                    // S7 小剧场：任一参与者气泡到时换下一条→下一人（剧场内部纯推进，
-                    // 再把新台词 RefreshAnchorText 到说话人锚点上）；非剧场锚点空转
+                    // S7 小剧场：当前说话人锚点到时换下一句→下一人（严格串行，2026-09-16 注记挂 §12 #67——
+                    // 旁听锚点到期在 OnAnchorRotated 里被 CurrentAnchor 闸挡下，不推轮次；
+                    // 剧场内部纯推进，再把新台词 RefreshAnchorText 到说话人锚点上）；非剧场锚点空转
                     Theater?.OnAnchorRotated(b.Anchor);
                     // 换气节奏（§12 #54）：一句说完歇一拍（奇数拍="……"隐身，绘制端跳过不画）——
                     // 一次性消耗下的节奏阀（消耗砍半）+ RimTalk 式"冒出一句→消失→再冒新句"；
-                    // 剧场锚点不歇（对戏不能冷场；"在听"参与者的"……"同样隐身，轮到谁说谁出现）；
+                    // 剧场锚点由剧场侧自管显隐（严格串行：非当前说话人 Lines 恒"……"，轮流出现）；
                     // 事件快反期间照常走换气（§12 #58 定案：惊呼也轮播，不为事件搞特殊节拍）
                     if (b.TextIdx % 2 == 1 && (Theater == null || !Theater.HasActiveOn(b.Anchor)))
                         b.Text = "……";
@@ -1515,15 +1519,16 @@ namespace CityLife.GameBridge
                 // 换文案时刻天然错相=整屏不一起换）③ 剩余坑位近者优先填满。
                 // 旧版纯"近者优先"帧帧翻盘：人堆里深度微变→胜负手每帧换→泡互顶谁也没读完（2026-09-10 实机实锤）。
                 // 可见端分类比例（§12 #51，"不是所有一起冒"）：楼 ≤cap/3、车 ≤cap/3、人不限（人为主 §12 #48 哲学）；
-                // 剧场泡不受分类上限管（必留档高于一切）；且**不占同屏上限**（§12 #55：cap=6 被普通泡占满时
-                // 剧场连保位档门都进不去——"连续对话被吃掉"实机实锤。上限只闸普通泡，剧场量由 k_MaxActive 自限）
+                // 剧场泡不受分类上限管（必留档高于一切）；但**计入同屏上限账**（2026-09-16 玩家定案，注记挂 §12 #67：
+                // 剧场占用名额从普通泡预算扣——原"不占上限"（§12 #55）在严格串行前会让剧场多泡叠屏顶掉别人；
+                // 剧场自身仍不受 cap 闸（必留），外部泡顶不掉它）
                 m_Candidates.Sort((a, b) => a.Score.CompareTo(b.Score)); // 屏心优先的近者（非纯视深）
                 m_Kept.Clear();
                 m_KeptSet.Clear();
                 // 同屏上限：设置页滑杆（§12 #53 稀疏默认，2026-09-11 实机"阅读不过来"改默认 4）；null（主菜单期）回落默认 4
                 var cap = Mod.Options?.BubbleVisibleMax ?? 4;
                 var kindCap = math.max(1, cap / 3); // 楼/车各 ≤1/3（cap 最小 2 时也保 1 个坑）
-                var keptPlain = 0;   // 普通泡计数（上限只闸它）
+                var keptPlain = 0;   // 名额账计数（普通泡+剧场泡都记；上限只闸普通泡——剧场必留）
                 var keptCar = 0;
                 var keptBuilding = 0;
                 var nowU = PaceNow; // 滞回保位比较必须与 NextAt 同时钟（§12 #68）
@@ -1545,8 +1550,8 @@ namespace CityLife.GameBridge
                     {
                         m_Kept.Add(c);
                         m_KeptSet.Add(c.Anchor);
-                        if (isTheater) { } // 剧场不占计数
-                        else { keptPlain++; if (c.Kind == 1) keptCar++; else if (c.Kind == 2) keptBuilding++; }
+                        keptPlain++; // 名额账（2026-09-16 注记挂 §12 #67）：剧场泡也记数——它占的坑普通泡不能再填
+                        if (!isTheater) { if (c.Kind == 1) keptCar++; else if (c.Kind == 2) keptBuilding++; } // 分类比例仍只闸普通泡
                     }
                 }
                 foreach (var c in m_Candidates) // ③ 填坑档

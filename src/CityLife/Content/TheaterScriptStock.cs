@@ -29,7 +29,9 @@ namespace CityLife.Content
     /// 消费口=同系统放送评估（TryTake/Return）。
     ///
     /// 消耗语义（#52 定案）：<b>开播才消耗</b>——TryTake 取出即离池，绑锚失败走 Return 退回
-    /// 不消耗；开播后终了即弃不退。容量上限 MaxCapacity（默认 12），超容先进先出逐出最旧。
+    /// 不消耗；开播后终了即弃不退。容量上限 MaxCapacity（默认 12），超容逐出"库存最多分区"的最旧一部
+    /// （2026-09-17 修正：原纯 FIFO 逐最旧会把没人演的低频分区（street）白白挤出=永远排不上，
+    /// 实机 street 0 开播实锤；最低库存分区受保护）。
     ///
     /// 如何扩展（社区贡献点）：
     ///   · 新场景标签：Scenes 加常量 + 剧本炉 prompt 头（PromptBuilder.BuildTheaterStockHead）
@@ -133,7 +135,9 @@ namespace CityLife.Content
 
         /// <summary>
         /// 剧本炉产出批量入库（收炉装载口）：JSONL salvage 解析（坏行跳过计数）→ 逐部入库，
-        /// 超容先进先出逐出最旧。返回入库部数。
+        /// 超容逐出（修正 2026-09-17：原先进先出逐出最旧——池满时没人演的低频分区（street）剧本
+        /// 被白白挤出=永远排不上，实机 street 0 开播实锤；改为优先逐出"库存最多分区"的最旧一部，
+        /// 最低库存分区受保护）。返回入库部数。
         /// </summary>
         public int AddBatch(string jsonl, out int skipped)
         {
@@ -142,9 +146,29 @@ namespace CityLife.Content
             {
                 m_Entries.Add(s);
                 while (m_Entries.Count > MaxCapacity)
-                    m_Entries.RemoveAt(0); // FIFO 逐出最旧
+                    EvictOldest();
             }
             return scripts.Count;
+        }
+
+        /// <summary>超容逐出：优先逐出库存最多分区的最旧一部（最低库存分区受保护——见 AddBatch 修正注记）；
+        /// 全同分区才退化为纯 FIFO 逐最旧。</summary>
+        private void EvictOldest()
+        {
+            var maxScene = "";
+            var maxCount = -1;
+            for (var i = 0; i < Scenes.Length; i++)
+            {
+                var c = CountOf(Scenes[i]);
+                if (c > maxCount) { maxCount = c; maxScene = Scenes[i]; }
+            }
+            for (var i = 0; i < m_Entries.Count; i++)
+                if (m_Entries[i].Scene == maxScene)
+                {
+                    m_Entries.RemoveAt(i);
+                    return;
+                }
+            m_Entries.RemoveAt(0); // 理论到不了（最大分区必然有成员），纯防御
         }
 
         /// <summary>

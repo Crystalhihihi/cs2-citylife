@@ -627,7 +627,8 @@ namespace CityLife.GameBridge
         /// 从可见行人锚点出发，圈内 30m 抓步行路人组 roster（BindOutdoorRoster 同款口径，
         /// 上限=设置页"街头短剧最大人数"）——熟人偶遇/陌生人搭话均可，现场不足 2 人不开演（不硬凑）。
         /// 地点=出发锚点本体（街头无固定场所：冷却/占用判它，锚点走远失效自然终了="人散"）；
-        /// 标签 street；DistToCam ×k_StreetScorePenalty 权重折扣参与同台竞争（别让它刷屏）。
+        /// 标签 street；DistToCam ×k_StreetScorePenalty 权重折扣参与同台竞争（别让它刷屏；
+        /// 池里有 street 剧本时豁免折扣——有货让路没货才压，2026-09-17 实机 street 0 开播修复）。
         /// 锚点在冷却/在演 → null。</summary>
         private Candidate? ScanStreet((Entity Anchor, byte Kind, float3 Pos) a, float3 camPos,
                                       NativeList<Entity> statics, NativeList<Entity> movers)
@@ -643,7 +644,10 @@ namespace CityLife.GameBridge
                 Pos = a.Pos,
                 KindLabel = "街头",
                 SceneTag = Content.TheaterScriptStock.Street,
-                DistToCam = math.distance(camPos, a.Pos) * k_StreetScorePenalty, // 权重略低（§12 #67：与 window 相当或略低）
+                // 权重略低（§12 #67：与 window 相当或略低）——池里有 street 剧本时豁免折扣
+                // （2026-09-17 实机 street 0 开播修复②：没剧本时本来就赢不了、保持折扣；
+                // 有剧本时压折扣=永远演不了——有货让路，没货才压）
+                DistToCam = math.distance(camPos, a.Pos) * (m_Stock.HasMatch(Content.TheaterScriptStock.Street, Content.ModSettings.StreetTheaterMaxCast) ? 1f : k_StreetScorePenalty),
             };
             BindOutdoorRoster(a.Pos, movers, cand.Roster, Content.ModSettings.StreetTheaterMaxCast);
             return cand.Roster.Count >= k_MinParticipants ? cand : null;

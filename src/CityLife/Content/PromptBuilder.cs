@@ -191,8 +191,12 @@ namespace CityLife.Content
             var pairCards = pairCardNos?.Count ?? 0;
             // §12 #69：卡带系统规格签（"｜写："）才补规格说明——探测现成的卡文本，不动签名（无签卡具=旧回归路径）
             var hasSpec = false;
+            var hasScene = false; // §12 #71：卡带场景签（"｜景："）才补场景语义说明
             for (var i = 0; i < cards.Count; i++)
-                if (cards[i].Contains("｜写：")) { hasSpec = true; break; }
+            {
+                if (cards[i].Contains("｜写：")) hasSpec = true;
+                if (cards[i].Contains("｜景：")) hasScene = true;
+            }
             var sb = new StringBuilder(head.Length + 512);
             sb.Append(head);
             sb.Append("【城市此刻】").Append(DescribeCity(s)).Append('\n');
@@ -201,6 +205,8 @@ namespace CityLife.Content
             sb.Append("；卡里场所词已细分到真实业态（餐饮店/软件公司/服装厂这类——§12 #62），话题贴着这个人的场所业态写，别把餐饮店和学校写成一个味儿");
             if (hasSpec)
                 sb.Append("；\"｜写：\"是系统分配的句型规格、\"｜情：\"是情绪底色（必须服从）");
+            if (hasScene)
+                sb.Append("；\"｜景：\"是这人所在的场景（学校/医院/车站这类），\"｜话核：\"是该场景的话题核——带景签的卡必须写与这场景相关的话（当事人/唠嗑/排队视角都行，别跑题）；没景签的卡自由发挥");
             if (pairCards > 0)
                 sb.Append("，\"｜对：\"后是正和这人走在一起的另一人（双人卡=卡 ").Append(string.Join("、", pairCardNos!)).Append("）");
             sb.Append("：\n");

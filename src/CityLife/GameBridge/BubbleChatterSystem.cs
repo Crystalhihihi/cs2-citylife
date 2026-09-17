@@ -24,6 +24,10 @@ namespace CityLife.GameBridge
     /// §12 #69 写法规格签（2026-09-16 玩家拍板，三变体实验定案）：每张处境卡（人卡+车卡）尾缀系统分配
     /// 规格"｜写：句型｜情：情绪"（ChatterSpec 确定性抽签：炉计数+卡序锚定，同炉同签顺延去重）——
     /// 多样性不靠模型自觉；固定头已删【样子】内容例句（镜像不实锤、句长锚功能移交规格签）。
+    /// §12 #71 场景签（2026-09-17 玩家拍板）：Indoor 卡 60% 掷签贴景——卡文缀"｜景：场景词｜话核：词"
+    /// （SceneWords 执行层写死词表：服务/公共建筑细分，商业走 #62 业态、住宅无词）；贴景卡情绪签从
+    /// 场景推荐子集抽（医院→烦/疼/急/麻木、小学→乐/烦/馋/困…），不贴的走日常套；街上卡不缀场景签
+    /// =自由发挥型（玩家原话）。60/40 闸在执行层，prompt 只负责服从。
     ///
     /// 节拍锚游戏时间（#48：与信息流同尺——暂停=零成本、倍速=生成消费同速放大）：
     /// Now = SimulationSystem.frameIndex（模拟 tick，暂停即停走），游戏分钟 = TicksPerHour/60
@@ -183,9 +187,28 @@ namespace CityLife.GameBridge
                         pairCardNos.Add(k + 1); // 卡号 1 起，与 prompt 卡序对齐
                     }
                 }
+                // §12 #71 场景签（2026-09-17 玩家拍板）：Indoor 卡 60% 掷签贴景（炉计数+卡序确定性）——
+                // 场景词+话核（从该场景话核小组抽 1-2）缀卡文，情绪签从场景推荐子集抽；不贴的照常、
+                // 街上（Walk）卡不缀=自由发挥型（玩家口径）；服务/公共建筑词表写死执行层（SceneWords）
+                string[]? sceneMoods = null;
+                if (entry.Occasion == Content.BubbleOccasion.Indoor
+                    && (m_ForgeCount + (uint)k) % 5u < 3u
+                    && EntityManager.HasComponent<CurrentBuilding>(entry.Entity))
+                {
+                    var row = SceneWords.Of(EntityManager,
+                        EntityManager.GetComponentData<CurrentBuilding>(entry.Entity).m_CurrentBuilding);
+                    if (row != null)
+                    {
+                        card += "｜景：" + row.Word + "｜话核：" + SceneWords.PickCores(row, m_ForgeCount, k);
+                        sceneMoods = row.Moods;
+                    }
+                }
                 // §12 #69 写法规格签：卡尾缀"｜写：句型｜情：情绪"（ChatterSpec 执行层确定性抽签，
-                // 炉计数+卡序锚定+同炉同签顺延去重；LLM 只服从不参与分配——多样性不靠模型自觉）
-                card += Content.ChatterSpec.TagFor(m_ForgeCount, k, usedSpecs);
+                // 炉计数+卡序锚定+同炉同签顺延去重；LLM 只服从不参与分配——多样性不靠模型自觉；
+                // §12 #71 联动：贴景卡情绪从场景推荐子集抽，其余走日常套）
+                card += sceneMoods != null
+                    ? Content.ChatterSpec.TagFor(m_ForgeCount, k, usedSpecs, sceneMoods)
+                    : Content.ChatterSpec.TagFor(m_ForgeCount, k, usedSpecs);
                 cards.Add(card);
                 m_CurrentPairs.Add(pair);
                 m_CurrentOccasions.Add(entry.Occasion); // 场合随卡盖章（§12 #60 刀①：采样时已确定，收炉按 card 回填）

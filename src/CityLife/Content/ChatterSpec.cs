@@ -50,8 +50,13 @@ namespace CityLife.Content
         /// 指标/评测要拿句型索引用本方法（别解析签文本）。</summary>
         public static (int Shape, int Mood) Assign(uint salt, int cardIdx, HashSet<(int Shape, int Mood)> used,
                                                    MoodSet set = MoodSet.Daily)
+            => Assign(salt, cardIdx, used, MoodsOf(set));
+
+        /// <summary>自定义情绪子集重载（§12 #71 场景签联动：贴景卡从场景行的推荐子集抽情绪）。
+        /// 情绪索引是 moods 数组内下标；used 集合与日常套共用（同炉同签去重跨子集也成立）。</summary>
+        public static (int Shape, int Mood) Assign(uint salt, int cardIdx, HashSet<(int Shape, int Mood)> used,
+                                                   string[] moods)
         {
-            var moods = MoodsOf(set);
             var total = Shapes.Length * moods.Length;
             var baseIdx = (int)((salt * 7 + (uint)cardIdx * 13) % (uint)total);
             for (var step = 0; step < total; step++)
@@ -71,6 +76,14 @@ namespace CityLife.Content
         {
             var (s, m) = Assign(salt, cardIdx, used, set);
             return s < 0 ? "" : $"｜写：{Shapes[s]}｜情：{MoodsOf(set)[m]}";
+        }
+
+        /// <summary>自定义情绪子集的签后缀（§12 #71 场景签联动）。</summary>
+        public static string TagFor(uint salt, int cardIdx, HashSet<(int Shape, int Mood)> used,
+                                    string[] moods)
+        {
+            var (s, m) = Assign(salt, cardIdx, used, moods);
+            return s < 0 ? "" : $"｜写：{Shapes[s]}｜情：{moods[m]}";
         }
     }
 }

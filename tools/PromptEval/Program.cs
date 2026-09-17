@@ -34,11 +34,12 @@ internal static class Program
     // 塌缩组：照抄实机日志分布（夜晚住宅区，退休/呆着占绝对大头）——复现"10句4猫"的输入条件
     // §12 #63：带"｜对："段的是双人卡（执行层拼好的生产形态——配对只发生在一开始的 Walk 卡上）
     // §12 #62（2026-09-16）：卡具刷新为业态细分后的生产形态（便利店/软件公司/服装厂进卡文，住宅无业态照旧）
+    // §12 #71（2026-09-17）：卡具带"｜景：｜话核："场景签（生产组卡 60/40 掷签后的形态），验证贴景服从
     private static readonly string[] k_Collapsed =
     {
         "手头紧的退休大妈，在住宅区呆着",
         "退休大爷，在住宅区呆着",
-        "手头紧的退休大妈，在住宅区呆着",
+        "退休大爷，在医院里看病｜景：医院｜话核：打针/排队",
         "家庭主妇，在住宅区呆着",
         "退休大爷，在公园里溜达｜对：退休大妈，在公园里跳广场舞",
         "手头紧的退休大妈，在住宅区呆着",
@@ -54,7 +55,7 @@ internal static class Program
         "手头紧的上班族，开私家车上班路上（去建材厂）",
         "游客，在公园里溜达｜对：游客，在公园里拍照",
         "退休大爷，在公园里溜达",
-        "上班族，在软件公司里摸鱼",
+        "学生，在学校里上课｜景：中学｜话核：考试/晚自习",
         "货车司机，开货车送货路上（去便利店）",
         "青年，走路去服装店路上｜对：上班族，走路去地铁站路上",
     };
@@ -360,6 +361,31 @@ internal static class Program
                 digitHit++;
         }
 
+        // §12 #71 场景贴题率：卡具里带"｜景：…｜话核：词1/词2"的卡，其条目含任一话核词的占比
+        // （话核从卡文现解，不硬编码——卡具换词指标自动跟上）
+        var sceneCores = new string[]?[cards.Length];
+        for (var i = 0; i < cards.Length; i++)
+        {
+            var mk = cards[i].IndexOf("｜话核：", StringComparison.Ordinal);
+            if (mk < 0)
+                continue;
+            var rest = cards[i][(mk + "｜话核：".Length)..];
+            var cut = rest.IndexOf('｜');
+            sceneCores[i] = (cut >= 0 ? rest[..cut] : rest).Split('/');
+        }
+        var sceneTotal = 0; var sceneHit = 0;
+        if (sceneCores.Any(c => c != null))
+            for (var i = 0; i < all.Count; i++)
+            {
+                var e = all[i];
+                if (e.Card < 1 || e.Card > cards.Length || sceneCores[e.Card - 1] == null)
+                    continue;
+                sceneTotal++;
+                var body = BodyOf(e);
+                if (sceneCores[e.Card - 1]!.Any(w => body.Contains(w)))
+                    sceneHit++;
+            }
+
         Console.WriteLine($"\n== chatter/{label} 汇总（{all.Count} 条，解析丢 {totalSkipped}）==");
         Console.WriteLine($"  猫密度     : {catHits}/{all.Count} = {Pct(catHits, n)}");
         Console.WriteLine($"  场合映射   : {string.Join("  ", Enum.GetValues<BubbleOccasion>().Select(o => $"{o}={occ.GetValueOrDefault(o)}"))}  无归属={Pct(orphan, n)}");
@@ -371,6 +397,8 @@ internal static class Program
         Console.WriteLine($"  词汇多样性 : 去重句 {distinctLines}/{bodies.Length}，相异bigram {vocabRate:P0}");
         Console.WriteLine($"  AI腔       : {aiHits.Length}/{bodies.Length}{(aiHits.Length > 0 ? "（" + aiHits[0] + "）" : "")}");
         Console.WriteLine($"  规格对照   : \"带数字长句\"锚定卡 {digitTotal} 条带数字 {Pct(digitHit, Math.Max(1, digitTotal))}（v0/v2=实测 v1=无签对照）");
+        if (sceneTotal > 0)
+            Console.WriteLine($"  场景贴题率 : {sceneHit}/{sceneTotal} = {Pct(sceneHit, sceneTotal)}（§12 #71 景签卡条目含话核词占比）");
 
         report.Append("## chatter / ").Append(label).Append("\n\n");
         report.Append("- 条数：").Append(all.Count).Append("（解析丢 ").Append(totalSkipped).Append("）\n");
@@ -384,6 +412,8 @@ internal static class Program
         report.Append($"- 词汇多样性：去重句 {distinctLines}/{bodies.Length}，相异 bigram 占比 {vocabRate:P0}\n");
         report.Append($"- AI腔巡检：{aiHits.Length}/{bodies.Length} 命中\n");
         report.Append($"- 规格对照（\"带数字长句\"锚定卡条目数字出现率，含中文数词；v0/v2=实测 v1=无签对照）：{Pct(digitHit, Math.Max(1, digitTotal))} ({digitHit}/{digitTotal})\n");
+        if (sceneTotal > 0)
+            report.Append($"- 场景贴题率（§12 #71 景签卡条目含话核词占比）：{Pct(sceneHit, sceneTotal)} ({sceneHit}/{sceneTotal})\n");
         if (topMirror.Count > 0)
         {
             report.Append("- 镜像最高分样本：\n");

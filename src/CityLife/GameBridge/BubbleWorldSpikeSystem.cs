@@ -225,6 +225,8 @@ namespace CityLife.GameBridge
         private const int k_MaxActiveEvents = 8;   // 活动事件表上限（溢出口径见 RefreshActiveEvents）
         private EntityQuery m_FireQuery = default!;
         private EntityQuery m_AccidentQuery = default!;
+        private EntityQuery m_InvolvedQuery = default!;     // 事故坐标三级链·车祸涉事（#58 快反用，2026-09-17 盲区修复）
+        private EntityQuery m_CrimeVictimQuery = default!;  // 事故坐标三级链·犯罪受害市民（同上）
         private readonly List<ActiveEvent> m_ActiveEvents = new(k_MaxActiveEvents);
         private readonly HashSet<Entity> m_LoggedEvents = new();   // 已打"新事件"日志的源实体（防抖：同实体不重复打）
         private readonly List<Entity> m_LoggedPruneScratch = new();
@@ -400,6 +402,17 @@ namespace CityLife.GameBridge
                 ComponentType.Exclude<Game.Tools.Temp>());
             m_AccidentQuery = GetEntityQuery(
                 ComponentType.ReadOnly<Game.Events.AccidentSite>(),
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
+            // 事故坐标三级链的当事人查询（2026-09-17 盲区修复：AccidentSite 本体/m_Event 常无 Transform，
+            // EventNewsSystem 快讯方位落"市区"兜底实锤）——车祸涉事反查/犯罪受害市民现位，
+            // 与 EventSceneSystem 共享 TryGetSitePosShared 一条链（一处定义）
+            m_InvolvedQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Events.InvolvedInAccident>(),
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
+            m_CrimeVictimQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Citizens.CrimeVictim>(),
                 ComponentType.Exclude<Game.Common.Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
             m_InstanceBufferID = Shader.PropertyToID("instanceBuffer"); // shader 侧结构化缓冲名（TLE 实锤）
@@ -969,8 +982,8 @@ namespace CityLife.GameBridge
                 var isTraffic = (site.m_Flags & Game.Events.AccidentSiteFlags.TrafficAccident) != 0;
                 if (!isCrime && !isTraffic)
                     continue;
-                if (!TryGetSitePos(e, site, out var p))
-                    continue; // 拿不到位置的现场无法做距离判定，不收
+                if (!TryGetSitePos(e, site, isTraffic, out var p))
+                    continue; // 三级链全空（坐标失败由 EventSceneSystem 打一次日志，这里静默防双报）
                 m_ActiveEvents.Add(new ActiveEvent
                     { Kind = isCrime ? BubbleEventKind.Crime : BubbleEventKind.Traffic, Pos = p, Source = e });
             }
@@ -998,24 +1011,12 @@ namespace CityLife.GameBridge
                 m_LoggedEvents.Remove(e);
         }
 
-        /// <summary>事故现场取位置：本体 Transform → m_Event 的 Transform → 放弃
-        /// （EventNewsSystem.DirectionOfSite 同路径——AccidentSite 现场实体自身未必有 Transform）。</summary>
-        private bool TryGetSitePos(Entity siteEntity, Game.Events.AccidentSite site, out float3 pos)
-        {
-            if (EntityManager.HasComponent<Transform>(siteEntity))
-            {
-                pos = EntityManager.GetComponentData<Transform>(siteEntity).m_Position;
-                return true;
-            }
-            if (site.m_Event != Entity.Null && EntityManager.Exists(site.m_Event)
-                && EntityManager.HasComponent<Transform>(site.m_Event))
-            {
-                pos = EntityManager.GetComponentData<Transform>(site.m_Event).m_Position;
-                return true;
-            }
-            pos = default;
-            return false;
-        }
+        /// <summary>事故现场取位置：三级链全交 EventSceneSystem.TryGetSitePosShared（本体→事件→当事人，
+        /// 2026-09-17 盲区修复——车祸/犯罪现场实体与事件实体常都无 Transform，EventNewsSystem 快讯方位
+        /// 落"市区"兜底实锤；一处定义两系统共用）。isTraffic 分流第三级（涉事车辆/受害市民）。</summary>
+        private bool TryGetSitePos(Entity siteEntity, Game.Events.AccidentSite site, bool isTraffic, out float3 pos)
+            => EventSceneSystem.TryGetSitePosShared(EntityManager, siteEntity, site, isTraffic,
+                                                    m_InvolvedQuery, m_CrimeVictimQuery, out pos, out _);
 
         /// <summary>事件快反选取（SetBubbleText 低频路径专用）：锚点在任一活动事件点 k_EventRadius 内 →
         /// 该事件类型的反应模板（多个命中取最近）。salt=锚点.Index+textIdx 确定性轮换——同泡连换两条

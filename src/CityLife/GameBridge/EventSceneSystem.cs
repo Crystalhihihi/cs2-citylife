@@ -90,6 +90,7 @@ namespace CityLife.GameBridge
 
         // 死亡限流状态
         private readonly HashSet<Entity> m_PrevDead = new();
+        private readonly HashSet<Entity> m_NoPosLogged = new(); // 坐标链全空已打日志的现场（每现场只打一次，防刷屏）
         private int m_DeathsSince;
         private uint m_LastDeathRumorFrame;
         private bool m_DeathBaselineSet;
@@ -233,13 +234,23 @@ namespace CityLife.GameBridge
                               && (site.m_Flags & AccidentSiteFlags.CrimeFinished) == 0;
                 if (!isTraffic && !isCrime)
                     continue;
-                if (!TryGetSitePos(e, site, out var pos))
-                    continue; // 拿不到位置的现场无法做圈定，不收
+                var type = isTraffic ? SceneType.Traffic : SceneType.Crime;
+                // 坐标三级链（2026-09-17 实机盲区修复：EventNewsSystem 快讯方位落"市区"兜底=现场本体与 m_Event
+                // 都无 Transform，二级链曾静默丢弃全部车祸/犯罪现场）：本体→事件→当事人（车祸涉事车必有坐标/
+                // 犯罪受害市民现位）。三级全空=打日志一次（下拍照重试——涉事者链接晚几帧挂上是常态）
+                if (!TryGetSitePosShared(EntityManager, e, site, isTraffic, m_InvolvedQuery, m_CrimeVictimQuery,
+                                         out var pos, out var posSource))
+                {
+                    if (m_NoPosLogged.Add(e))
+                        Mod.Log.Info($"[现场] 发现{TypeName(type)}但坐标三级链全空（现场 {e.Index}:{e.Version}），暂不收入（下拍再试）");
+                    continue;
+                }
+                m_NoPosLogged.Remove(e); // 坐标链晚挂上的现场成功收入后销账（防表无限涨顺带）
                 var s = new SceneEvent
                 {
                     Source = e,
                     EventEntity = site.m_Event,
-                    Type = isTraffic ? SceneType.Traffic : SceneType.Crime,
+                    Type = type,
                     Pos = pos,
                     FirstSeenFrame = Now,
                 };
@@ -249,7 +260,7 @@ namespace CityLife.GameBridge
                     BindCrimeVictims(s);
                 s.Severity = MatchIconSeverity(s.Pos, isTraffic ? 100 : 50); // 兜底：车祸 Warning、犯罪 Problem
                 m_Scenes.Add(s);
-                Mod.Log.Info($"[现场] 发现：{TypeName(s.Type)} @({s.Pos.x:F0},{s.Pos.z:F0})（烈度 {SeverityName(s.Severity)}，受害 {s.Victims.Count}{(s.HasHurtVictim ? "含伤" : "")}）");
+                Mod.Log.Info($"[现场] 发现：{TypeName(s.Type)} @({s.Pos.x:F0},{s.Pos.z:F0})（坐标={posSource}，烈度 {SeverityName(s.Severity)}，受害 {s.Victims.Count}{(s.HasHurtVictim ? "含伤" : "")}）");
                 TryFireOnlookerForge(s);
             }
             sites.Dispose();
@@ -327,7 +338,7 @@ namespace CityLife.GameBridge
             {
                 if (s.Victims.Count >= 4)
                     break;
-                var pos = CitizenPos(e);
+                var pos = CitizenPosOf(EntityManager, e);
                 if (pos.HasValue && math.distance(pos.Value, s.Pos) <= k_ReactRadius)
                     AddVictim(s, e);
             }
@@ -558,41 +569,85 @@ namespace CityLife.GameBridge
 
         // —— 工具 ——
 
-        /// <summary>事故现场取位置：本体 Transform → m_Event 的 Transform → 放弃
-        /// （EventNewsSystem.TryGetSitePos 同路径——AccidentSite 现场实体自身未必有 Transform）。</summary>
-        private bool TryGetSitePos(Entity siteEntity, AccidentSite site, out float3 pos)
+        /// <summary>事故现场取位置三级链（2026-09-17 实机实锤盲区修复——EventNewsSystem 快讯方位落"市区"兜底=
+        /// 现场本体与 m_Event 都无 Transform，此前二级链静默丢弃全部车祸/犯罪现场；本系统的发现闸与
+        /// BubbleWorldSpikeSystem 的 #58 事件快反共用这一条，internal static 一处定义别复制粘贴）：
+        /// ① 本体 Transform → ② m_Event 的 Transform → ③ 当事人坐标（车祸=InvolvedInAccident 反查涉事实体
+        /// 首个可读 Transform——车在路上必有；犯罪=CrimeVictim 受害市民现位，抢在哪人就在哪；
+        /// 并发多起犯罪时跨现场串位概率存在但低，兜底语义可接受）。posSource 命中级别（日志标注用）。
+        /// 查询纪律：③级用调用方传入的缓存查询（OnCreate 缓存排 Temp/Deleted，两系统各传各的）。</summary>
+        internal static bool TryGetSitePosShared(EntityManager em, Entity siteEntity, AccidentSite site,
+                                                 bool isTraffic, EntityQuery involvedQuery, EntityQuery crimeVictimQuery,
+                                                 out float3 pos, out string posSource)
         {
-            if (EntityManager.HasComponent<Transform>(siteEntity))
+            if (em.HasComponent<Transform>(siteEntity))
             {
-                pos = EntityManager.GetComponentData<Transform>(siteEntity).m_Position;
+                pos = em.GetComponentData<Transform>(siteEntity).m_Position;
+                posSource = "本体";
                 return true;
             }
-            if (site.m_Event != Entity.Null && EntityManager.Exists(site.m_Event)
-                && EntityManager.HasComponent<Transform>(site.m_Event))
+            if (site.m_Event != Entity.Null && em.Exists(site.m_Event)
+                && em.HasComponent<Transform>(site.m_Event))
             {
-                pos = EntityManager.GetComponentData<Transform>(site.m_Event).m_Position;
+                pos = em.GetComponentData<Transform>(site.m_Event).m_Position;
+                posSource = "事件";
                 return true;
+            }
+            if (isTraffic)
+            {
+                // 车祸第三级：涉事者反查（车辆在路上必有 Transform）
+                var arr = involvedQuery.ToEntityArray(Allocator.Temp);
+                foreach (var e in arr)
+                {
+                    var inv = em.GetComponentData<InvolvedInAccident>(e);
+                    if (inv.m_Event == site.m_Event && em.HasComponent<Transform>(e))
+                    {
+                        pos = em.GetComponentData<Transform>(e).m_Position;
+                        posSource = "涉事者";
+                        arr.Dispose();
+                        return true;
+                    }
+                }
+                arr.Dispose();
+            }
+            else
+            {
+                // 犯罪第三级：受害市民现位（CrimeVictim 无事件回指，空间上就在现场）
+                var arr = crimeVictimQuery.ToEntityArray(Allocator.Temp);
+                foreach (var e in arr)
+                {
+                    var vpos = CitizenPosOf(em, e);
+                    if (vpos.HasValue)
+                    {
+                        pos = vpos.Value;
+                        posSource = "受害者";
+                        arr.Dispose();
+                        return true;
+                    }
+                }
+                arr.Dispose();
             }
             pos = default;
+            posSource = "";
             return false;
         }
 
-        /// <summary>市民现位（犯罪受害空间圈用）：CurrentBuilding→建筑位 / CurrentTransport→agent 位
-        /// （BubbleChatterSystem.CitizenPosition 同口径，一处定义别复制粘贴的简化版）。</summary>
-        private float3? CitizenPos(Entity citizen)
+        /// <summary>市民现位（犯罪受害空间圈/犯罪坐标兜底用）：CurrentBuilding→建筑位 / CurrentTransport→agent 位
+        /// （BubbleChatterSystem.CitizenPosition 同口径的静态化——三级链与圈人共用）。</summary>
+        private static float3? CitizenPosOf(EntityManager em, Entity citizen)
         {
-            if (EntityManager.HasComponent<CurrentBuilding>(citizen))
+            if (em.HasComponent<CurrentBuilding>(citizen))
             {
-                var b = EntityManager.GetComponentData<CurrentBuilding>(citizen).m_CurrentBuilding;
-                if (EntityManager.HasComponent<Transform>(b))
-                    return EntityManager.GetComponentData<Transform>(b).m_Position;
+                var b = em.GetComponentData<CurrentBuilding>(citizen).m_CurrentBuilding;
+                if (em.HasComponent<Transform>(b))
+                    return em.GetComponentData<Transform>(b).m_Position;
                 return null;
             }
-            if (EntityManager.HasComponent<CurrentTransport>(citizen))
+            if (em.HasComponent<CurrentTransport>(citizen))
             {
-                var t = EntityManager.GetComponentData<CurrentTransport>(citizen).m_CurrentTransport;
-                if (t != Entity.Null && EntityManager.HasComponent<Transform>(t))
-                    return EntityManager.GetComponentData<Transform>(t).m_Position;
+                var t = em.GetComponentData<CurrentTransport>(citizen).m_CurrentTransport;
+                if (t != Entity.Null && em.HasComponent<Transform>(t))
+                    return em.GetComponentData<Transform>(t).m_Position;
             }
             return null;
         }

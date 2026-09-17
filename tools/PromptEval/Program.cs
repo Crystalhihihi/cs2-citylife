@@ -298,7 +298,7 @@ internal static class Program
             if (e.Card >= 1 && e.Card <= cards.Length && pairs[e.Card - 1])
             {
                 var (na, nb) = pairNames[e.Card - 1];
-                var text = na + "：" + e.A + "\n" + nb + "：" + e.B; // 模拟生产 ComposeDialogue
+                var text = na + "：" + e.A + "\n" + nb + "：" + e.B; // 历史拼装形态模拟（生产已于 2026-09-17 改即席剧串行双泡，§12 #63 修正注记——本指标仅剩 schema 句长观测意义）
                 composed++;
                 if (text.Length > 40)
                     composedOver++;

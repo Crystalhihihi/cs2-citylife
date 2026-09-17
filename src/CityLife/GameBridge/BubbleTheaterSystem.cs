@@ -761,6 +761,79 @@ namespace CityLife.GameBridge
             Mod.Log.Info($"[剧场] 开播：{sceneName}（{cand.KindLabel}），{t.Participants.Count} 人 {t.Script.Count} 句：{string.Join("、", names)}");
         }
 
+        /// <summary>即席剧注入（§12 #63 修正，2026-09-17 玩家三次实机反馈定案：配对对话卡废除"单泡双行"，
+        /// 改串行双泡——你一句我一句）：收炉到货时把配对双人卡当 cast=2/lines=2 的微型剧场开播——
+        /// 预绑 A/B 真人（配对时扫到的市民，不走 roster 抓人/剧本池/放送评估），显示语义与 #67 严格串行
+        /// 完全一致（CurrentAnchor 闸：A 句 HoldFor 播完消失、B 句再接；同组同屏只 1 泡；剧场泡必留+
+        /// 计入同屏上限账，世界泡侧零改动复用）。
+        /// 拒收即 false（调用方降级只留 A 句独白入池，别硬演）：剧场开关关/同屏满员/气泡层未就绪/
+        /// 演员实体失效/在他组串场/任一方已不在步行（进楼/上车→无 agent）/锚点五道闸不过。
+        /// 即席剧无剧本可退——不入池不消耗（剧本池语义不涉及）；地点=agentA（冷却语义同街头场，ephemeral 无妨）。</summary>
+        internal bool InjectPairPlay(Entity citizenA, string nameA, string lineA, Entity citizenB, string nameB, string lineB)
+        {
+            if (!Content.ModSettings.BubbleTheaterEnabled)
+                return false; // 剧场开关关="不成组"——即席剧同闸
+            if (m_Active.Count >= k_MaxActive)
+                return false; // 同屏满员
+            m_BubbleWorld ??= World.GetExistingSystemManaged<BubbleWorldSpikeSystem>();
+            var bubbles = m_BubbleWorld; // 局部变量落地（编译器 nullable 流分析认局部不认字段）
+            if (bubbles == null)
+                return false;
+            if (!EntityManager.Exists(citizenA) || !EntityManager.Exists(citizenB)
+                || InUse(citizenA) || InUse(citizenB))
+                return false; // 演员到货窗口期内离场/串场
+            if (!TryGetWalkerAgent(citizenA, out var agentA) || !TryGetWalkerAgent(citizenB, out var agentB))
+                return false; // 已不在步行（进楼/上车）——即席剧只锚行人 agent（台词是擦肩对话）
+            if (agentA == agentB || m_ByAnchor.ContainsKey(agentA) || m_ByAnchor.ContainsKey(agentB))
+                return false;
+
+            var t = new Theater { Location = agentA, SceneName = "街头即席" };
+            t.Participants.Add(new Participant { Citizen = citizenA, Anchor = agentA, Name = nameA, Indoor = false });
+            t.Participants.Add(new Participant { Citizen = citizenB, Anchor = agentB, Name = nameB, Indoor = false });
+            t.Script.Add((0, lineA));
+            t.Script.Add((1, lineB));
+            t.Lines[agentA] = nameA + "：" + lineA; // 名字前缀（§12 #50：分辨说话人+剧场视觉标识）
+            t.Lines[agentB] = "……"; // 在听（严格串行：B 等 A 说完）
+            t.Anchors.Add(agentA);
+            t.Anchors.Add(agentB);
+            t.CurrentAnchor = agentA;
+            t.Cursor = 1;
+            // 登记+锚点建组（五道闸在 EnsureAnchor；与 StartTheater 开播段同构——即席剧无剧本可退，回滚即弃）
+            m_Active.Add(t);
+            m_ByAnchor[agentA] = t;
+            m_ByAnchor[agentB] = t;
+            foreach (var a in t.Anchors)
+            {
+                if (!bubbles.EnsureAnchor(a, 0))
+                {
+                    m_ByAnchor.Remove(agentA);
+                    m_ByAnchor.Remove(agentB);
+                    m_Active.Remove(t);
+                    Mod.Log.Info($"[剧场] 即席剧拒收：{nameA}×{nameB}（锚点不可锚：离屏/层关/容量满），降级独白");
+                    return false;
+                }
+            }
+            // 立即换文案开播（A 出句 B 隐身；不等各自时钟，同 StartTheater）
+            bubbles.RefreshAnchorText(agentA);
+            bubbles.RefreshAnchorText(agentB);
+            Mod.Log.Info($"[剧场] 即席剧开播：{nameA}×{nameB}（串行双泡 2 句）");
+            return true;
+        }
+
+        /// <summary>市民 → 其步行行人 agent（CurrentTransport 回指；Human+Transform 双闸——进楼/上车即无，拒收降级）。</summary>
+        private bool TryGetWalkerAgent(Entity citizen, out Entity agent)
+        {
+            agent = Entity.Null;
+            if (!EntityManager.HasComponent<CurrentTransport>(citizen))
+                return false;
+            var t = EntityManager.GetComponentData<CurrentTransport>(citizen).m_CurrentTransport;
+            if (t == Entity.Null || !EntityManager.HasComponent<Game.Creatures.Human>(t)
+                || !EntityManager.HasComponent<Transform>(t))
+                return false;
+            agent = t;
+            return true;
+        }
+
         /// <summary>占位填充（§12 #60 刀⑥剧场槽位化）：{place}→场景真名、{nameN}→第 N 个参与者真人名
         /// （生成时写槽、放送时填——库存剧本的通用性与在地具体感的换层解；§12 #67 起槽位放开到 name5，
         /// street cast 可到 5）。

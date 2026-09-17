@@ -16,9 +16,11 @@ namespace CityLife.GameBridge
     /// S5 接气泡世界层后刷屏不再花 token（本任务不接世界层，只备好池子）。
     /// S6 环境圈摘要：组炉时对每张被选中的处境卡按市民实体现位查一次 EnvironmentDigestSystem.BuildDigest
     /// （40m 半径四叉树聚类蒸馏），非空缀"｜旁边：X、Y"进卡的 prompt 文本；每炉查询次数=卡片数（≤14），不进热路径。
-    /// §12 #63 对话场景卡：组炉时对 Walk 卡约 60% 槽位（炉计数+卡序锚定）复用环境圈现位 CollectAround(12m)
-    /// 找步行市民 B 组双人卡（卡文缀"｜对：B处境"），LLM 对该卡输出 a/b 两句各 ≤12 字的对话，
-    /// 收炉执行层拼"名字A：a\n名字B：b"单条 Text（渲染零改动），凑不到 B 天然降级独白；车辆卡保持独白。
+    /// §12 #63 对话场景卡（2026-09-17 形态修正：显示层改串行双泡，玩家三次实机反馈）：组炉时对 Walk 卡约 60%
+    /// 槽位（炉计数+卡序锚定）复用环境圈现位 CollectAround(12m) 找步行市民 B 组双人卡（卡文缀"｜对：B处境"），
+    /// LLM 对该卡输出 a/b 两句各 ≤12 字的对话；收炉注入 BubbleTheaterSystem.InjectPairPlay 当即席剧开播
+    /// （预绑 A/B 真人锚点，CurrentAnchor 严格串行——A 句 HoldFor 播完泡消失、B 句再接，剧场同款"你一句我一句"）；
+    /// 拒收（演员离场/离屏/满员/剧场开关关）→ 只留 A 句降级独白入池；凑不到 B 天然降级独白；车辆卡保持独白。
     /// §12 #69 写法规格签（2026-09-16 玩家拍板，三变体实验定案）：每张处境卡（人卡+车卡）尾缀系统分配
     /// 规格"｜写：句型｜情：情绪"（ChatterSpec 确定性抽签：炉计数+卡序锚定，同炉同签顺延去重）——
     /// 多样性不靠模型自觉；固定头已删【样子】内容例句（镜像不实锤、句长锚功能移交规格签）。
@@ -57,6 +59,7 @@ namespace CityLife.GameBridge
         private SimulationSystem m_SimulationSystem = default!;
         private EnvironmentDigestSystem m_Environment = default!; // S6 环境圈摘要：组炉时逐卡查"旁边有什么"
         private Game.UI.NameSystem? m_NameSystem;           // 惰性：车卡目的地真名层（§12 #62；拿不到=类别词兜底）
+        private BubbleTheaterSystem? m_Theater;             // 惰性：收炉注入即席剧（§12 #63 形态修正 2026-09-17；主菜单世界可能不存在）
 
         private readonly Content.BubbleSnippetPool m_Pool = new();
         private string m_Head = "";
@@ -67,7 +70,7 @@ namespace CityLife.GameBridge
         private DateTime m_ForgeSince;        // 发炉墙钟（UTC）：网关过期丢弃不回包，TTL+60s 兜底解锁
         private readonly List<string> m_CurrentZones = new(); // 在飞炉的话题分区（与处境卡序对齐，收炉按 card 回填 Zone 用）
         private readonly List<Content.BubbleOccasion> m_CurrentOccasions = new(); // 在飞炉的场合（与处境卡序对齐，§12 #60 刀①执行层盖章，收炉按 card 回填）
-        private readonly List<(string NameA, string NameB)?> m_CurrentPairs = new(); // 在飞炉的配对（与处境卡序对齐，§12 #63：null=该卡独白；收炉拼"名字A：a\n名字B：b"用）
+        private readonly List<(string NameA, string NameB, Entity A, Entity B)?> m_CurrentPairs = new(); // 在飞炉的配对（与处境卡序对齐，§12 #63：null=该卡独白；收炉注入即席剧用——串行双泡要真人实体，2026-09-17 形态修正后带 A/B 实体）
 
         /// <summary>气泡片段池（S5 展示层取泡口；主线程只读）。</summary>
         public Content.BubbleSnippetPool Snippets => m_Pool;
@@ -168,7 +171,7 @@ namespace CityLife.GameBridge
                 }
                 // §12 #63 对话场景卡：Walk 卡约 60% 槽位尝试配对（炉计数+卡序锚定，确定性）——
                 // 复用上面环境圈已解出的现位做圆心（成本零新增数量级），凑不到 B 天然降级独白（不硬凑）
-                (string NameA, string NameB)? pair = null;
+                (string NameA, string NameB, Entity A, Entity B)? pair = null;
                 if (entry.Occasion == Content.BubbleOccasion.Walk && pos.HasValue
                     && (m_ForgeCount + (uint)k) % 5u < 3u)
                 {
@@ -176,7 +179,7 @@ namespace CityLife.GameBridge
                     if (b.HasValue)
                     {
                         card += "｜对：" + b.Value.Card;
-                        pair = (entry.Name, b.Value.Name);
+                        pair = (entry.Name, b.Value.Name, entry.Entity, b.Value.B); // 2026-09-17 形态修正：收炉注入即席剧要真人实体
                         pairCardNos.Add(k + 1); // 卡号 1 起，与 prompt 卡序对齐
                     }
                 }
@@ -216,8 +219,10 @@ namespace CityLife.GameBridge
         /// JSONL salvage 解析（坏行跳过计数）→ 场合/话题分区按 card 号逐条回填（§12 #60 刀①：
         /// 场合采样时已盖章、分区执行层查表，模型只报归属；card 缺失/越界的孤儿行落 Any/留空，
         /// 不再整批连坐）→ 入 BubbleSnippetPool（池内同文本去重）。
-        /// §12 #63 对话条：对卡行（a/b 双全）且该卡确为配对卡 → 执行层拼"名字A：a\n名字B：b"
-        /// （名字前缀执行层加，LLM 不碰名字，单向阀门守住）；拼装超长/配对缺失有 text 回退独白。
+        /// §12 #63 对话条（2026-09-17 形态修正，玩家三次实机反馈）：对卡行（a/b 双全）且该卡确为配对卡 →
+        /// **注入 BubbleTheaterSystem 当即席剧开播**（串行双泡：A 说完泡消失 B 再接，预绑真人锚点）——
+        /// 单泡双行拼装形态废除（ComposeDialogue 退役）；剧场拒收（演员离场/离屏/满员/开关关）→
+        /// 只留 A 句降级独白入池（不硬演、不浪费 token）；配对缺失（模型给独白卡写了 a/b）有 text 落独白。
         /// 失败只记日志不致命，下一炉自然会再产。
         /// </summary>
         public void OnChatterResult(Llm.CliCompletedResult r)
@@ -241,12 +246,12 @@ namespace CityLife.GameBridge
             var pairRows = 0;
             var pairMonoRows = 0;
             var strayDialogueRows = 0;
-            var composeOver = 0;
+            var playRejected = 0; // 即席剧拒收数（降级 A 句独白；2026-09-17 形态修正后替代原"拼装超40"计数位）
             foreach (var p in parsed)
             {
                 var occasion = Content.BubbleOccasion.Any;
                 string? zone = null;
-                (string NameA, string NameB)? pair = null;
+                (string NameA, string NameB, Entity A, Entity B)? pair = null;
                 if (p.Card >= 1 && p.Card <= m_CurrentOccasions.Count)
                 {
                     occasion = m_CurrentOccasions[p.Card - 1];
@@ -257,20 +262,26 @@ namespace CityLife.GameBridge
                 {
                     orphan++;
                 }
-                // 对卡行 + 该卡确为配对卡 → 拼对话条；配对缺失（模型给独白卡写了 a/b）/拼装超长 → 有 text 落独白
+                // 对卡行 + 该卡确为配对卡 → 注入剧场当即席剧（串行双泡）；拒收 → 只留 A 句降级独白；
+                // 配对缺失（模型给独白卡写了 a/b）→ 有 text 落独白
                 string? text = null;
                 if (p.IsDialogue && pair.HasValue)
                 {
                     pairRows++;
-                    text = ComposeDialogue(pair.Value.NameA, p.A!, pair.Value.NameB, p.B!);
-                    if (text != null)
-                        dialogues++;
-                    else
-                        composeOver++;
+                    var pv = pair.Value;
+                    if (m_Theater == null)
+                        m_Theater = World.GetExistingSystemManaged<BubbleTheaterSystem>();
+                    if (m_Theater != null && m_Theater.InjectPairPlay(pv.A, pv.NameA, p.A!, pv.B, pv.NameB, p.B!))
+                    {
+                        dialogues++; // 即席剧开播成功——对话不走片段池，下一条
+                        continue;
+                    }
+                    playRejected++;
+                    text = p.A; // 降级：只留 A 句当独白入池（名字不进池——池片段不带署名传统）
                 }
                 else if (p.IsDialogue)
                 {
-                    strayDialogueRows++; // a/b 写给非配对卡：越界超产，无名字可拼必落丢弃/独白回退
+                    strayDialogueRows++; // a/b 写给非配对卡：越界超产，无名字可用必落丢弃/独白回退
                 }
                 else if (pair.HasValue)
                 {
@@ -279,29 +290,17 @@ namespace CityLife.GameBridge
                 text ??= p.Text;
                 if (text == null)
                 {
-                    skipped++; // 对卡行无 text 可回退（拼装超长/a b 写给非配对卡）——与解析丢弃同口径计数
+                    skipped++; // 对卡行无 text 可回退（a b 写给非配对卡且缺 text）——与解析丢弃同口径计数
                     continue;
                 }
                 if (m_Pool.Add(text, occasion, zone))
                     added++;
             }
             Mod.Log.Info($"[闲聊炉] 入库 {added} 条（对话 {dialogues} 条，解析丢 {skipped} 条，去重丢 {parsed.Count - added} 条，无归属 {orphan} 条，池现 {m_Pool.Count} 条）");
-            // §12 #63 对话缺口诊断（轻量一行，不逐行 dump）：配对>0 但入库对话<配对数时粗分原因，
-            // 下次实机直接定位是模型没写 a/b（schema 未跟随/漏产）还是执行层闸拦的（拼装超 40）
+            // §12 #63 对话缺口诊断（轻量一行，不逐行 dump）：配对>0 但开播对话<配对数时粗分原因——
+            // 下次实机直接定位是模型没写 a/b（schema 未跟随/漏产）还是剧场侧拒收（演员离场/离屏/满员）
             if (pairCards > 0 && dialogues < pairCards)
-                Mod.Log.Info($"[闲聊炉] 对话缺口：配对 {pairCards} 对入库 {dialogues} 条——对卡合规 a/b 行 {pairRows}、对卡独白行 {pairMonoRows}（schema 未跟随倾向）、越界 a/b 行 {strayDialogueRows}（非对卡超产）、拼装超40丢 {composeOver}、全炉解析丢 {skipped}");
-        }
-
-        /// <summary>
-        /// 对话条拼装（§12 #63）："名字A：台词A\n名字B：台词B"——单条 Text 内嵌 \n 两行，
-        /// 渲染零改动（WrapForBake 原生支持 \n）；名字前缀格式同剧场（BubbleTheaterSystem 全角冒号先例）。
-        /// 防线：台词内嵌换行压成空格（JSON \n 解码脏数据防版式炸）；总长超 40（气泡排版硬顶，
-        /// 与 ParseBatch 同尺）→ null，调用方有 text 回退独白、无则丢弃计数。
-        /// </summary>
-        private static string? ComposeDialogue(string nameA, string a, string nameB, string b)
-        {
-            var text = string.Concat(nameA, "：", a.Replace('\n', ' '), "\n", nameB, "：", b.Replace('\n', ' '));
-            return text.Length <= 40 ? text : null;
+                Mod.Log.Info($"[闲聊炉] 对话缺口：配对 {pairCards} 对开播 {dialogues} 条——对卡合规 a/b 行 {pairRows}、对卡独白行 {pairMonoRows}（schema 未跟随倾向）、越界 a/b 行 {strayDialogueRows}（非对卡超产）、剧场拒收 {playRejected}（降级独白）、全炉解析丢 {skipped}");
         }
 
         /// <summary>题面 → 话题分区（TopicReservoir.Entries 线性查表，取首个同题面条目；查不到返回 ""）。</summary>
@@ -460,7 +459,8 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>
-        /// 配对（§12 #63 对话场景卡）：在 A 现位 k_PairRadius 内找另一位步行市民 B，组双人卡。
+        /// 配对（§12 #63 对话场景卡；2026-09-17 形态修正：收炉注入即席剧串行双泡——B 的实体随卡留存，
+        /// 名字只用于 prompt 卡文与剧场台词前缀）：在 A 现位 k_PairRadius 内找另一位步行市民 B，组双人卡。
         /// movers 滤 Human+Resident 回指市民（BubbleTheaterSystem.BindOutdoorRoster 先例）；
         /// B 排除口径=CitizenPoolSystem 采样同款（MovingAway/无名，DescribeCitizen 一支全含；
         /// 儿童自 §12 #66 起放行——气泡=说话不是发帖，孩子可以被配对搭讪）

@@ -224,6 +224,49 @@ namespace CityLife.Content
             return sb.ToString();
         }
 
+        /// <summary>
+        /// 事件现场围观炉的固定前缀（§12 #70 事件现场反应层）：现场路人的嘴替——**惊呼不是发帖也不是闲聊**。
+        /// 缓存纪律同闲聊头（EventSceneSystem.OnCreate 拼一次复用，逐字节稳定：动态全压尾部）。
+        /// 无内容例句（#69 同哲学：规则段兜底防 AI 腔， diversity 靠处境事实+情绪子集）；【输出】JSONL
+        /// 格式行保留（快轨 schema 跟随救命索）。输出 schema：一行一条 {"text":"话"}——与
+        /// BubbleSnippetPool.ParseBatch 解析口径同炉改（card 缺失落 Any 不连坐，反应卡无卡号概念）。
+        /// </summary>
+        public static string BuildEventReactionHead()
+        {
+            var sb = new StringBuilder(512);
+            sb.Append("你是虚构城市事件现场的路人嘴替——把围观者此刻脱口而出的话写出来。城市是模拟游戏里的虚构城市，一切内容虚构。\n");
+            sb.Append("【铁律】对事不对人：可以惊呼、吐槽、同情、议论，绝不攻击任何具体个人；不碰现实政治、种族、性别议题；不生成自伤内容；不使用真实名人、品牌、事件名；别写见死不救式的冷血（可以抱怨添堵/心疼当事人，别诅咒）。\n");
+            sb.Append("【语域】现场惊呼，不是发帖也不是闲聊：脱口而出的短句 ≤15 字为主（喊出来的），长句 20-30 字必须带一件现场细节（烟/警笛/残骸/排队/味道）；第一人称；禁止 hashtag、禁止@、禁止\"家人们\"等直播腔、禁止 emoji、禁止书面腔、禁止动作神态描写（\"捂着嘴\"\"指着\"这类一律不要）。\n");
+            sb.Append("【输出】只输出 JSONL：一行一条 {\"text\":\"话\"}；禁止 markdown 围栏、禁止解释、禁止序号。\n");
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 事件围观炉完整 prompt = 围观头 + 动态尾：【事件】（类型+地点+烈度档词，执行层组装的事实，LLM 只写反应）
+        /// +【情绪】（系统分配的围观情绪子集签 2-3 个——至少一半条目贴底色，§12 #70 情绪处境子集化）
+        /// + 条数任务。sceneDesc=执行层组装的一行事件事实（如"「和平路」路口两车相撞，挺严重，警车已到"）。
+        /// </summary>
+        public static string BuildEventReactionPrompt(string head, string sceneDesc,
+                                                      IReadOnlyList<string> moods, int count)
+        {
+            var sb = new StringBuilder(head.Length + 256);
+            sb.Append(head);
+            sb.Append("【事件】").Append(sceneDesc).Append("——就发生在这群路人眼前。\n");
+            if (moods.Count > 0)
+            {
+                sb.Append("【情绪】现场情绪的底色是：");
+                for (var i = 0; i < moods.Count; i++)
+                {
+                    if (i > 0)
+                        sb.Append('、');
+                    sb.Append(moods[i]);
+                }
+                sb.Append("——至少一半条目贴这几种底色，其余自由。\n");
+            }
+            sb.Append("【任务】写 ").Append(count).Append(" 条围观者的话：一条一个声音，别复读；可以心疼当事人、抱怨添堵、看热闹议论、提醒别人避让；别写成新闻播报、别复述事件本身。\n");
+            return sb.ToString();
+        }
+
         /// <summary>【城里最近在传】段（§12 #60 刀②城市记忆）：活力的本质=这座城市有昨天。两炉同款，一处组装。</summary>
         private static void AppendRumors(StringBuilder sb, IReadOnlyList<string>? rumors, string usage)
         {

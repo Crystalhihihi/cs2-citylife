@@ -215,6 +215,10 @@ namespace CityLife.GameBridge
         // 轮次回调在 TickLifecycle——OnRender 渲染热路径依旧零查询
         private BubbleTheaterSystem? m_Theater;
 
+        // 事件现场反应层（v5.7，§12 #70）：句柄懒解析判空（同上）；角色圈反应行在 SetBubbleText 插队，
+        // 优先级高于 #58 事件快反模板
+        private EventSceneSystem? m_SceneReactions;
+
         // —— 事件快反层（v5.5，§12 #58）：活动事件表+反应模板。查询 OnCreate 缓存、128 帧错峰刷新、
         //    距离判定只发生在换文案时刻（低频路径），OnRender 热路径零查询 ——
         private const float k_EventRadius = 60f;   // 事件影响半径（锚点在此范围内换文案即被覆盖）
@@ -819,9 +823,10 @@ namespace CityLife.GameBridge
 
         /// <summary>换文案唯一入口（采样建组/生命周期轮换/剧场建组与推轮都走这）：
         /// 最先小剧场插队（v5.1：锚点挂活剧场 → 剧本台词，纯查询不推轮次），
-        /// 其次事件快反覆盖（v5.5，§12 #58：锚点在活动事件点 60m 内 → 反应模板），
+        /// 其次事件现场反应层（v5.7，§12 #70：受害模板/火灾楼本体/围观 LLM 卡，角色圈三层），
+        /// 再次事件快反模板覆盖（v5.5，§12 #58：锚点在活动事件点 60m 内 → 反应模板），
         /// 再次闲聊炉片段池（v5.0 主源），取不到回退占位文案池（池空兜底——开局炉未出时气泡仍有话）。
-        /// 优先级定案（§12 #58）：剧场 > 事件快反 > 片段 > 隐身（"……"沉默拍）。</summary>
+        /// 优先级定案：剧场 > 现场反应层 > 事件快反模板 > 片段 > 隐身（"……"沉默拍）。</summary>
         private void SetBubbleText(ref TrackedBubble b, int textIdx)
         {
             // 实测移速（§12 #51 长文稳锚）：换文案间隔位移/时长的点估计；读不到位置维持旧值
@@ -845,6 +850,21 @@ namespace CityLife.GameBridge
                 if (m_BaseTextMaterial != null)
                     EnsureBaked(b.Text, b.Kind);
                 return;
+            }
+            // 事件现场反应层（§12 #70）：受害市民锚→强制独白模板（轻伤骂街/重伤呼救）、
+            // 燃烧建筑锚→"我家着火了"型、半径内锚→围观 LLM 卡（一次性消耗）。系统句柄懒解析判空
+            // （主菜单世界可能不存在）；锚点读不到位置（无 Transform）时不判，直接走 #58 模板路径
+            if (hasPos)
+            {
+                if (m_SceneReactions == null)
+                    m_SceneReactions = World.GetExistingSystemManaged<EventSceneSystem>();
+                if (m_SceneReactions != null && m_SceneReactions.TryGetSceneLine(b.Anchor, anchorPos, textIdx, out var sceneLine))
+                {
+                    b.Text = sceneLine;
+                    if (m_BaseTextMaterial != null)
+                        EnsureBaked(b.Text, b.Kind);
+                    return;
+                }
             }
             // 事件快反（§12 #58）：锚点在活动事件点 k_EventRadius 内 → 该事件类型反应模板覆盖
             // （不进片段池、不消耗一次性片段）；事件消失后下次换文案自然落回下方片段池路径，

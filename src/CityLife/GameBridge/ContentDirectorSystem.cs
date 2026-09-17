@@ -153,6 +153,12 @@ namespace CityLife.GameBridge
                     World.GetOrCreateSystemManaged<BubbleChatterSystem>().OnChatterResult(r);
                     continue;
                 }
+                // 事件现场围观炉（§12 #70）走专线路由：围观卡入现场库存，不占常规批次位
+                if (r.RequestId != null && r.RequestId.StartsWith("scene:"))
+                {
+                    World.GetOrCreateSystemManaged<EventSceneSystem>().OnSceneResult(r);
+                    continue;
+                }
                 // 小剧场剧本炉（§12 #52 炉→池→放送）走专线路由：产出入 TheaterScriptStock 库存池，不占常规批次位
                 if (r.RequestId != null && r.RequestId.StartsWith("theater:"))
                 {

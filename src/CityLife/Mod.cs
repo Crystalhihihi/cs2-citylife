@@ -140,6 +140,10 @@ namespace CityLife
             // 登记在气泡世界层之后：同相序内先跑完气泡采样/生命周期，剧场再读锚点快照/验活
             updateSystem.UpdateAt<GameBridge.BubbleTheaterSystem>(SystemUpdatePhase.GameSimulation);
 
+            // 事件现场反应层（§12 #70，2026-09-17 玩家拍板）：车祸/火灾/犯罪三层角色圈（受害模板/楼内模板/
+            // 围观快轨卡）+死亡传闻限流；读侧只读 128 帧错峰，写侧系统不碰
+            updateSystem.UpdateAt<GameBridge.EventSceneSystem>(SystemUpdatePhase.GameSimulation);
+
             // 普查+事件监听口 spike（2026-09-14，§12 #62/#64/#65 收口工具：Ctrl+6 普查 dump / Ctrl+7 事件探针开关）。
             // 只读；验证完即退役——删本行即可。报告 docs/spikes/2026-09-14-census-and-event-watch.md
             updateSystem.UpdateAt<GameBridge.CensusSpikeSystem>(SystemUpdatePhase.GameSimulation);

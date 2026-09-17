@@ -192,6 +192,8 @@ internal static class Program
             exit |= await RunTopics(provider, reservoir, topicCount, k, report);
         if (scenario is "theater" or "all")
             exit |= await RunTheater(provider, k, report);
+        if (scenario is "reaction" or "all")
+            exit |= await RunReaction(provider, k, report);
 
         Directory.CreateDirectory(outDir);
         var file = Path.Combine(outDir, "eval-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".md");
@@ -447,6 +449,59 @@ internal static class Program
         report.Append("- 场景：").Append(string.Join("  ", byScene.Select(g => $"{g.Key}={g.Count()}"))).Append("\n");
         report.Append($"- 句数：均值 {linesPer.Average():0.0}（{linesPer.Min():0}-{linesPer.Max():0}）\n");
         report.Append($"- 占位符：{withSlot}/{scripts.Count} 部含占位（共 {slotUse} 处），越界无效占位 {slotBad} 部\n\n");
+        foreach (var raw in raws)
+            report.Append("### 第 ").Append(raw.Batch + 1).Append(" 炉原始输出（")
+                  .Append((raw.Ms / 1000.0).ToString("0.0", CultureInfo.InvariantCulture)).Append("s）\n\n```\n")
+                  .Append(raw.Raw.Trim()).Append("\n```\n\n");
+        return 0;
+    }
+
+    /// <summary>事件围观炉场景（§12 #70）：真实 BuildEventReactionPrompt 发 K 炉（固定卡具=车祸现场+围观情绪签），
+    /// 真实 BubbleSnippetPool.ParseBatch 解析——schema 合规（{"text"} 单行）、条数达成、句长分布、近重复、AI 腔。</summary>
+    private static async Task<int> RunReaction(ICliProvider provider, int k, StringBuilder report)
+    {
+        var head = PromptBuilder.BuildEventReactionHead();
+        // 固定卡具：P0 车祸现场（生产 SceneDesc 同构——地点+事件+烈度档+应急到场）+ 围观情绪签（生产抽签同词表）
+        const string k_SceneDesc = "「和平路」路口两车相撞，挺严重，警车已到";
+        var moods = new List<string> { ChatterSpec.OnlookerMoods[0], ChatterSpec.OnlookerMoods[2], ChatterSpec.OnlookerMoods[4] };
+        var all = new List<ParsedChatterLine>();
+        var raws = new List<(int Batch, string Raw, long Ms)>();
+        var totalSkipped = 0;
+        for (var b = 0; b < k; b++)
+        {
+            var prompt = PromptBuilder.BuildEventReactionPrompt(head, k_SceneDesc, moods, 10);
+            Console.WriteLine($"[Eval·reaction] 第 {b + 1}/{k} 炉发出（{prompt.Length} 字符）…");
+            var r = await provider.OneShotAsync(prompt, CancellationToken.None);
+            if (!r.Success)
+            {
+                Console.WriteLine($"[Eval·reaction] 第 {b + 1} 炉失败：{r.Error}");
+                return 1;
+            }
+            var parsed = BubbleSnippetPool.ParseBatch(r.Text, out var skipped);
+            totalSkipped += skipped;
+            var valid = parsed.Where(p => !string.IsNullOrWhiteSpace(p.Text)).ToArray();
+            all.AddRange(valid);
+            raws.Add((b, r.Text, r.LatencyMs));
+            Console.WriteLine($"[Eval·reaction] 第 {b + 1} 炉：有效 {valid.Length} 条（丢 {skipped}）{r.LatencyMs / 1000.0:0.0}s");
+        }
+
+        var n = Math.Max(1, all.Count);
+        var bodies = all.Select(p => p.Text!).ToArray();
+        var lens = bodies.Select(t => t.Length).ToArray();
+        var (mean, std) = MeanStd(lens.Length > 0 ? lens : new[] { 0 });
+        var (dupPairs, dupSample) = NearDup(bodies);
+        var aiHits = bodies.Where(t => k_AiToneWords.Any(w => t.Contains(w)) || t.Any(char.IsSurrogate)).ToArray();
+
+        Console.WriteLine($"\n== reaction 汇总（{all.Count} 条，解析丢 {totalSkipped}）==");
+        Console.WriteLine($"  句长       : 均值 {mean:0.0} 字，标准差 {std:0.0}，≤15字 {Pct(lens.Count(l => l <= 15), n)}，>30字 {Pct(lens.Count(l => l > 30), n)}");
+        Console.WriteLine($"  近重复     : {dupPairs} 对（Jaccard≥0.7）{(dupSample != null ? " 例：" + dupSample : "")}");
+        Console.WriteLine($"  AI腔       : {aiHits.Length}/{bodies.Length}");
+
+        report.Append("## reaction（事件围观炉，§12 #70）\n\n");
+        report.Append("- 条数：").Append(all.Count).Append("（解析丢 ").Append(totalSkipped).Append("）\n");
+        report.Append($"- 句长：均值 {mean:0.0}，标准差 {std:0.0}，≤15字 {Pct(lens.Count(l => l <= 15), n)}，>30字 {Pct(lens.Count(l => l > 30), n)}\n");
+        report.Append("- 近重复：").Append(dupPairs).Append(" 对").Append(dupSample != null ? "（" + dupSample + "）" : "").Append("\n");
+        report.Append("- AI腔巡检：").Append(aiHits.Length).Append('/').Append(bodies.Length).Append("\n\n");
         foreach (var raw in raws)
             report.Append("### 第 ").Append(raw.Batch + 1).Append(" 炉原始输出（")
                   .Append((raw.Ms / 1000.0).ToString("0.0", CultureInfo.InvariantCulture)).Append("s）\n\n```\n")

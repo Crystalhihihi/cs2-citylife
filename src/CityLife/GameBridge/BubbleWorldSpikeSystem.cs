@@ -120,11 +120,12 @@ namespace CityLife.GameBridge
         private const float k_MaxDistCar = 320f;
         private const float k_MaxDistBuilding = 800f;
 
-        /// <summary>分锚点显隐距离：基础档 × 设置页倍率（Mod.Options?.BubbleDistXxx ?? 1f，§12 #45）。</summary>
+        /// <summary>分锚点显隐距离：基础档 × 设置页倍率（Mod.Options?.BubbleDistXxx ?? 1f，§12 #45）；
+        /// kind=3 模板层（神态拍/环境声，§12 #72）按人档走。</summary>
         private static float MaxDistFor(byte kind)
         {
             var opts = Mod.Options;
-            return kind == 0 ? k_MaxDistHuman * (opts?.BubbleDistHuman ?? 1f)
+            return kind is 0 or 3 ? k_MaxDistHuman * (opts?.BubbleDistHuman ?? 1f)
                  : kind == 1 ? k_MaxDistCar * (opts?.BubbleDistCar ?? 1f)
                  : k_MaxDistBuilding * (opts?.BubbleDistBuilding ?? 1f);
         }
@@ -210,6 +211,7 @@ namespace CityLife.GameBridge
         private bool m_LoggedPoolEmpty;    // "池空回退" INFO 只打一次（防每帧刷）
         private readonly HashSet<string> m_UsedThisFrame = new(); // 本帧已用片段（同帧去重，帧尾清）
         private readonly HashSet<string> m_InUseTexts = new();    // 当前全部在显文案（跨泡去重：同一句不同时在两个泡上，池浅时重复观感实锤 2026-09-11）
+        private readonly Dictionary<string, int> m_BeatCounts = new(); // 神态拍同屏计数（§12 #72 同拍限流：帧级重建）
 
         // 小剧场（v5.1，S7，§12 #48）：句柄懒解析判空（同片段池纪律）；插队取词在 SetBubbleText，
         // 轮次回调在 TickLifecycle——OnRender 渲染热路径依旧零查询
@@ -329,6 +331,7 @@ namespace CityLife.GameBridge
         {
             public Entity Anchor;
             public byte Kind;       // 0 人 1 车 2 楼
+            public bool Dim;        // §12 #72 声口轴样式：true=模板层（嘟囔/神态拍/环境声）——按 kind=3 更小更淡渲染
             public string Text;     // 当前文案（Add 前必走 SetBubbleText，不会读到 null）
             public int TextIdx;
             public double NextAt;   // 下次换文案时刻（节奏时钟秒：关=unscaledTime 墙钟——倍速不缩短驻留，§12 #49；
@@ -337,6 +340,9 @@ namespace CityLife.GameBridge
             public float LastSetAt; // 上次换文案时刻（unscaledTime；0=未测过）
             public float Speed;     // 实测移速 m/s（换文案间隔的位移/时长点估计；初值 车=3 假设在动，人/楼=0）
         }
+
+        /// <summary>绘制/烘焙生效 kind：Dim=模板层按 kind=3（更小更淡、无底板、不占同屏上限的样式档，§12 #72）。</summary>
+        private static byte EffKindOf(in TrackedBubble b) => b.Dim ? (byte)3 : b.Kind;
 
         /// <summary>一段烘焙好的文字：网格+材质对（CJK fallback 可能多段）+ 合并包围盒参数。</summary>
         private sealed class BakedText
@@ -497,8 +503,13 @@ namespace CityLife.GameBridge
 
             // 在显文案集（跨泡去重用，取泡前重建）：同一句台词不同时在两个泡头上
             m_InUseTexts.Clear();
+            m_BeatCounts.Clear(); // §12 #72 神态拍同屏计数（同拍限流 ≤2 的帧级小表）
             foreach (var b in m_Bubbles)
+            {
                 m_InUseTexts.Add(b.Text);
+                if (b.Dim && b.Text.StartsWith("（"))
+                    m_BeatCounts[b.Text] = m_BeatCounts.TryGetValue(b.Text, out var bc) ? bc + 1 : 1;
+            }
 
             // 事件快反表刷新：128 帧错峰（本系 GetUpdateInterval=1 逐帧跑，手动分频；相位 64
             // 与 Resample 的 %512==0 错开，别每帧全扫）
@@ -518,8 +529,8 @@ namespace CityLife.GameBridge
                 TryInitMaterial();
             if (m_BaseTextMaterial != null)
                 foreach (var b in m_Bubbles)
-                    if (b.Text != "……" && !m_Cache.ContainsKey((b.Text, b.Kind)))
-                        EnsureBaked(b.Text, b.Kind);
+                    if (b.Text != "……" && !m_Cache.ContainsKey((b.Text, EffKindOf(b))))
+                        EnsureBaked(b.Text, EffKindOf(b));
             if (m_PlateOn && (m_PlateMaterials == null || m_PlateMaterials[0] == null))
                 TryInitPlateMaterial();
 
@@ -842,6 +853,8 @@ namespace CityLife.GameBridge
         /// 优先级定案：剧场 > 现场反应层 > 事件快反模板 > 片段 > 隐身（"……"沉默拍）。</summary>
         private void SetBubbleText(ref TrackedBubble b, int textIdx)
         {
+            // §12 #72：Dim 每轮换文案重判（声口轴在下方模板底层里掷）——先复位，剧场/现场/快反行永不淡
+            b.Dim = false;
             // 实测移速（§12 #51 长文稳锚）：换文案间隔位移/时长的点估计；读不到位置维持旧值
             float3 anchorPos = default;
             var hasPos = false;
@@ -861,7 +874,7 @@ namespace CityLife.GameBridge
             {
                 b.Text = theaterLine;
                 if (m_BaseTextMaterial != null)
-                    EnsureBaked(b.Text, b.Kind);
+                    EnsureBaked(b.Text, EffKindOf(b));
                 return;
             }
             // 事件现场反应层（§12 #70）：受害市民锚→强制独白模板（轻伤骂街/重伤呼救）、
@@ -875,7 +888,7 @@ namespace CityLife.GameBridge
                 {
                     b.Text = sceneLine;
                     if (m_BaseTextMaterial != null)
-                        EnsureBaked(b.Text, b.Kind);
+                        EnsureBaked(b.Text, EffKindOf(b));
                     return;
                 }
             }
@@ -886,7 +899,47 @@ namespace CityLife.GameBridge
             {
                 b.Text = reaction;
                 if (m_BaseTextMaterial != null)
-                    EnsureBaked(b.Text, b.Kind);
+                    EnsureBaked(b.Text, EffKindOf(b));
+                return;
+            }
+            // §12 #72 声口轴/神态拍/环境声（0 token 模板底层；#53"……"池空兜底语义不动——
+            // 本层是主动发拍/小声，不是兜底；模板层样式=kind 3 更小更淡、不占同屏上限账外样式）：
+            // 人锚三档 出声/嘟囔/沉默拍 ≈ 5:2:3（确定性掷签：同泡连换不跳变；TODO 玩家可调，先硬编码别上设置页）
+            if (b.Kind == 0)
+            {
+                var roll = (uint)(b.Anchor.Index * 31 + textIdx * 7) % 10u;
+                if (roll >= 7u)
+                {
+                    var beat = Content.ActionBeats.Pick(Content.ActionBeats.SceneKind.Street,
+                        (uint)(b.Anchor.Index + textIdx), BeatCount);
+                    if (beat != null)
+                    {
+                        b.Text = "（" + beat + "）";
+                        b.Dim = true;
+                        if (m_BaseTextMaterial != null)
+                            EnsureBaked(b.Text, EffKindOf(b));
+                        return;
+                    }
+                    roll = 5u; // 拍被同屏限流占满 → 降级嘟囔（别硬拍——玩家："多次出现就有问题了"）
+                }
+                if (roll >= 5u)
+                    b.Dim = true; // 嘟囔：自言自语挪入——走池但更小更淡
+            }
+            else if (b.Kind == 1 && (uint)(b.Anchor.Index * 17 + textIdx * 5) % 10u < 3u)
+            {
+                // 环境声层（#55 同管线落地：声音不是话语，允许重复；快车喊话归此层不再做剧场）
+                b.Text = (uint)(b.Anchor.Index + textIdx) % 2u == 0u ? "（喇叭）" : "（引擎）";
+                b.Dim = true;
+                if (m_BaseTextMaterial != null)
+                    EnsureBaked(b.Text, EffKindOf(b));
+                return;
+            }
+            else if (b.Kind == 2 && (uint)(b.Anchor.Index * 13 + textIdx * 11) % 10u == 0u)
+            {
+                b.Text = "（风声）"; // 环境声少量（楼/空旷处，允许重复）
+                b.Dim = true;
+                if (m_BaseTextMaterial != null)
+                    EnsureBaked(b.Text, EffKindOf(b));
                 return;
             }
             if (!TryPickSnippet(b, textIdx, out var text))
@@ -896,8 +949,13 @@ namespace CityLife.GameBridge
             }
             b.Text = text;
             if (m_BaseTextMaterial != null)
-                EnsureBaked(b.Text, b.Kind);
+                EnsureBaked(b.Text, EffKindOf(b));
         }
+
+        /// <summary>神态拍同屏计数（§12 #72 同拍限流 ≤2 用，玩家："多次出现就有问题了"）：
+        /// 当前在显泡里文本="（beat）"的数量；帧级小表在 OnUpdate 重建（主线程低频）。</summary>
+        private int BeatCount(string beat)
+            => m_BeatCounts.TryGetValue("（" + beat + "）", out var c) ? c : 0;
 
         /// <summary>锚点类型→气泡场合（§12 #48）：人锚点采的是路上行人=Walk，车=Vehicle，楼=Indoor。
         /// 拿不准不靠猜——PickFor 候选自带 Any 兜底（exact ∪ Any），场合是优先级不是命门。</summary>
@@ -1062,6 +1120,7 @@ namespace CityLife.GameBridge
         private static Color KindColor(byte kind)
             => kind == 0 ? Color.white
              : kind == 1 ? new Color(0.8f, 0.9f, 1f)
+             : kind == 3 ? new Color(0.8f, 0.82f, 0.88f, 0.62f) // §12 #72 模板层（神态拍/环境声）：更淡——声音不是话语
              : new Color(1f, 0.95f, 0.75f);
 
         // —— 材质基底：clone 游戏 overlay 文字材质（永不 Shader.Find——build 里没有的已实锤）——
@@ -1463,7 +1522,8 @@ namespace CityLife.GameBridge
                         continue;
                     if (b.Text == "……")
                         continue;
-                    if (!m_Cache.TryGetValue((b.Text, b.Kind), out var entry))
+                    var effKind = EffKindOf(b); // §12 #72：模板层（嘟囔/神态拍/环境声）按 kind 3 更小更淡
+                    if (!m_Cache.TryGetValue((b.Text, effKind), out var entry))
                         continue;
                     // 渲染帧读插值变换（游戏给镜头用的每帧平滑位）；模拟 Transform 是 tick 级——读它必卡
                     float3 p;
@@ -1473,11 +1533,11 @@ namespace CityLife.GameBridge
                         p = EntityManager.GetComponentData<Transform>(b.Anchor).m_Position;
                     else
                         continue;
-                    p.y += b.Kind == 0 ? k_YOffHuman : b.Kind == 1 ? k_YOffCar : k_YOffBuilding; // 人头/车顶/楼顶
+                    p.y += effKind is 0 or 3 ? k_YOffHuman : effKind == 1 ? k_YOffCar : k_YOffBuilding; // 人头/车顶/楼顶（kind 3 按人头）
                     var dist = math.distance(camPos, p);
                     // 距离阈值滞回（2026-09-11 实机：锚点在可视边界上每帧进出=疯狂闪烁）——
                     // 新泡严格按 MaxDistFor，上帧在画的泡给 12% 越界宽限（只在边界带抖动才吃到）
-                    var maxD = MaxDistFor(b.Kind);
+                    var maxD = MaxDistFor(effKind);
                     if (dist > maxD && !(m_PrevKept.Contains(b.Anchor) && dist <= maxD * 1.12f))
                         continue;
 
@@ -1486,6 +1546,8 @@ namespace CityLife.GameBridge
                     var lineH = math.clamp(2f * dist * tanHalfFov * k_TargetPixels / cam.pixelHeight,
                         k_MinWorldH, k_MaxWorldH);
                     var worldH = lineH * entry.Lines;
+                    if (effKind == 3)
+                        worldH *= 0.72f; // §12 #72 模板层更小（声音不是话语，别抢戏）
                     var s = worldH / entry.Height;
                     var matrix = Matrix4x4.TRS((Vector3)p, rot, new Vector3(s, s, s))
                         * Matrix4x4.Translate(-entry.Center);
@@ -1530,7 +1592,7 @@ namespace CityLife.GameBridge
                         Anchor = b.Anchor,
                         NextAt = b.NextAt,
                         AnchorSpeed = b.Speed,
-                        Kind = b.Kind,
+                        Kind = effKind,
                         Score = dist * (1f + edge * 1.5f) * speedPenalty,
                     });
                 }
@@ -1599,12 +1661,13 @@ namespace CityLife.GameBridge
                 foreach (var a in m_KeptSet)
                     m_PrevKept.Add(a);
 
-                // 第二遍：只画中选泡（文字逐段 + 底板入档缓冲）
+                // 第二遍：只画中选泡（文字逐段 + 底板入档缓冲；§12 #72 模板层 kind 3 无底板——
+                // 声音/动作别抢戏，更小更淡就是它的全部样式）
                 foreach (var c in m_Kept)
                 {
                     foreach (var (mesh, mat) in c.Entry.Parts)
                         Graphics.DrawMesh(mesh, c.TextMatrix, mat, 0, cam, 0, null, ShadowCastingMode.Off, false);
-                    if (drawPlate)
+                    if (drawPlate && c.Kind != 3)
                     {
                         // 锚点在底板下缘、抬高轴 = 相机 up；m_Params.x 除掉 shader 自带的
                         // k_IconScaleK·dist^k_IconDistExp 补偿，渲染尺寸才等于 plateH（跨距离稳定）

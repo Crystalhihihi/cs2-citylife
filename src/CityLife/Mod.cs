@@ -227,6 +227,20 @@ namespace CityLife
                             o.LlmFastModel = cfg.EffectiveFastModel; // 快轨分叉模型（SameAsSlow 预设下按此分叉）
                             o.LlmFastThinking = cfg.EffectiveFastThinking != "disabled";
                         }
+                        // 整 provider 分轨（2026-09-20）：fast 段带独立端点/key 时连快轨供给端一起迁
+                        // （快轨硅基、慢轨官方的双端点形态；baseUrl/key 只在迁移期落设置页，永不进日志）
+                        if (cfg.FastBaseUrl.Length > 0 || cfg.FastApiKey.Length > 0)
+                        {
+                            var fb = cfg.EffectiveFastBaseUrl;
+                            o.LlmFastProvider = fb.Contains("siliconflow")
+                                ? LlmFastProviderOption.SiliconFlow
+                                : fb.Contains("deepseek")
+                                    ? LlmFastProviderOption.DeepSeek
+                                    : LlmFastProviderOption.CustomOpenAi;
+                            o.LlmFastBaseUrl = fb;
+                            if (cfg.EffectiveFastApiKey.Length > 0)
+                                o.LlmFastApiKey = cfg.EffectiveFastApiKey;
+                        }
                     }
                     Log.Info("[LLM] 已从 llm.json 迁移供给配置进设置页（仅此一次，此后 llm.json 不再读取）");
                 }

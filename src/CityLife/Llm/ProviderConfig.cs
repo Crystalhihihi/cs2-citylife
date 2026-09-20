@@ -34,6 +34,15 @@ namespace CityLife.Llm
         /// <summary>快轨 thinking（缺省回落 <see cref="Thinking"/>）。</summary>
         public string FastThinking = "";
 
+        /// <summary>慢轨 baseUrl（缺省回落 <see cref="BaseUrl"/>；2026-09-20 整 provider 分轨）。</summary>
+        public string SlowBaseUrl = "";
+        /// <summary>慢轨 apiKey（缺省回落 <see cref="ApiKey"/>；分轨存放但任何日志只记域名，key 永不打印）。</summary>
+        public string SlowApiKey = "";
+        /// <summary>快轨 baseUrl（缺省回落 <see cref="BaseUrl"/>）。</summary>
+        public string FastBaseUrl = "";
+        /// <summary>快轨 apiKey（缺省回落 <see cref="ApiKey"/>；同上纪律）。</summary>
+        public string FastApiKey = "";
+
         /// <summary>慢轨有效模型（分轨字段优先，全局兜底）。</summary>
         public string EffectiveSlowModel => SlowModel.Length > 0 ? SlowModel : Model;
         /// <summary>慢轨有效 thinking。</summary>
@@ -42,6 +51,14 @@ namespace CityLife.Llm
         public string EffectiveFastModel => FastModel.Length > 0 ? FastModel : Model;
         /// <summary>快轨有效 thinking。</summary>
         public string EffectiveFastThinking => FastThinking.Length > 0 ? FastThinking : Thinking;
+        /// <summary>慢轨有效 baseUrl。</summary>
+        public string EffectiveSlowBaseUrl => SlowBaseUrl.Length > 0 ? SlowBaseUrl : BaseUrl;
+        /// <summary>慢轨有效 apiKey（永不进日志）。</summary>
+        public string EffectiveSlowApiKey => SlowApiKey.Length > 0 ? SlowApiKey : ApiKey;
+        /// <summary>快轨有效 baseUrl。</summary>
+        public string EffectiveFastBaseUrl => FastBaseUrl.Length > 0 ? FastBaseUrl : BaseUrl;
+        /// <summary>快轨有效 apiKey（永不进日志）。</summary>
+        public string EffectiveFastApiKey => FastApiKey.Length > 0 ? FastApiKey : ApiKey;
 
         public static ProviderConfig Load(string path, Action<string> log)
         {
@@ -64,10 +81,14 @@ namespace CityLife.Llm
                 cfg.SlowThinking = JsonMini.GetStr(json, "slowThinking") ?? "";
                 cfg.FastModel = JsonMini.GetStr(json, "fastModel") ?? "";
                 cfg.FastThinking = JsonMini.GetStr(json, "fastThinking") ?? "";
-                // 注意：key 永远不进日志
+                cfg.SlowBaseUrl = JsonMini.GetStr(json, "slowBaseUrl") ?? "";
+                cfg.SlowApiKey = JsonMini.GetStr(json, "slowApiKey") ?? "";
+                cfg.FastBaseUrl = JsonMini.GetStr(json, "fastBaseUrl") ?? "";
+                cfg.FastApiKey = JsonMini.GetStr(json, "fastApiKey") ?? "";
+                // 注意：key 永远不进日志（分轨 key 同纪律——只记域名）
                 log("[LLM] 供给配置：" + cfg.Provider +
                     (cfg.Provider == "openai-compatible"
-                        ? $" {cfg.BaseUrl} 慢轨={cfg.EffectiveSlowModel}/{Norm(cfg.EffectiveSlowThinking)} 快轨={cfg.EffectiveFastModel}/{Norm(cfg.EffectiveFastThinking)}"
+                        ? $" 慢轨={DomainOf(cfg.EffectiveSlowBaseUrl)}/{cfg.EffectiveSlowModel}/{Norm(cfg.EffectiveSlowThinking)} 快轨={DomainOf(cfg.EffectiveFastBaseUrl)}/{cfg.EffectiveFastModel}/{Norm(cfg.EffectiveFastThinking)}"
                         : ""));
                 return cfg;
             }
@@ -78,6 +99,13 @@ namespace CityLife.Llm
             }
 
             static string Norm(string t) => t.Length > 0 ? t : "默认";
+            static string DomainOf(string url)
+            {
+                var i = url.IndexOf("://", StringComparison.Ordinal);
+                var rest = i >= 0 ? url[(i + 3)..] : url;
+                var slash = rest.IndexOf('/');
+                return slash > 0 ? rest[..slash] : rest;
+            }
         }
     }
 }

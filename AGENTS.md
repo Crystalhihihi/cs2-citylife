@@ -16,6 +16,7 @@
 - `dotnet build`（游戏路径用环境变量 `CITIES2_PATH` 覆盖默认 Steam 路径）
 - 补丁日 smoke test 清单见设计文档 §5；spike 报告归档在 `docs/spikes/`
 - **推送公开前扫面**：批量 commit 推 origin 前必须扫一遍公开面——内部备注/（发布前删除）类待删标记、个人绝对路径、密钥与 token（llm.json/.coc 永不入库，只在 ModsSettings）。实锤教训（2026-09-20）：158 commit 一把推把发布页草稿的"内部备注（发布前删除）"（转化话术/定价策略/未定稿分歧）公开了
+- **历史重写先备工作区**：filter-repo 等历史重写操作会 checkout 重写后的树——**未提交的工作区改动直接清掉**（stash 救不回引用侧，先整体复制工作区或先提交）。实锤（2026-09-20）：重写历史抹内部备注时丢了 GameDllDump 未提交的 spike 探针段（知识在 docs/spikes/ 报告里有存档，探针段需用时按报告重建）
 
 ## 代码规范
 

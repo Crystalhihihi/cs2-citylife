@@ -66,6 +66,11 @@ namespace CityLife.GameBridge
         private BubbleTheaterSystem? m_Theater;             // 惰性：收炉注入即席剧（§12 #63 形态修正 2026-09-17；主菜单世界可能不存在）
 
         private readonly Content.BubbleSnippetPool m_Pool = new();
+        // §12 #72 二批③ 宠物闯祸发牌词表（执行层——防"全是叼肉"实锤预防；组卡按炉计数+卡序轮转）
+        private static readonly string[] k_PetMischiefs =
+            { "叼肉", "拆家", "打翻花盆", "偷鱼", "追尾巴", "越狱", "跟邻居猫打架" };
+        // §12 #72 二批③ 萌宠负向过滤词表（收炉侧，与 PromptEval 猫密度口径同源）
+        private static readonly string[] k_PetWords = { "猫", "狗", "宠物", "喵", "汪" };
         private string m_Head = "";
         private uint m_ForgeCount;            // 炉计数：配题 seed / 卡数 jitter / 3-4-5 分钟轮换的锚
         private uint m_NextForgeAt;           // 下一炉游戏时刻（tick）
@@ -157,6 +162,7 @@ namespace CityLife.GameBridge
             var digested = 0; // 本炉带环境摘要的卡数（[环境圈] 每炉一行计数用）
             var pairCardNos = new List<int>(); // 本炉配对成功的双人卡号（1 起，与卡序对齐；prompt 点名锚定+开炉日志用）
             var usedSpecs = new HashSet<(int Shape, int Mood, int Voice)>(); // §12 #69/#72：本炉已占规格签组合（同炉同签顺延去重；#72 起三元=写×情×口）
+            var petAssigned = false; // §12 #72 二批③：本炉宠物闯祸签已发牌（稀有档全炉 ≤1）
             for (int k = 0; k < picked.Count; k++)
             {
                 var entry = picked[k];
@@ -187,20 +193,33 @@ namespace CityLife.GameBridge
                         pairCardNos.Add(k + 1); // 卡号 1 起，与 prompt 卡序对齐
                     }
                 }
-                // §12 #71 场景签（2026-09-17 玩家拍板）：Indoor 卡 60% 掷签贴景（炉计数+卡序确定性）——
-                // 场景词+话核（从该场景话核小组抽 1-2）缀卡文，情绪签从场景推荐子集抽；不贴的照常、
-                // 街上（Walk）卡不缀=自由发挥型（玩家口径）；服务/公共建筑词表写死执行层（SceneWords）
+                // §12 #71 场景签 + #72 二批：景签闸 60%→30%（3:7——三成贴话题且必须长在关系里，
+                // 七成关系日常）+ 微处境签（住宅/医院/商店/中学"手头正在干的事"）+ 宠物闯祸签（全炉 ≤1）
                 string[]? sceneMoods = null;
-                if (entry.Occasion == Content.BubbleOccasion.Indoor
-                    && (m_ForgeCount + (uint)k) % 5u < 3u
-                    && EntityManager.HasComponent<CurrentBuilding>(entry.Entity))
+                var indoorBld = entry.Occasion == Content.BubbleOccasion.Indoor
+                                && EntityManager.HasComponent<CurrentBuilding>(entry.Entity)
+                    ? EntityManager.GetComponentData<CurrentBuilding>(entry.Entity).m_CurrentBuilding
+                    : Entity.Null;
+                if (indoorBld != Entity.Null)
                 {
-                    var row = SceneWords.Of(EntityManager,
-                        EntityManager.GetComponentData<CurrentBuilding>(entry.Entity).m_CurrentBuilding);
-                    if (row != null)
+                    if ((m_ForgeCount + (uint)k) % 10u < 3u)
                     {
-                        card += "｜景：" + row.Word + "｜话核：" + SceneWords.PickCores(row, m_ForgeCount, k);
-                        sceneMoods = row.Moods;
+                        var row = SceneWords.Of(EntityManager, indoorBld);
+                        if (row != null)
+                        {
+                            card += "｜景：" + row.Word + "｜话核：" + SceneWords.PickCores(row, m_ForgeCount, k);
+                            sceneMoods = row.Moods;
+                        }
+                    }
+                    var micro = MicroSituations.Pick(EntityManager, indoorBld, m_ForgeCount + (uint)k, k);
+                    if (micro != null)
+                        card += "｜微：" + micro;
+                    if (!petAssigned
+                        && CitizenPoolSystem.ClassifyBuilding(EntityManager, indoorBld) == "住宅区"
+                        && (m_ForgeCount + (uint)k) % 4u == 0u)
+                    {
+                        card += "｜事：宠物闯祸（" + k_PetMischiefs[(int)((m_ForgeCount + (uint)k) % (uint)k_PetMischiefs.Length)] + "）";
+                        petAssigned = true;
                     }
                 }
                 // §12 #69/#72 写法规格签：卡尾缀"｜写：句型｜情：情绪｜口：口吻"（ChatterSpec 执行层确定性抽签——
@@ -318,6 +337,13 @@ namespace CityLife.GameBridge
                     skipped++; // 对卡行无 text 可回退（a b 写给非配对卡且缺 text）——与解析丢弃同口径计数
                     continue;
                 }
+                // §12 #72 二批③ 萌宠负向过滤（负向进过滤不进 prompt）：含萌宠词+无（）拍+非对话条=丢
+                // （"光蹲那被观察"——玩家原话判废；（）拍是情节不是观察，放行）
+                if (IsPassivePetLine(text))
+                {
+                    skipped++;
+                    continue;
+                }
                 if (m_Pool.Add(text, occasion, zone))
                     added++;
             }
@@ -336,6 +362,18 @@ namespace CityLife.GameBridge
                 if (entries[i].Topic == topic)
                     return entries[i].Zone;
             return "";
+        }
+
+        /// <summary>萌宠负向过滤（§12 #72 二批③，负向进过滤不进 prompt）：含萌宠词+无（）拍+非对话条 → true 丢。
+        /// 对话条（即席剧播放路径）与（）拍（"（那猫又在拆家）"是情节不是观察）放行。</summary>
+        private static bool IsPassivePetLine(string text)
+        {
+            if (text.Contains("（"))
+                return false;
+            for (var i = 0; i < k_PetWords.Length; i++)
+                if (text.Contains(k_PetWords[i]))
+                    return true;
+            return false;
         }
 
         /// <summary>场合供给侧保底：每炉 Walk 保 k_MinWalkCards 张（池里有才保，没有不硬造）。

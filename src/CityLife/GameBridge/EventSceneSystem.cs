@@ -64,6 +64,7 @@ namespace CityLife.GameBridge
             public uint AftermathUntil;                 // 余韵截止帧（Ended 时上）
             public readonly HashSet<Entity> Victims = new(); // 受害市民（车祸涉事/犯罪受害/火灾被困）
             public bool HasHurtVictim;                  // 受害圈有 Injured/Trapped/Dead → 重伤呼救档
+            public bool EmergencyUsed;                  // §12 #72 2B③：急救号台词已喊过（每现场限 1 次，防复读刷屏）
             public bool ForgeDone;                      // 围观炉已发过（每现场一炉，不重复触炉=去重）
             public readonly List<string> Lines = new(); // 围观卡库存（一次性消耗）
             public int LineCursor;
@@ -511,11 +512,20 @@ namespace CityLife.GameBridge
         }
 
         /// <summary>受害者模板行：有伤信号=重伤呼救档，否则按类型轻伤档（salt 确定性轮换，不消耗——
-        /// 强制独白在事件存续期允许重复喊，#58 模板同口径）。</summary>
+        /// 强制独白在事件存续期允许重复喊，#58 模板同口径）。
+        /// §12 #72 2B③ 急救号 locale：车祸有伤现场第一声固定"快打120！"（zh=120；en=911 预留——
+        /// 接入游戏 locale 前中文定死，每现场限 1 次防复读刷屏），之后回落重伤档轮换。</summary>
         private string VictimLine(SceneEvent s, Entity victim, int salt)
         {
             if (s.HasHurtVictim && s.Type == SceneType.Traffic)
+            {
+                if (!s.EmergencyUsed)
+                {
+                    s.EmergencyUsed = true;
+                    return k_EmergencyCall;
+                }
                 return k_TrafficHurtLines[(victim.Index + salt) % k_TrafficHurtLines.Length];
+            }
             return s.Type switch
             {
                 SceneType.Traffic => k_TrafficMildLines[(victim.Index + salt) % k_TrafficMildLines.Length],
@@ -697,6 +707,8 @@ namespace CityLife.GameBridge
             "有没有人啊，帮帮忙！",
             "我喘不上气了……",
         };
+        // §12 #72 2B③ 急救号（车祸有伤现场第一声，每现场限 1 次）：zh=120；en=911 预留（接游戏 locale 后分档）
+        private const string k_EmergencyCall = "快打120！";
         private static readonly string[] k_FireVictimLines =
         {
             "救命啊，下不去了！",

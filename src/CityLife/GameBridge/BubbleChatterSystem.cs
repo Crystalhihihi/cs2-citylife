@@ -156,7 +156,7 @@ namespace CityLife.GameBridge
                 pickedSet.Add(picked[k].Entity);
             var digested = 0; // 本炉带环境摘要的卡数（[环境圈] 每炉一行计数用）
             var pairCardNos = new List<int>(); // 本炉配对成功的双人卡号（1 起，与卡序对齐；prompt 点名锚定+开炉日志用）
-            var usedSpecs = new HashSet<(int Shape, int Mood)>(); // §12 #69：本炉已占规格签组合（同炉同签顺延去重——实验"困得眼皮打架"×2 撞车实锤）
+            var usedSpecs = new HashSet<(int Shape, int Mood, int Voice)>(); // §12 #69/#72：本炉已占规格签组合（同炉同签顺延去重；#72 起三元=写×情×口）
             for (int k = 0; k < picked.Count; k++)
             {
                 var entry = picked[k];
@@ -203,12 +203,14 @@ namespace CityLife.GameBridge
                         sceneMoods = row.Moods;
                     }
                 }
-                // §12 #69 写法规格签：卡尾缀"｜写：句型｜情：情绪"（ChatterSpec 执行层确定性抽签，
-                // 炉计数+卡序锚定+同炉同签顺延去重；LLM 只服从不参与分配——多样性不靠模型自觉；
+                // §12 #69/#72 写法规格签：卡尾缀"｜写：句型｜情：情绪｜口：口吻"（ChatterSpec 执行层确定性抽签——
+                // 炉计数+卡序锚定+同炉同签顺延去重，LLM 只服从不参与分配；口吻由性格签加权
+                // （按人锚：实体 Index 哈希，碎嘴→复读反问连发高权/闷葫芦→省略号高权…，不上卡面）；
                 // §12 #71 联动：贴景卡情绪从场景推荐子集抽，其余走日常套）
+                var personality = Content.ChatterSpec.PersonalityOf(entry.Entity.Index);
                 card += sceneMoods != null
-                    ? Content.ChatterSpec.TagFor(m_ForgeCount, k, usedSpecs, sceneMoods)
-                    : Content.ChatterSpec.TagFor(m_ForgeCount, k, usedSpecs);
+                    ? Content.ChatterSpec.TagFor(m_ForgeCount, k, usedSpecs, personality, sceneMoods)
+                    : Content.ChatterSpec.TagFor(m_ForgeCount, k, usedSpecs, personality);
                 cards.Add(card);
                 m_CurrentPairs.Add(pair);
                 m_CurrentOccasions.Add(entry.Occasion); // 场合随卡盖章（§12 #60 刀①：采样时已确定，收炉按 card 回填）
@@ -396,7 +398,7 @@ namespace CityLife.GameBridge
         /// 跨步抽样+炉计数锚定（与人卡同款确定性）；车也吃 S6 环境圈摘要（Transform 现位直读，不进热路径）；
         /// 车卡同缀 §12 #69 规格签（usedSpecs 与人卡同一本炉去重集）。</summary>
         private void AppendVehicleCards(List<string> cards, List<string> topics, ref int digested,
-                                        HashSet<(int Shape, int Mood)> usedSpecs)
+                                        HashSet<(int Shape, int Mood, int Voice)> usedSpecs)
         {
             var arr = m_VehicleQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
             var n = System.Math.Min(k_MinVehicleCards, arr.Length);
@@ -417,7 +419,8 @@ namespace CityLife.GameBridge
                         digested++;
                     }
                 }
-                card += Content.ChatterSpec.TagFor(m_ForgeCount, cards.Count, usedSpecs); // §12 #69 规格签（卡序=当前尾位）
+                card += Content.ChatterSpec.TagFor(m_ForgeCount, cards.Count, usedSpecs,
+                    Content.ChatterSpec.PersonalityOf(arr[i].Index)); // §12 #72 规格签（车卡性格按车实体哈希，与人卡同口径）
                 cards.Add(card);
                 m_CurrentOccasions.Add(Content.BubbleOccasion.Vehicle); // 车卡场合恒 Vehicle（采样时已确定）
                 m_CurrentPairs.Add(null); // 车卡保持独白（§12 #63：配对只限 Walk 人卡；平行表与 cards 等长对齐）

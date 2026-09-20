@@ -771,8 +771,10 @@ namespace CityLife.GameBridge
         /// 完全一致（CurrentAnchor 闸：A 句 HoldFor 播完消失、B 句再接；同组同屏只 1 泡；剧场泡必留+
         /// 计入同屏上限账，世界泡侧零改动复用）。
         /// 拒收即 false（调用方降级只留 A 句独白入池，别硬演）：剧场开关关/同屏满员/气泡层未就绪/
-        /// 演员实体失效/在他组串场/任一方已不在步行（进楼/上车→无 agent）/锚点五道闸不过。
-        /// 即席剧无剧本可退——不入池不消耗（剧本池语义不涉及）；地点=agentA（冷却语义同街头场，ephemeral 无妨）。</summary>
+        /// 演员实体失效/在他组串场/（步行卡）任一方已不在步行/锚点五道闸不过。
+        /// §12 #63 2B① 车内共锚：配对双方同乘一辆车（闲聊炉车辆长对话闸的双人卡）→ 不查步行 agent，
+        /// 共锚载具播（kind 1 车档，Anchors 去重剩 1 个，同屏 1 泡换文案串行语义不变）。
+        /// 即席剧无剧本可退——不入池不消耗（剧本池语义不涉及）；地点=锚点A（冷却语义同街头场，ephemeral 无妨）。</summary>
         internal bool InjectPairPlay(Entity citizenA, string nameA, string lineA, Entity citizenB, string nameB, string lineB)
         {
             if (!Content.ModSettings.BubbleTheaterEnabled)
@@ -786,42 +788,72 @@ namespace CityLife.GameBridge
             if (!EntityManager.Exists(citizenA) || !EntityManager.Exists(citizenB)
                 || InUse(citizenA) || InUse(citizenB))
                 return false; // 演员到货窗口期内离场/串场
-            if (!TryGetWalkerAgent(citizenA, out var agentA) || !TryGetWalkerAgent(citizenB, out var agentB))
-                return false; // 已不在步行（进楼/上车）——即席剧只锚行人 agent（台词是擦肩对话）
-            if (agentA == agentB || m_ByAnchor.ContainsKey(agentA) || m_ByAnchor.ContainsKey(agentB))
+            // §12 #63 2B① 车内共锚分支（车辆长对话闸的播放半）：配对双方同乘一辆车（CurrentVehicle 同指）
+            // → 两 Participant 共锚该载具（剧场"室内多人共锚"先例：Anchors 去重剩 1 个，同屏 1 泡轮流换文案），
+            // kind=1（车顶偏移/320m 车档，AnchorKindOf Car 臂）；不同车 → 原路径锚各自步行 agent。
+            var carA = VehicleOf(citizenA);
+            var sameCar = carA != Entity.Null && carA == VehicleOf(citizenB);
+            Entity anchorA, anchorB;
+            bool indoor;
+            if (sameCar)
+            {
+                anchorA = anchorB = carA;
+                indoor = true; // 语义=多人共锚一实体（AnchorKindOf 按 Car 臂出 kind 1，Indoor 值不参与车锚判定）
+            }
+            else
+            {
+                if (!TryGetWalkerAgent(citizenA, out anchorA) || !TryGetWalkerAgent(citizenB, out anchorB))
+                    return false; // 已不在步行（进楼/上车）——步行即席剧只锚行人 agent（台词是擦肩对话）
+                indoor = false;
+            }
+            if (anchorA == anchorB && !sameCar)
+                return false;
+            if (m_ByAnchor.ContainsKey(anchorA) || m_ByAnchor.ContainsKey(anchorB))
                 return false;
 
-            var t = new Theater { Location = agentA, SceneName = "街头即席" };
-            t.Participants.Add(new Participant { Citizen = citizenA, Anchor = agentA, Name = nameA, Indoor = false });
-            t.Participants.Add(new Participant { Citizen = citizenB, Anchor = agentB, Name = nameB, Indoor = false });
+            var t = new Theater { Location = anchorA, SceneName = sameCar ? "车内即席" : "街头即席" };
+            t.Participants.Add(new Participant { Citizen = citizenA, Anchor = anchorA, Name = nameA, Indoor = indoor });
+            t.Participants.Add(new Participant { Citizen = citizenB, Anchor = anchorB, Name = nameB, Indoor = indoor });
             t.Script.Add((0, lineA));
             t.Script.Add((1, lineB));
-            t.Lines[agentA] = nameA + "：" + lineA; // 名字前缀（§12 #50：分辨说话人+剧场视觉标识）
-            t.Lines[agentB] = "……"; // 在听（严格串行：B 等 A 说完）
-            t.Anchors.Add(agentA);
-            t.Anchors.Add(agentB);
-            t.CurrentAnchor = agentA;
+            t.Lines[anchorA] = nameA + "：" + lineA; // 名字前缀（§12 #50：分辨说话人+剧场视觉标识）
+            if (!t.Lines.ContainsKey(anchorB))
+                t.Lines[anchorB] = "……"; // 在听（严格串行：B 等 A 说完；车内共锚=同键，跳过不覆盖 A 句）
+            t.Anchors.Add(anchorA);
+            if (anchorB != anchorA)
+                t.Anchors.Add(anchorB); // 共锚去重（室内多人共锚先例：同实体只建 1 组）
+            t.CurrentAnchor = anchorA;
             t.Cursor = 1;
             // 登记+锚点建组（五道闸在 EnsureAnchor；与 StartTheater 开播段同构——即席剧无剧本可退，回滚即弃）
             m_Active.Add(t);
-            m_ByAnchor[agentA] = t;
-            m_ByAnchor[agentB] = t;
+            m_ByAnchor[anchorA] = t;
+            m_ByAnchor[anchorB] = t; // 共锚=同键覆写同值，无害
             foreach (var a in t.Anchors)
             {
-                if (!bubbles.EnsureAnchor(a, 0))
+                if (!bubbles.EnsureAnchor(a, AnchorKindOf(t, a)))
                 {
-                    m_ByAnchor.Remove(agentA);
-                    m_ByAnchor.Remove(agentB);
+                    m_ByAnchor.Remove(anchorA);
+                    m_ByAnchor.Remove(anchorB);
                     m_Active.Remove(t);
                     Mod.Log.Info($"[剧场] 即席剧拒收：{nameA}×{nameB}（锚点不可锚：离屏/层关/容量满），降级独白");
                     return false;
                 }
             }
             // 立即换文案开播（A 出句 B 隐身；不等各自时钟，同 StartTheater）
-            bubbles.RefreshAnchorText(agentA);
-            bubbles.RefreshAnchorText(agentB);
-            Mod.Log.Info($"[剧场] 即席剧开播：{nameA}×{nameB}（串行双泡 2 句）");
+            foreach (var a in t.Anchors)
+                bubbles.RefreshAnchorText(a);
+            Mod.Log.Info($"[剧场] 即席剧开播：{nameA}×{nameB}（{(sameCar ? "车内共锚" : "串行双泡")} 2 句）");
             return true;
+        }
+
+        /// <summary>市民当前所乘载具（Game.Creatures.CurrentVehicle 挂市民实体上——不在车上即无此组件）；
+        /// 读不到/实体已死 → Entity.Null。即席剧车内共锚判定用（组炉-到货窗口低频调用）。</summary>
+        private Entity VehicleOf(Entity citizen)
+        {
+            if (!EntityManager.HasComponent<Game.Creatures.CurrentVehicle>(citizen))
+                return Entity.Null;
+            var v = EntityManager.GetComponentData<Game.Creatures.CurrentVehicle>(citizen).m_Vehicle;
+            return v != Entity.Null && EntityManager.Exists(v) ? v : Entity.Null;
         }
 
         /// <summary>市民 → 其步行行人 agent（CurrentTransport 回指；Human+Transform 双闸——进楼/上车即无，拒收降级）。</summary>
@@ -979,9 +1011,12 @@ namespace CityLife.GameBridge
 
         // —— 工具 ——
 
-        /// <summary>锚点类型：室内参与者的锚点是建筑（kind 2），室外是行人 agent（kind 0）。</summary>
-        private static byte AnchorKindOf(Theater t, Entity anchor)
+        /// <summary>锚点类型：车锚（锚带 Game.Vehicles.Car——车内即席剧共锚，§12 #63 2B①）→ kind 1（车顶/320m）；
+        /// 室内参与者的锚点是建筑 → kind 2；室外是行人 agent → kind 0。</summary>
+        private byte AnchorKindOf(Theater t, Entity anchor)
         {
+            if (EntityManager.HasComponent<Game.Vehicles.Car>(anchor))
+                return 1;
             foreach (var p in t.Participants)
                 if (p.Anchor == anchor)
                     return p.Indoor ? (byte)2 : (byte)0;

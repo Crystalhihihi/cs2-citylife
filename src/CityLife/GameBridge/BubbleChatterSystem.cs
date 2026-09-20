@@ -57,6 +57,8 @@ namespace CityLife.GameBridge
 
         private EntityQuery m_CitizenQuery = default!;
         private EntityQuery m_VehicleQuery = default!; // 车卡源（载具本体采样——司机多是过境/服务人口，市民池天然车 0，[Pool] 日志实锤）
+        private EntityQuery m_SelQuery = default!;     // §12 #63 2B①：玩家选中的车（SelectionInfo+Car，锁定通道一）
+        private EntityQuery m_FollowedQuery = default!; // §12 #63 2B①：玩家跟随的市民（Followed 标记，锁定通道二）
         private TopicRadarSystem m_Radar = default!;
         private CitizenPoolSystem m_CitizenPool = default!;
         private ContentDirectorSystem m_Director = default!; // 话题库持有方（别重复造，配题抽同一货架）
@@ -96,6 +98,18 @@ namespace CityLife.GameBridge
             // 车卡源查询（不加 RequireForUpdate：没车的城也得产人卡，只闸市民查询）
             m_VehicleQuery = GetEntityQuery(
                 ComponentType.ReadOnly<Game.Vehicles.Vehicle>(),
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
+            // §12 #63 2B① 车辆长对话闸·锁定双通道（spike docs/spikes/2026-09-20-vehicle-dialog-spike.md）：
+            // 选中=SelectionInfo+Car（实体侧选中标记）；跟随=Followed 市民（经 CurrentVehicle 落车）
+            m_SelQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Tools.SelectionInfo>(),
+                ComponentType.ReadOnly<Game.Vehicles.Car>(),
+                ComponentType.Exclude<Game.Common.Deleted>(),
+                ComponentType.Exclude<Game.Tools.Temp>());
+            m_FollowedQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Citizen>(),
+                ComponentType.ReadOnly<Game.Citizens.Followed>(),
                 ComponentType.Exclude<Game.Common.Deleted>(),
                 ComponentType.Exclude<Game.Tools.Temp>());
             m_Radar = World.GetOrCreateSystemManaged<TopicRadarSystem>();
@@ -240,7 +254,7 @@ namespace CityLife.GameBridge
             }
             // 车卡（车载泡根治 v2：车里多是过境/服务司机，市民池天然车 0——[Pool] 日志实锤连续车 0，
             // 人卡保底找不到候选；车锚的声源必须是车自己：从载具本体采样组卡，场合恒 Vehicle）
-            AppendVehicleCards(cards, topics, ref digested, usedSpecs);
+            AppendVehicleCards(cards, topics, ref digested, usedSpecs, pairCardNos);
 
             m_Pool.CurrentCycle = m_ForgeCount; // BornCycle 基准锚本炉
             var rumorsNow = Content.CityRumors.Recent(3); // 刀②城市记忆：最新 3 条传闻当话料
@@ -434,10 +448,40 @@ namespace CityLife.GameBridge
         /// <summary>车卡组卡追加（车载泡根治 v2）：从载具本体采样 ≤k_MinVehicleCards 张，场合恒 Vehicle。
         /// 只收四类民用载具（私家车/出租车/公交/货车——警车/垃圾车等服务车说话="空车说话"同款诡异，不收）；
         /// 跨步抽样+炉计数锚定（与人卡同款确定性）；车也吃 S6 环境圈摘要（Transform 现位直读，不进热路径）；
-        /// 车卡同缀 §12 #69 规格签（usedSpecs 与人卡同一本炉去重集）。</summary>
+        /// 车卡同缀 §12 #69 规格签（usedSpecs 与人卡同一本炉去重集）。
+        /// §12 #63 2B① 车辆长对话闸（修正注记，spike docs/spikes/2026-09-20-vehicle-dialog-spike.md）：
+        /// 玩家"正在看这辆车"（锁定双通道=选中 SelectionInfo ∨ 跟随 Followed 市民落车）且乘员 ≥2（含司机）
+        /// → 强制第一卡=车内双人卡（出租车 A=后座乘客 B=司机），对卡管线与人卡同款（pairCardNos 点名+
+        /// 收炉注入即席剧，剧场侧车内共锚见 BubbleTheaterSystem.InjectPairPlay）；
+        /// 锁定车仅司机 1 人 / 普通采样车 OccupantCount==1 → 卡文加"，在打电话"（独驾独白给个由头）。</summary>
         private void AppendVehicleCards(List<string> cards, List<string> topics, ref int digested,
-                                        HashSet<(int Shape, int Mood, int Voice)> usedSpecs)
+                                        HashSet<(int Shape, int Mood, int Voice)> usedSpecs, List<int> pairCardNos)
         {
+            m_NameSystem ??= World.GetExistingSystemManaged<Game.UI.NameSystem>(); // 锁定双人卡署名/目的地真名都要，提前解析
+            var locked = FindLockedVehiclePair();
+            if (locked.HasValue && m_NameSystem != null)
+            {
+                var (lv, lp, ld) = locked.Value;
+                var nameA = lp != Entity.Null ? m_NameSystem.GetRenderedLabelName(lp) : null;
+                var nameB = ld != Entity.Null ? m_NameSystem.GetRenderedLabelName(ld) : null;
+                if (lp != Entity.Null && ld != Entity.Null
+                    && !string.IsNullOrEmpty(nameA) && !string.IsNullOrEmpty(nameB))
+                {
+                    var taxi = EntityManager.HasComponent<Game.Vehicles.Taxi>(lv);
+                    var card = (taxi ? "出租车乘客，坐在后座" : "私家车乘客，坐在车里")
+                             + (taxi ? "｜对：出租车司机，在开车" : "｜对：私家车司机，在开车");
+                    card += Content.ChatterSpec.TagFor(m_ForgeCount, 0, usedSpecs,
+                        Content.ChatterSpec.PersonalityOf(lp.Index)); // 性格按乘客锚（与人卡同口径：实体 Index 哈希）
+                    for (int i = 0; i < pairCardNos.Count; i++)
+                        pairCardNos[i]++; // 人卡配对号顺延——锁定卡插队成第 1 卡（1 起卡号全 +1）
+                    cards.Insert(0, card);
+                    topics.Insert(0, m_Director.Topics.TopicFor(m_ForgeCount, 0, avoidSafeZones: false));
+                    m_CurrentZones.Insert(0, ZoneOf(topics[0]));
+                    m_CurrentOccasions.Insert(0, Content.BubbleOccasion.Vehicle);
+                    m_CurrentPairs.Insert(0, (nameA, nameB, lp, ld));
+                    pairCardNos.Add(1);
+                }
+            }
             var arr = m_VehicleQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
             var n = System.Math.Min(k_MinVehicleCards, arr.Length);
             var stride = System.Math.Max(1, arr.Length / System.Math.Max(1, n));
@@ -448,6 +492,8 @@ namespace CityLife.GameBridge
                 var card = DescribeVehicle(arr[i], out var parked);
                 if (card == null)
                     continue; // 服务车/特种车：v1 不收
+                if (OccupantCount(arr[i]) == 1)
+                    card += "，在打电话"; // §12 #63 2B①：独驾（司机+0 乘客）=打电话卡——独白给个由头
                 if (EntityManager.HasComponent<Transform>(arr[i]))
                 {
                     var digest = m_Environment.BuildDigest(EntityManager.GetComponentData<Transform>(arr[i]).m_Position);
@@ -487,6 +533,101 @@ namespace CityLife.GameBridge
             m_NameSystem ??= World.GetExistingSystemManaged<Game.UI.NameSystem>();
             var dest = CitizenPoolSystem.DestinationPlace(EntityManager, v, m_NameSystem); // §12 #62 真名层："（去「胖东来」）"
             return dest != null ? $"{who}，{moving}（去{dest}）" : $"{who}，{moving}";
+        }
+
+        /// <summary>§12 #63 2B① 车辆长对话闸·锁定双通道（修正注记；spike 实锤：Followed/SelectionInfo 均实体侧标记，
+        /// UI bindings 有 followedCitizens$ 同款语义）：玩家"正在看这辆车"= 玩家选中它（SelectionInfo+Car 查询首辆）
+        /// ∨ 玩家跟随的市民坐在里面（Followed 查询 → CurrentVehicle 落车）。
+        /// 命中后解析乘员：司机=载具 Game.Vehicles.Controller.m_Controller（creature agent）经 Resident 回指市民，
+        /// 乘客=Game.Vehicles.Passenger buffer 逐个经 Resident 回指（取第一位——双人卡只组一对，出租车=后座那位）。
+        /// 返回 （车， 乘客市民， 司机市民)；乘客/司机任一回指不到 → 对应字段 Entity.Null（调用方判：双全才出双人卡）。
+        /// 双通道都空 / 车上 0 人 → null（走普通采样，天然降级不硬凑）。
+        /// 主线程组炉级低频调用（每炉一次，查询恒小表），禁入热路径。</summary>
+        private (Entity Vehicle, Entity Passenger, Entity Driver)? FindLockedVehiclePair()
+        {
+            var v = LockedVehicle();
+            if (v == Entity.Null)
+                return null;
+            var driver = Entity.Null;
+            if (EntityManager.HasComponent<Game.Vehicles.Controller>(v))
+            {
+                var c = EntityManager.GetComponentData<Game.Vehicles.Controller>(v).m_Controller;
+                if (c != Entity.Null && EntityManager.HasComponent<Game.Creatures.Resident>(c))
+                    driver = EntityManager.GetComponentData<Game.Creatures.Resident>(c).m_Citizen;
+            }
+            var passenger = Entity.Null;
+            if (EntityManager.HasBuffer<Game.Vehicles.Passenger>(v))
+            {
+                var buf = EntityManager.GetBuffer<Game.Vehicles.Passenger>(v);
+                for (int i = 0; i < buf.Length; i++)
+                {
+                    var agent = buf[i].m_Passenger;
+                    if (agent != Entity.Null && EntityManager.HasComponent<Game.Creatures.Resident>(agent))
+                    {
+                        var cit = EntityManager.GetComponentData<Game.Creatures.Resident>(agent).m_Citizen;
+                        if (cit != Entity.Null)
+                        {
+                            passenger = cit;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (driver == Entity.Null && passenger == Entity.Null)
+                return null; // 0 人（空车/乘员回指全灭）→ 普通采样（现司机卡口粮）
+            return (v, passenger, driver);
+        }
+
+        /// <summary>锁定双通道解析：选中通道优先（m_SelQuery 首辆），其次跟随通道（Followed 市民的现车）。
+        /// 都落空 → Entity.Null。</summary>
+        private Entity LockedVehicle()
+        {
+            if (!m_SelQuery.IsEmptyIgnoreFilter)
+            {
+                var arr = m_SelQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
+                var v = arr.Length > 0 ? arr[0] : Entity.Null;
+                arr.Dispose();
+                if (v != Entity.Null)
+                    return v;
+            }
+            if (!m_FollowedQuery.IsEmptyIgnoreFilter)
+            {
+                var arr = m_FollowedQuery.ToEntityArray(Unity.Collections.Allocator.Temp);
+                for (int i = 0; i < arr.Length; i++)
+                {
+                    var v = VehicleOf(arr[i]);
+                    if (v != Entity.Null)
+                    {
+                        arr.Dispose();
+                        return v;
+                    }
+                }
+                arr.Dispose();
+            }
+            return Entity.Null;
+        }
+
+        /// <summary>市民当前所乘载具（Game.Creatures.CurrentVehicle 挂市民实体上——不在车上即无此组件）；
+        /// 读不到/实体已死 → Entity.Null。</summary>
+        private Entity VehicleOf(Entity citizen)
+        {
+            if (!EntityManager.HasComponent<Game.Creatures.CurrentVehicle>(citizen))
+                return Entity.Null;
+            var v = EntityManager.GetComponentData<Game.Creatures.CurrentVehicle>(citizen).m_Vehicle;
+            return v != Entity.Null && EntityManager.Exists(v) ? v : Entity.Null;
+        }
+
+        /// <summary>车上乘员数（含司机）：司机=Controller.m_Controller 非空按 1 算，乘客=Passenger buffer 长度。
+        /// 只用于"独驾=打电话卡"判定（==1），不回指市民实体（组炉低频，HasBuffer 直读）。</summary>
+        private int OccupantCount(Entity v)
+        {
+            var n = 0;
+            if (EntityManager.HasComponent<Game.Vehicles.Controller>(v)
+                && EntityManager.GetComponentData<Game.Vehicles.Controller>(v).m_Controller != Entity.Null)
+                n = 1;
+            if (EntityManager.HasBuffer<Game.Vehicles.Passenger>(v))
+                n += EntityManager.GetBuffer<Game.Vehicles.Passenger>(v).Length;
+            return n;
         }
 
         /// <summary>弱卡判定（刀③，启发式阈值待实机校准）：纯身份无处境/只"呆着"=低信息熵卡——

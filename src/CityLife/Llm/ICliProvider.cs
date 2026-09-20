@@ -83,6 +83,10 @@ namespace CityLife.Llm
         /// <summary>精确 response token 数，同 <see cref="PromptTokens"/>（预留字段）。</summary>
         public int? ResponseTokens { get; set; }
 
+        /// <summary>推理 token 数（usage.completion_tokens_details.reasoning_tokens，2026-09-20 实锤字段名——
+        /// thinking 模型的思考链占用，是 completion_tokens 的子集；无 thinking/CLI 轨留空）。</summary>
+        public int? ReasoningTokens { get; set; }
+
         private CliResult(bool success, string text, string? error, long latencyMs, int promptChars)
         {
             Success = success;

@@ -56,8 +56,12 @@ namespace CityLife.Llm
             try
             {
                 // temperature 0.8：社交语料要一点发散；JSON 体手工拼（禁 NuGet 的现实）
-                // thinking=disabled 时关深度思考（DeepSeek V4 系实测：隐式推理 token 占 output 大头，关掉立省）
-                var thinkingPart = m_Thinking == "disabled" ? ",\"thinking\":{\"type\":\"disabled\"}" : "";
+                // thinking 传参（2026-09-20 实锤 deepseek-v4-pro）："disabled"→{"type":"disabled"}（DeepSeek V4 系实测：
+                // 隐式推理 token 占 output 大头，关掉立省）；非空档位值（high/medium/low）→{"type":"enabled","effort":值}
+                // （thinking A/B 实验用的透传；空串=不送该字段，厂商默认）
+                var thinkingPart = m_Thinking == "disabled" ? ",\"thinking\":{\"type\":\"disabled\"}"
+                    : m_Thinking.Length > 0 ? ",\"thinking\":{\"type\":\"enabled\",\"effort\":\"" + JsonMini.Escape(m_Thinking) + "\"}"
+                    : "";
                 var body = "{\"model\":\"" + JsonMini.Escape(m_Model) +
                            "\",\"messages\":[{\"role\":\"user\",\"content\":\"" + JsonMini.Escape(prompt!) +
                            "\"}],\"temperature\":0.8" + thinkingPart + "}";
@@ -85,6 +89,7 @@ namespace CityLife.Llm
                 var r = CliResult.Ok(content, promptChars, sw.ElapsedMilliseconds);
                 r.PromptTokens = JsonMini.GetInt(text, "prompt_tokens");
                 r.ResponseTokens = JsonMini.GetInt(text, "completion_tokens");
+                r.ReasoningTokens = JsonMini.GetInt(text, "reasoning_tokens"); // usage.completion_tokens_details.reasoning_tokens（2026-09-20 实锤字段名；无 thinking 时不返回→null）
                 return r;
             }
             catch (OperationCanceledException)

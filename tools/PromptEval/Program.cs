@@ -8,6 +8,11 @@
 //        [--model 覆盖] [--thinking disabled|""] [--out 报告目录]
 //        [--variant v0|v1|v2|all]（闲聊炉规格签对照 2026-09-16 §12 #69 落地后：v0/v2=生产形态含系统规格签/
 //         v1=无签对照组；实验期"去例句"语义已随生产头删【样子】而退役——镜像率基准例句冻结在 harness 内）
+//        [--scenevar v0|v1|v2|all]（贴景措辞变体 2026-09-20 §12 #71 玩家指示：v0 生产原样/景签注短指针
+//         +卡列表后独立【场景】段/v2 段内加反通用句判别线；harness 对生产 prompt 做确定性段落手术，
+//         锚点缺失即抛错人工对齐——定胜者前生产 PromptBuilder 零改动）
+//        [--set collapsed|diverse|both|scene]（scene=2026-09-20 新增景签具组：8 张全 Indoor 景签卡，
+//         话核严格取自 SceneWords.k_Table——表改了手抄跟上，别自编）
 // 纪律：API key 只从 llm.json 读入内存，绝不打印不落盘；报告只记供给名/模型名/thinking 状态。
 using System;
 using System.Collections.Generic;
@@ -71,6 +76,38 @@ internal static class Program
         false, false, false, true, false, false, false, true,
     };
 
+    // 场景签具组（--set scene，2026-09-20 §12 #71 贴景措辞实验）：8 张全 Indoor 景签卡——
+    // 卡文照生产 DescribeCitizen 文风（身份，在场所做事｜景：词｜话核：核1/核2）；
+    // 话核词严格取自 SceneWords.k_Table 对应行（SceneWords 在 GameBridge 不链接进 harness，
+    // 手抄同步靠人工对齐——表改了这里跟上，别自编）。pairs 全 false、场合全 Indoor。
+    private static readonly string[] k_Scene =
+    {
+        "小学生，在学校里上课｜景：小学｜话核：作业/课间",
+        "退休大爷，在医院里看病｜景：医院｜话核：挂号/打针",
+        "上班族，在诊所里看病｜景：诊所｜话核：开药/问诊",
+        "游客，在火车站里候车｜景：火车站｜话核：晚点/行李",
+        "上班族，在邮局里寄包裹｜景：邮局｜话核：包裹/排队",
+        "上班族，在市政厅里办事｜景：市政厅｜话核：盖章/投诉",
+        "上班族，在派出所里报案｜景：派出所｜话核：报案/调解",
+        "退休大妈，在监狱里探视｜景：监狱｜话核：探视/放风",
+    };
+
+    private static readonly BubbleOccasion[] k_SceneOcc =
+    {
+        BubbleOccasion.Indoor, BubbleOccasion.Indoor, BubbleOccasion.Indoor, BubbleOccasion.Indoor,
+        BubbleOccasion.Indoor, BubbleOccasion.Indoor, BubbleOccasion.Indoor, BubbleOccasion.Indoor,
+    };
+
+    private static readonly bool[] k_ScenePair =
+    {
+        false, false, false, false, false, false, false, false,
+    };
+
+    private static readonly (string A, string B)[] k_ScenePairNames =
+    {
+        ("", ""), ("", ""), ("", ""), ("", ""), ("", ""), ("", ""), ("", ""), ("", ""),
+    };
+
     // 双人卡拼装假名（与卡具对齐——模拟收炉时 m_CurrentPairs 里的 (nameA,nameB)，验证 40 硬顶防线）
     private static readonly (string A, string B)[] k_CollapsedPairNames =
     {
@@ -130,13 +167,41 @@ internal static class Program
           "笑了笑", "叹了口气", "耸耸肩", "挠头", "指着", "翻了个白眼",
           "进行", "相关", "予以", "据悉", "首先", "其次" };
 
+    // —— 贴景措辞变体（2026-09-20 玩家指示"细分提示词优化"实验，--scenevar 轴）——
+    // 诊断：景签解释塞【处境卡】头部超长连环句注意力稀释；"（学校/医院/车站这类）"是镜像诱饵
+    // （45 个场景词被 3 个通用名带偏）；话核用法没说清=忽略话核/逐字硬塞两种失败；"视角都行"含糊。
+    // V0=生产原样；V1=景签注缩短指独立段+卡列表后独立【场景】段（删场景例名、话核用法说清）；
+    // V2=V1 段内加反通用句判别线。对生产 prompt 做确定性段落手术（锚点缺失即抛错人工对齐——
+    // 定胜者前生产 PromptBuilder 零改动）。卡侧"｜景：｜话核："段格式本轮不动（玩家说粒度他亲自过）。
+    private const string k_SceneClauseProd = "；\"｜景：\"是这人所在的场景（学校/医院/车站这类），\"｜话核：\"是该场景的话题核——带景签的卡必须写与这场景相关的话（当事人/唠嗑/排队视角都行，别跑题）；没景签的卡自由发挥";
+    private const string k_SceneClauseShort = "；\"｜景：\"/\"｜话核：\"是场景签（口径见【场景】段，带签必须服从）";
+    private const string k_SceneSectionV1 = "【场景】带\"｜景：\"的卡：这人此刻就在那个场所里，话要从那个场所里长出来——在那办事、等人、干活、陪人，说的就是那地方的事。\"｜话核：\"是这地方人们嘴边的事，顺着它自然聊，别逐字复读、别当成必答清单。没\"｜景：\"的卡自由发挥。\n";
+    private const string k_SceneSectionV2 = "【场景】带\"｜景：\"的卡：这人此刻就在那个场所里，话要从那个场所里长出来——在那办事、等人、干活、陪人，说的就是那地方的事。\"｜话核：\"是这地方人们嘴边的事，顺着它自然聊，别逐字复读、别当成必答清单。写\"困/累/饿/好无聊\"这种在哪个地方都能说的话，算跑题。没\"｜景：\"的卡自由发挥。\n";
+
+    /// <summary>贴景措辞手术：V1/V2 把生产景签注换短指针 + 卡列表后（【规格】/【任务】锚点前）插独立【场景】段。</summary>
+    private static string ApplySceneVar(string prompt, int sceneVar)
+    {
+        if (sceneVar == 0)
+            return prompt;
+        if (!prompt.Contains(k_SceneClauseProd))
+            throw new InvalidOperationException("生产【处境卡】景签注原文没找到——结构漂移，变体手术先人工对齐");
+        var p = prompt.Replace(k_SceneClauseProd, k_SceneClauseShort);
+        var specIdx = p.IndexOf("【规格】", StringComparison.Ordinal);
+        var taskIdx = p.IndexOf("【任务】", StringComparison.Ordinal);
+        var at = specIdx >= 0 ? specIdx : taskIdx;
+        if (at < 0)
+            throw new InvalidOperationException("【规格】/【任务】锚点没找到——变体手术先人工对齐");
+        return p.Insert(at, sceneVar == 2 ? k_SceneSectionV2 : k_SceneSectionV1);
+    }
+
     private static async Task<int> Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
         var scenario = ArgOf(args, "--scenario", "all");
         var k = int.Parse(ArgOf(args, "--k", "2"));
         var setSel = ArgOf(args, "--set", "both");
-        var variantSel = ArgOf(args, "--variant", "v0"); // 闲聊炉 prompt 变体：v0 生产原样 / v1 去例句 / v2 去例句+系统分配规格 / all 三连（仅 chatter 场景有效）
+        var variantSel = ArgOf(args, "--variant", "v0"); // 闲聊炉规格签对照：v0/v2 生产形态 / v1 无签对照（仅 chatter 场景有效）
+        var sceneVarSel = ArgOf(args, "--scenevar", "v0"); // 贴景措辞变体（2026-09-20）：v0 生产原样 / v1 独立【场景】段 / v2 加反通用线 / all 三连（仅 chatter 场景有效）
         var topicCount = int.Parse(ArgOf(args, "--count", "30"));
         var cfgPath = ArgOf(args, "--config", DefaultConfigPath());
         var modelOverride = ArgOfOpt(args, "--model");
@@ -181,12 +246,22 @@ internal static class Program
                 "v2" => new[] { k_V2 },
                 _ => new[] { k_V0 },
             };
+            var sceneVars = sceneVarSel switch
+            {
+                "all" => new[] { 0, 1, 2 },
+                "v1" => new[] { 1 },
+                "v2" => new[] { 2 },
+                _ => new[] { 0 },
+            };
             foreach (var v in variants)
+            foreach (var sv in sceneVars)
             {
                 if (setSel is "collapsed" or "both")
-                    exit |= await RunChatter(provider, reservoir, "collapsed", v, k_Collapsed, k_CollapsedOcc, k_CollapsedPair, k_CollapsedPairNames, 100u, k, report);
+                    exit |= await RunChatter(provider, reservoir, "collapsed", v, sv, k_Collapsed, k_CollapsedOcc, k_CollapsedPair, k_CollapsedPairNames, 100u, k, report);
                 if (setSel is "diverse" or "both")
-                    exit |= await RunChatter(provider, reservoir, "diverse", v, k_Diverse, k_DiverseOcc, k_DiversePair, k_DiversePairNames, 200u, k, report);
+                    exit |= await RunChatter(provider, reservoir, "diverse", v, sv, k_Diverse, k_DiverseOcc, k_DiversePair, k_DiversePairNames, 200u, k, report);
+                if (setSel is "scene")
+                    exit |= await RunChatter(provider, reservoir, "scene", v, sv, k_Scene, k_SceneOcc, k_ScenePair, k_ScenePairNames, 300u, k, report);
             }
         }
         if (scenario is "topics" or "all")
@@ -209,12 +284,12 @@ internal static class Program
     /// variant=规格签对照（§12 #69 落地后）：v0/v2=生产形态（卡尾缀 ChatterSpec 系统签，每炉重抽与生产同链）/
     /// v1=无签对照组。指标对照（镜像率/规格服从）三变体同口径计算，v1 的规格指标=假设性无签对照。</summary>
     private static async Task<int> RunChatter(ICliProvider provider, TopicReservoir reservoir,
-                                              string setName, int variant, string[] cards, BubbleOccasion[] occs,
+                                              string setName, int variant, int sceneVar, string[] cards, BubbleOccasion[] occs,
                                               bool[] pairs, (string A, string B)[] pairNames,
                                               uint batchBase, int k, StringBuilder report)
     {
         var head = PromptBuilder.BuildChatterHead(); // 生产头（§12 #69 后已无【样子】例句段）
-        var label = $"v{variant}/{setName}";
+        var label = $"v{variant}s{sceneVar}/{setName}";
         // 规格签（§12 #69 落生产后口径）：v0/v2=生产形态（卡尾缀"｜写：｜情："，ChatterSpec 与生产同一条分配链，
         // 每炉按 具基址+炉次 重抽——同生产炉计数锚定）；v1=无签对照组。规格对三变体同口径计算（对照组测量用）
         var specOn = variant != k_V1;
@@ -242,6 +317,7 @@ internal static class Program
             }
             forgeShapes.Add(shapes);
             var prompt = PromptBuilder.BuildChatterPrompt(head, k_Snap, effCards, topics, k_Rumors, pairCardNos);
+            prompt = ApplySceneVar(prompt, sceneVar); // 贴景措辞变体手术（2026-09-20；V0=原样直通）
             Console.WriteLine($"[Eval·chatter/{label}] 第 {b + 1}/{k} 炉发出（{prompt.Length} 字符）…");
             var r = await provider.OneShotAsync(prompt, CancellationToken.None);
             if (!r.Success)

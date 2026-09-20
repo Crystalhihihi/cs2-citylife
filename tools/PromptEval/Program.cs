@@ -396,17 +396,17 @@ internal static class Program
         {
             // 每卡配一题：真实 TopicFor 确定性抽题（与实机同一代码路径）
             var topics = cards.Select((_, i) => reservoir.TopicFor(batchBase + (uint)b, i)).ToArray();
-            // §12 #69 规格签：走生产同一条 ChatterSpec 分配链（具基址+炉次锚定、同炉同签顺延去重）
-            var used = new HashSet<(int Shape, int Mood)>();
+            // §12 #69/#72 规格签：走生产同一条 ChatterSpec 分配链（具基址+炉次锚定、同炉同签顺延去重；
+            // #72 起三元=写×情×口——性格按卡序伪实体哈希（卡具无实体，i 当伪实体 Index，口吻权重走性格表）
+            var used = new HashSet<(int Shape, int Mood, int Voice)>();
             var shapes = new int[cards.Length];
             var effCards = new string[cards.Length];
             for (var i = 0; i < cards.Length; i++)
             {
-                var (s, m) = ChatterSpec.Assign(batchBase + (uint)b, i, used);
+                var (s, m, vo) = ChatterSpec.Assign(batchBase + (uint)b, i, used, i);
                 shapes[i] = s;
-                effCards[i] = specOn && s >= 0 ? cards[i] + $"｜写：{ChatterSpec.Shapes[s]}｜情：{ChatterSpec.Moods[m]}" : cards[i];
-                if (voiceVar != 0)
-                    effCards[i] += "｜口：" + k_VoiceSigns[(int)((batchBase + (uint)b + (uint)i) % (uint)k_VoiceSigns.Length)]; // 口吻签（确定性取模，允许重复无需去重）
+                effCards[i] = specOn && s >= 0 ? cards[i] + $"｜写：{ChatterSpec.Shapes[s]}｜情：{ChatterSpec.Moods[m]}｜口：{ChatterSpec.Voices[vo]}" : cards[i];
+                // 口吻签已转正进 ChatterSpec 三元（#72）——voicevar 轴的"｜口："卡签不再重复缀（V1 仅剩历史对照语义）
             }
             forgeShapes.Add(shapes);
             var prompt = PromptBuilder.BuildChatterPrompt(head, k_Snap, effCards, topics, k_Rumors, pairCardNos);
@@ -516,25 +516,28 @@ internal static class Program
         // AI 腔巡检：直播腔/书面腔/动作描写词表 + emoji（代理对）
         var aiHits = bodies.Where(b => k_AiToneWords.Any(w => b.Contains(w)) || b.Any(char.IsSurrogate)).ToArray();
 
-        // 规格服从对照：锚定"带数字长句"规格的卡（三变体同口径按炉抽签），其条目带数字占比——
-        // v0/v2 是规格生效实测，v1 是无签对照。
-        // 数字口径=ASCII 数字 ∪ 中文数词（零~十/百/千/万/两/几）——中文语料里"两天/三点七"才是常态，
-        // 只认 char.IsDigit 会把中文数字表达全漏掉（2026-09-16 变体实验首轮 0% 误报实锤）
-        const string cjkDigits = "零一二三四五六七八九十百千万两几";
-        bool HasDigit(string s) => s.Any(c => char.IsDigit(c) || cjkDigits.Contains(c));
-        var digitShapeIdx = Array.IndexOf(ChatterSpec.Shapes, "带数字长句");
-        var digitTotal = 0; var digitHit = 0;
+        // 规格服从（§12 #72 句型三档后口径，退役"带数字长句"数字率探针）：按炉分配的句型签，
+        // 条目句长落档占比（短≤12/中 13-25/长 26-40——ChatterSpec.InShapeTier 同尺）；v0/v2 实测，v1 无签对照
+        var tierTotal = 0; var tierHit = 0;
         for (var i = 0; i < all.Count; i++)
         {
             var e = all[i];
             if (e.Card < 1 || e.Card > cards.Length)
                 continue;
-            if (forgeShapes[lineForge[i]][e.Card - 1] != digitShapeIdx)
+            var s = forgeShapes[lineForge[i]][e.Card - 1];
+            if (s < 0)
                 continue;
-            digitTotal++;
-            if (HasDigit(BodyOf(e)))
-                digitHit++;
+            tierTotal++;
+            if (ChatterSpec.InShapeTier(s, BodyOf(e).Length))
+                tierHit++;
         }
+
+        // 50 句归一率（§12 #72 常驻指标）：rolling 近 50 句的近重复对数 + distinct bigram 占比——
+        // 活人感的反面尺（归一=像一个模板里出来的，越低越好）
+        var tail = bodies.Length > 50 ? bodies[^50..] : bodies;
+        var (rollDupPairs, _) = NearDup(tail);
+        var rollGrams = tail.SelectMany(Bigrams).ToArray();
+        var rollRate = rollGrams.Length > 0 ? (double)rollGrams.Distinct().Count() / rollGrams.Length : 0;
 
         // §12 #71 场景贴题率：卡具里带"｜景：…｜话核：词1/词2"的卡，其条目含任一话核词的占比
         // （话核从卡文现解，不硬编码——卡具换词指标自动跟上）
@@ -572,7 +575,8 @@ internal static class Program
         Console.WriteLine($"  词汇多样性 : 去重句 {distinctLines}/{bodies.Length}，相异bigram {vocabRate:P0}");
         Console.WriteLine($"  语气词密度 : {voiceDensity:0.0} 次/百字（活人感粗量化）");
         Console.WriteLine($"  AI腔       : {aiHits.Length}/{bodies.Length}{(aiHits.Length > 0 ? "（" + aiHits[0] + "）" : "")}");
-        Console.WriteLine($"  规格对照   : \"带数字长句\"锚定卡 {digitTotal} 条带数字 {Pct(digitHit, Math.Max(1, digitTotal))}（v0/v2=实测 v1=无签对照）");
+        Console.WriteLine($"  规格服从   : 句长落档 {tierHit}/{tierTotal} = {Pct(tierHit, Math.Max(1, tierTotal))}（§12 #72 三档签，v0/v2=实测 v1=无签对照）");
+        Console.WriteLine($"  50句归一率 : 近重复 {rollDupPairs} 对 / 相异bigram {rollRate:P0}（rolling 50，§12 #72 常驻）");
         if (sceneTotal > 0)
             Console.WriteLine($"  场景贴题率 : {sceneHit}/{sceneTotal} = {Pct(sceneHit, sceneTotal)}（§12 #71 景签卡条目含话核词占比）");
 
@@ -588,7 +592,8 @@ internal static class Program
         report.Append($"- 词汇多样性：去重句 {distinctLines}/{bodies.Length}，相异 bigram 占比 {vocabRate:P0}\n");
         report.Append($"- 语气词密度：{voiceDensity:0.0} 次/百字（啊呢吧嘛呗咯嘞…？！，活人感粗量化）\n");
         report.Append($"- AI腔巡检：{aiHits.Length}/{bodies.Length} 命中\n");
-        report.Append($"- 规格对照（\"带数字长句\"锚定卡条目数字出现率，含中文数词；v0/v2=实测 v1=无签对照）：{Pct(digitHit, Math.Max(1, digitTotal))} ({digitHit}/{digitTotal})\n");
+        report.Append($"- 规格服从（§12 #72 句型三档签条目落档率；v0/v2=实测 v1=无签对照）：{Pct(tierHit, Math.Max(1, tierTotal))} ({tierHit}/{tierTotal})\n");
+        report.Append($"- 50句归一率（§12 #72 常驻：rolling 近 50 句近重复 {rollDupPairs} 对，相异 bigram {rollRate:P0}）\n");
         if (sceneTotal > 0)
             report.Append($"- 场景贴题率（§12 #71 景签卡条目含话核词占比）：{Pct(sceneHit, sceneTotal)} ({sceneHit}/{sceneTotal})\n");
         if (topMirror.Count > 0)

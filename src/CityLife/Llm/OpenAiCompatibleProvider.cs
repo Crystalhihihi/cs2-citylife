@@ -19,8 +19,10 @@ namespace CityLife.Llm
     /// </summary>
     public sealed class OpenAiCompatibleProvider : ICliProvider
     {
-        // 静态复用 HttpClient（握手/连接池摊薄到每次 one-shot；请求级依然独立，无会话语义）
-        private static readonly HttpClient s_Http = new HttpClient();
+        // 静态复用 HttpClient（握手/连接池摊薄到每次 one-shot；请求级依然独立，无会话语义）。
+        // Timeout 480s：默认 100s 会把 thinking 模型（v4-pro effort=high 一炉推理常超 100s，
+        // 2026-09-20 thinking A/B 实验两连"超时（420s）"误报实锤）掐死——真正的上界是请求级 420s 取消令牌
+        private static readonly HttpClient s_Http = new HttpClient { Timeout = TimeSpan.FromSeconds(480) };
 
         private readonly string m_Url;
         private readonly string m_Key;

@@ -194,6 +194,49 @@ internal static class Program
         return p.Insert(at, sceneVar == 2 ? k_SceneSectionV2 : k_SceneSectionV1);
     }
 
+    // —— 口吻/活人感变体（2026-09-20 玩家判定"活人感太少"，--voicevar 轴；社区调研三招的离线验证）——
+    // ①口吻签=第三规格维度（沿用 #69 单向阀门哲学：多样性靠系统分配不靠模型自觉，允许重复无需去重）
+    // ②中文口语 AI 腔短黑名单（正面包框，禁令≤3 条——#69 堆砌僵硬+V2 惩罚干碎 schema 双实锤）
+    // ③标点纪律。V0=现产原样；V1=卡尾缀"｜口：X"+头部签注加 gloss；V2=V1+闲聊尾【口气】段。
+    // harness 侧对组装好的 prompt 做段落手术，生产 PromptBuilder/ChatterSpec 一行不动（玩家盲评完才定）。
+    /// <summary>口吻签词表（8 词，（具基址+炉次+卡序）取模确定性分配；车卡人卡同签=生产形态）。</summary>
+    private static readonly string[] k_VoiceSigns =
+    {
+        "句尾爱带语气词（啊/呗/呢）",
+        "句尾爱带语气词（嘛/咯/嘞）",
+        "爱反问",
+        "会自我纠正（\"哦不对\"/\"我是说\"）",
+        "碎嘴短句（三五字一顿）",
+        "爱重复半句",
+        "爱用省略号（话说一半）",
+        "爱用口头叹词（好家伙/嚯/哎呦）",
+    };
+
+    private const string k_SpecGlossAnchor = "；\"｜写：\"是系统分配的句型规格、\"｜情：\"是情绪底色（必须服从）";
+    private const string k_VoiceGloss = "，\"｜口：\"是这人的说话口气（必须服从，但别每条都硬凹同一个把戏，自然为主）";
+    private const string k_VoiceSection = "【口气】人说话不写稿：别用\"因此/然而/于是/并且/此外\"这类书面连接词（想说就说\"所以/然后/还有\"）；别排比对仗，别收尾升华出金句；标点随嘴——句号断开、问号、感叹号、省略号都随便用，冒号/破折号/引号能不用就不用。\n";
+
+    /// <summary>口吻手术：V1=签注串加"｜口："gloss；V2=再在【任务】前插【口气】段（锚点缺失即抛错人工对齐）。</summary>
+    private static string ApplyVoiceVar(string prompt, int voiceVar)
+    {
+        if (voiceVar == 0)
+            return prompt;
+        if (!prompt.Contains(k_SpecGlossAnchor))
+            throw new InvalidOperationException("生产写情签注没找到——结构漂移，voice 手术先人工对齐");
+        var p = prompt.Replace(k_SpecGlossAnchor, k_SpecGlossAnchor + k_VoiceGloss);
+        if (voiceVar == 2)
+        {
+            var at = p.IndexOf("【任务】", StringComparison.Ordinal);
+            if (at < 0)
+                throw new InvalidOperationException("【任务】锚点没找到——voice 手术先人工对齐");
+            p = p.Insert(at, k_VoiceSection);
+        }
+        return p;
+    }
+
+    /// <summary>语气词/标点密度探针字集（活人感粗量化：每百字含这些字符的次数）。</summary>
+    private const string k_VoiceChars = "啊呢吧嘛呗咯嘞…？！";
+
     private static async Task<int> Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
@@ -202,6 +245,7 @@ internal static class Program
         var setSel = ArgOf(args, "--set", "both");
         var variantSel = ArgOf(args, "--variant", "v0"); // 闲聊炉规格签对照：v0/v2 生产形态 / v1 无签对照（仅 chatter 场景有效）
         var sceneVarSel = ArgOf(args, "--scenevar", "v0"); // 贴景措辞变体（2026-09-20）：v0 生产原样 / v1 独立【场景】段 / v2 加反通用线 / all 三连（仅 chatter 场景有效）
+        var voiceVarSel = ArgOf(args, "--voicevar", "v0"); // 口吻活人感变体（2026-09-20）：v0 生产原样 / v1 卡尾缀"｜口："口吻签 / v2 再加【口气】段 / all 三连（仅 chatter 场景有效）
         var topicCount = int.Parse(ArgOf(args, "--count", "30"));
         var cfgPath = ArgOf(args, "--config", DefaultConfigPath());
         var modelOverride = ArgOfOpt(args, "--model");
@@ -253,15 +297,23 @@ internal static class Program
                 "v2" => new[] { 2 },
                 _ => new[] { 0 },
             };
+            var voiceVars = voiceVarSel switch
+            {
+                "all" => new[] { 0, 1, 2 },
+                "v1" => new[] { 1 },
+                "v2" => new[] { 2 },
+                _ => new[] { 0 },
+            };
             foreach (var v in variants)
             foreach (var sv in sceneVars)
+            foreach (var vv in voiceVars)
             {
                 if (setSel is "collapsed" or "both")
-                    exit |= await RunChatter(provider, reservoir, "collapsed", v, sv, k_Collapsed, k_CollapsedOcc, k_CollapsedPair, k_CollapsedPairNames, 100u, k, report);
+                    exit |= await RunChatter(provider, reservoir, "collapsed", v, sv, vv, k_Collapsed, k_CollapsedOcc, k_CollapsedPair, k_CollapsedPairNames, 100u, k, report);
                 if (setSel is "diverse" or "both")
-                    exit |= await RunChatter(provider, reservoir, "diverse", v, sv, k_Diverse, k_DiverseOcc, k_DiversePair, k_DiversePairNames, 200u, k, report);
+                    exit |= await RunChatter(provider, reservoir, "diverse", v, sv, vv, k_Diverse, k_DiverseOcc, k_DiversePair, k_DiversePairNames, 200u, k, report);
                 if (setSel is "scene")
-                    exit |= await RunChatter(provider, reservoir, "scene", v, sv, k_Scene, k_SceneOcc, k_ScenePair, k_ScenePairNames, 300u, k, report);
+                    exit |= await RunChatter(provider, reservoir, "scene", v, sv, vv, k_Scene, k_SceneOcc, k_ScenePair, k_ScenePairNames, 300u, k, report);
             }
         }
         if (scenario is "topics" or "all")
@@ -275,7 +327,46 @@ internal static class Program
         var file = Path.Combine(outDir, "eval-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".md");
         File.WriteAllText(file, report.ToString());
         Console.WriteLine("[Eval] 报告已写：" + file);
+        // 活人感盲评文件（--voicevar all 时产出）：三臂匿名甲乙丙、按具组×炉并列三张嘴的原始输出，
+        // 映射 key 压文件末尾"别先看"线后——玩家亲眼看离线输出盲评活人感（2026-09-20 拍板流程）
+        if (voiceVarSel == "all" && s_Blind.Count > 0)
+        {
+            var blind = WriteBlindFile(outDir);
+            Console.WriteLine("[Eval] 盲评文件已写：" + blind);
+        }
         return exit;
+    }
+
+    /// <summary>盲评收集（RunChatter 每炉登记一条：具组×炉×臂→原始输出；文件结尾统一洗牌成甲乙丙）。</summary>
+    private static readonly List<(string Set, int Voice, int Batch, string Raw)> s_Blind = new();
+
+    /// <summary>写盲评文件：甲/乙/丙 随机映射（固定种子，可复现——别按 v0v1v2 顺序）；key 压末尾"别先看"线后。</summary>
+    private static string WriteBlindFile(string outDir)
+    {
+        var arms = s_Blind.Select(x => x.Voice).Distinct().OrderBy(x => x).ToArray();
+        var shuffled = arms.OrderBy(_ => Guid.NewGuid()).ToArray(); // 随机映射（真随机——盲评不可推序；key 在同一文件尾部对账）
+        var nameOf = new[] { "甲", "乙", "丙", "丁" };
+        var map = shuffled.Select((v, i) => (v, name: nameOf[i])).ToDictionary(x => x.v, x => x.name);
+        var sb = new StringBuilder(8192);
+        sb.Append("# 活人感盲评 ").Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")).Append("\n\n");
+        sb.Append("逐组往下读，给每组三张嘴的活人感打分排序，看完再翻到底对 key。\n\n");
+        foreach (var g in s_Blind.GroupBy(x => (x.Set, x.Batch)).OrderBy(g => g.Key.Set).ThenBy(g => g.Key.Batch))
+        {
+            sb.Append("## ").Append(g.Key.Set).Append(" · 第 ").Append(g.Key.Batch + 1).Append(" 炉\n\n");
+            foreach (var name in nameOf.Take(shuffled.Length))
+            {
+                var raw = g.FirstOrDefault(x => map[x.Voice] == name);
+                if (raw.Raw == null)
+                    continue;
+                sb.Append("### ").Append(name).Append("\n\n```\n").Append(raw.Raw.Trim()).Append("\n```\n\n");
+            }
+        }
+        sb.Append("——别先看——\n\n");
+        for (var i = 0; i < shuffled.Length; i++)
+            sb.Append(nameOf[i]).Append(" = v").Append(shuffled[i]).Append(i == shuffled.Length - 1 ? "\n" : "　");
+        var path = Path.Combine(outDir, "blind-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".md");
+        File.WriteAllText(path, sb.ToString());
+        return path;
     }
 
     /// <summary>闲聊炉场景：真实 BuildChatterPrompt 发 K 炉，ParseBatch 解析后打分。
@@ -284,12 +375,12 @@ internal static class Program
     /// variant=规格签对照（§12 #69 落地后）：v0/v2=生产形态（卡尾缀 ChatterSpec 系统签，每炉重抽与生产同链）/
     /// v1=无签对照组。指标对照（镜像率/规格服从）三变体同口径计算，v1 的规格指标=假设性无签对照。</summary>
     private static async Task<int> RunChatter(ICliProvider provider, TopicReservoir reservoir,
-                                              string setName, int variant, int sceneVar, string[] cards, BubbleOccasion[] occs,
+                                              string setName, int variant, int sceneVar, int voiceVar, string[] cards, BubbleOccasion[] occs,
                                               bool[] pairs, (string A, string B)[] pairNames,
                                               uint batchBase, int k, StringBuilder report)
     {
         var head = PromptBuilder.BuildChatterHead(); // 生产头（§12 #69 后已无【样子】例句段）
-        var label = $"v{variant}s{sceneVar}/{setName}";
+        var label = $"v{variant}s{sceneVar}k{voiceVar}/{setName}";
         // 规格签（§12 #69 落生产后口径）：v0/v2=生产形态（卡尾缀"｜写：｜情："，ChatterSpec 与生产同一条分配链，
         // 每炉按 具基址+炉次 重抽——同生产炉计数锚定）；v1=无签对照组。规格对三变体同口径计算（对照组测量用）
         var specOn = variant != k_V1;
@@ -314,10 +405,13 @@ internal static class Program
                 var (s, m) = ChatterSpec.Assign(batchBase + (uint)b, i, used);
                 shapes[i] = s;
                 effCards[i] = specOn && s >= 0 ? cards[i] + $"｜写：{ChatterSpec.Shapes[s]}｜情：{ChatterSpec.Moods[m]}" : cards[i];
+                if (voiceVar != 0)
+                    effCards[i] += "｜口：" + k_VoiceSigns[(int)((batchBase + (uint)b + (uint)i) % (uint)k_VoiceSigns.Length)]; // 口吻签（确定性取模，允许重复无需去重）
             }
             forgeShapes.Add(shapes);
             var prompt = PromptBuilder.BuildChatterPrompt(head, k_Snap, effCards, topics, k_Rumors, pairCardNos);
             prompt = ApplySceneVar(prompt, sceneVar); // 贴景措辞变体手术（2026-09-20；V0=原样直通）
+            prompt = ApplyVoiceVar(prompt, voiceVar); // 口吻变体手术（2026-09-20；V0=原样直通）
             Console.WriteLine($"[Eval·chatter/{label}] 第 {b + 1}/{k} 炉发出（{prompt.Length} 字符）…");
             var r = await provider.OneShotAsync(prompt, CancellationToken.None);
             if (!r.Success)
@@ -331,6 +425,7 @@ internal static class Program
             for (var i = 0; i < parsed.Count; i++)
                 lineForge.Add(b);
             raws.Add((b, r.Text, r.LatencyMs, r.PromptTokens, r.ResponseTokens));
+            s_Blind.Add((setName, voiceVar, b, r.Text)); // 盲评收集（具组×炉×臂→原始输出）
             Console.WriteLine($"[Eval·chatter/{label}] 第 {b + 1} 炉：{parsed.Count} 条（丢 {skipped}）{r.LatencyMs / 1000.0:0.0}s");
         }
 
@@ -414,6 +509,10 @@ internal static class Program
         var allGrams = bodies.SelectMany(Bigrams).ToArray();
         var vocabRate = allGrams.Length > 0 ? (double)allGrams.Distinct().Count() / allGrams.Length : 0;
 
+        // 语气词/标点密度（2026-09-20 活人感粗量化）：啊呢吧嘛呗咯嘞…？！ 每百字次数
+        var voiceHits = bodies.Sum(b => b.Count(c => k_VoiceChars.Contains(c)));
+        var voiceDensity = voiceHits * 100.0 / Math.Max(1, bodies.Sum(b => b.Length));
+
         // AI 腔巡检：直播腔/书面腔/动作描写词表 + emoji（代理对）
         var aiHits = bodies.Where(b => k_AiToneWords.Any(w => b.Contains(w)) || b.Any(char.IsSurrogate)).ToArray();
 
@@ -471,6 +570,7 @@ internal static class Program
         Console.WriteLine($"  近重复     : {dupPairs} 对（Jaccard≥0.7）{(dupSample != null ? " 例：" + dupSample : "")}");
         Console.WriteLine($"  镜像率     : 均值 {mirrorMean:0.00}，≥0.5 嫌疑 {mirror50}/{bodies.Length}，≥0.7 实锤 {mirror70}/{bodies.Length}");
         Console.WriteLine($"  词汇多样性 : 去重句 {distinctLines}/{bodies.Length}，相异bigram {vocabRate:P0}");
+        Console.WriteLine($"  语气词密度 : {voiceDensity:0.0} 次/百字（活人感粗量化）");
         Console.WriteLine($"  AI腔       : {aiHits.Length}/{bodies.Length}{(aiHits.Length > 0 ? "（" + aiHits[0] + "）" : "")}");
         Console.WriteLine($"  规格对照   : \"带数字长句\"锚定卡 {digitTotal} 条带数字 {Pct(digitHit, Math.Max(1, digitTotal))}（v0/v2=实测 v1=无签对照）");
         if (sceneTotal > 0)
@@ -486,6 +586,7 @@ internal static class Program
         report.Append("- 近重复：").Append(dupPairs).Append(" 对").Append(dupSample != null ? "（" + dupSample + "）" : "").Append("\n");
         report.Append($"- 镜像率：均值 {mirrorMean:0.00}，≥0.5 嫌疑 {Pct(mirror50, n)}，≥0.7 实锤 {Pct(mirror70, n)}（对 {k_ExampleLines.Length} 行例句字符 bigram Jaccard）\n");
         report.Append($"- 词汇多样性：去重句 {distinctLines}/{bodies.Length}，相异 bigram 占比 {vocabRate:P0}\n");
+        report.Append($"- 语气词密度：{voiceDensity:0.0} 次/百字（啊呢吧嘛呗咯嘞…？！，活人感粗量化）\n");
         report.Append($"- AI腔巡检：{aiHits.Length}/{bodies.Length} 命中\n");
         report.Append($"- 规格对照（\"带数字长句\"锚定卡条目数字出现率，含中文数词；v0/v2=实测 v1=无签对照）：{Pct(digitHit, Math.Max(1, digitTotal))} ({digitHit}/{digitTotal})\n");
         if (sceneTotal > 0)

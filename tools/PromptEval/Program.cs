@@ -387,7 +387,7 @@ internal static class Program
         var all = new List<ParsedChatterLine>();
         var lineForge = new List<int>(); // 每条解析行出自哪炉（规格签按炉重抽，指标对照要按炉对号）
         var forgeShapes = new List<int[]>(); // 每炉每卡的句型签索引（对照指标用；v1 也照算=假设性对照）
-        var raws = new List<(int Batch, string Raw, long Ms, int? Pt, int? Rt)>();
+        var raws = new List<(int Batch, string Raw, long Ms, int? Pt, int? Rt, int? Rs)>();
         var totalSkipped = 0;
         var pairCount = pairs.Count(p => p);
         // 双人卡号列表（1 起）——与生产侧 BubbleChatterSystem 同名锚定口径，prompt 段头/任务行点名用
@@ -424,9 +424,10 @@ internal static class Program
             all.AddRange(parsed);
             for (var i = 0; i < parsed.Count; i++)
                 lineForge.Add(b);
-            raws.Add((b, r.Text, r.LatencyMs, r.PromptTokens, r.ResponseTokens));
+            raws.Add((b, r.Text, r.LatencyMs, r.PromptTokens, r.ResponseTokens, r.ReasoningTokens));
             s_Blind.Add((setName, voiceVar, b, r.Text)); // 盲评收集（具组×炉×臂→原始输出）
-            Console.WriteLine($"[Eval·chatter/{label}] 第 {b + 1} 炉：{parsed.Count} 条（丢 {skipped}）{r.LatencyMs / 1000.0:0.0}s");
+            Console.WriteLine($"[Eval·chatter/{label}] 第 {b + 1} 炉：{parsed.Count} 条（丢 {skipped}）{r.LatencyMs / 1000.0:0.0}s" +
+                (r.ResponseTokens != null ? $"，resp {r.ResponseTokens} tok{(r.ReasoningTokens != null ? $"（推理 {r.ReasoningTokens}）" : "")}" : ""));
         }
 
         // —— 指标 ——
@@ -539,6 +540,15 @@ internal static class Program
         var rollGrams = tail.SelectMany(Bigrams).ToArray();
         var rollRate = rollGrams.Length > 0 ? (double)rollGrams.Distinct().Count() / rollGrams.Length : 0;
 
+        // token 三段账（2026-09-20 thinking A/B 成本口径）：Σ prompt/completion/reasoning、每炉均值、
+        // ×15 炉/游戏小时折算（炉频=3-4-5 游戏分钟轮换≈15 炉/游戏小时；单价参数化，公式随报告注）
+        var furnaces = Math.Max(1, raws.Count);
+        var sumPt = raws.Sum(x => x.Pt ?? 0);
+        var sumRt = raws.Sum(x => x.Rt ?? 0);
+        var sumRs = raws.Sum(x => x.Rs ?? 0);
+        var perHour = (sumPt + sumRt) * 15 / furnaces;
+        var costLine = $"prompt Σ{sumPt}（~{sumPt / furnaces}/炉）· completion Σ{sumRt}（~{sumRt / furnaces}/炉）· reasoning Σ{sumRs}（~{sumRs / furnaces}/炉）｜×15≈每游戏小时 {perHour} tok";
+
         // §12 #71 场景贴题率：卡具里带"｜景：…｜话核：词1/词2"的卡，其条目含任一话核词的占比
         // （话核从卡文现解，不硬编码——卡具换词指标自动跟上）
         var sceneCores = new string[]?[cards.Length];
@@ -577,6 +587,7 @@ internal static class Program
         Console.WriteLine($"  AI腔       : {aiHits.Length}/{bodies.Length}{(aiHits.Length > 0 ? "（" + aiHits[0] + "）" : "")}");
         Console.WriteLine($"  规格服从   : 句长落档 {tierHit}/{tierTotal} = {Pct(tierHit, Math.Max(1, tierTotal))}（§12 #72 三档签，v0/v2=实测 v1=无签对照）");
         Console.WriteLine($"  50句归一率 : 近重复 {rollDupPairs} 对 / 相异bigram {rollRate:P0}（rolling 50，§12 #72 常驻）");
+        Console.WriteLine($"  成本三段账 : {costLine}");
         if (sceneTotal > 0)
             Console.WriteLine($"  场景贴题率 : {sceneHit}/{sceneTotal} = {Pct(sceneHit, sceneTotal)}（§12 #71 景签卡条目含话核词占比）");
 
@@ -594,6 +605,7 @@ internal static class Program
         report.Append($"- AI腔巡检：{aiHits.Length}/{bodies.Length} 命中\n");
         report.Append($"- 规格服从（§12 #72 句型三档签条目落档率；v0/v2=实测 v1=无签对照）：{Pct(tierHit, Math.Max(1, tierTotal))} ({tierHit}/{tierTotal})\n");
         report.Append($"- 50句归一率（§12 #72 常驻：rolling 近 50 句近重复 {rollDupPairs} 对，相异 bigram {rollRate:P0}）\n");
+        report.Append($"- 成本三段账：{costLine}\n");
         if (sceneTotal > 0)
             report.Append($"- 场景贴题率（§12 #71 景签卡条目含话核词占比）：{Pct(sceneHit, sceneTotal)} ({sceneHit}/{sceneTotal})\n");
         if (topMirror.Count > 0)
@@ -609,7 +621,7 @@ internal static class Program
         {
             report.Append("### 第 ").Append(raw.Batch + 1).Append(" 炉原始输出（")
                   .Append((raw.Ms / 1000.0).ToString("0.0", CultureInfo.InvariantCulture)).Append("s")
-                  .Append(raw.Pt != null ? $"，prompt {raw.Pt} tok / resp {raw.Rt} tok" : "").Append("）\n\n```\n")
+                  .Append(raw.Pt != null ? $"，prompt {raw.Pt} tok / resp {raw.Rt} tok{(raw.Rs != null ? $"（推理 {raw.Rs}）" : "")}" : "").Append("）\n\n```\n")
                   .Append(raw.Raw.Trim()).Append("\n```\n\n");
         }
         return 0;

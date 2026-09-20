@@ -218,9 +218,15 @@ namespace CityLife
                                 ? LlmProviderOption.DeepSeek
                                 : LlmProviderOption.CustomOpenAi;
                         o.LlmSlowBaseUrl = cfg.BaseUrl;
-                        o.LlmSlowModel = cfg.Model;
+                        // 分轨字段（2026-09-20 llm.json 扩展）优先，全局 model/thinking 兜底
+                        o.LlmSlowModel = cfg.EffectiveSlowModel;
                         o.LlmSlowApiKey = cfg.ApiKey;
-                        o.LlmSlowThinking = cfg.Thinking != "disabled";
+                        o.LlmSlowThinking = cfg.EffectiveSlowThinking != "disabled";
+                        if (cfg.EffectiveFastModel.Length > 0)
+                        {
+                            o.LlmFastModel = cfg.EffectiveFastModel; // 快轨分叉模型（SameAsSlow 预设下按此分叉）
+                            o.LlmFastThinking = cfg.EffectiveFastThinking != "disabled";
+                        }
                     }
                     Log.Info("[LLM] 已从 llm.json 迁移供给配置进设置页（仅此一次，此后 llm.json 不再读取）");
                 }
@@ -380,7 +386,9 @@ namespace CityLife
         private static Llm.ICliProvider BuildProvider(TrackParts p)
             => p.IsKimi
                 ? (Llm.ICliProvider)new Llm.KimiCliProvider()
-                : new Llm.OpenAiCompatibleProvider(p.BaseUrl, p.Key, p.Model, p.Thinking ? "" : "disabled");
+                // thinking 开=显式 effort=high（2026-09-20 双轨定轨：厂商默认档位非 high 实锤，"开"定标推荐高档；
+                // v4-flash 实锤兼容 effort=high 不报错）；关=disabled。档位值透传在 OpenAiCompatibleProvider
+                : new Llm.OpenAiCompatibleProvider(p.BaseUrl, p.Key, p.Model, p.Thinking ? "high" : "disabled");
 
         /// <summary>预设内置端点（仅 DeepSeek/硅基流动；其余返回空）。</summary>
         private static string PresetBaseUrl(LlmProviderOption p)

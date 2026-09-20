@@ -78,7 +78,7 @@ namespace CityLife.GameBridge
                 var count = 4 + (int)(seq % 4); // 4-7 条，别千篇整数
                 Mod.Gateway.Enqueue(new Llm.CliRequest(
                     Content.PromptBuilder.BuildReplyPrompt(ContentDirectorSystem.ReplyHead, t, count),
-                    Llm.CliPriority.High, 300, "mayor-reply:" + seq));
+                    Llm.CliPriority.High, 480, "mayor-reply:" + seq)); // 慢轨抬档 300→480（2026-09-20）
             }
 
             // M4 意图解析炉：命中事件包则进活动链（确认弹窗）；不命中静默走舆情层
@@ -86,7 +86,7 @@ namespace CityLife.GameBridge
             {
                 Mod.Gateway.Enqueue(new Llm.CliRequest(
                     Content.PromptBuilder.BuildIntentPrompt(EventChainSystem.IntentHead, t),
-                    Llm.CliPriority.Normal, 300, "intent:" + seq));
+                    Llm.CliPriority.Normal, 480, "intent:" + seq)); // 慢轨抬档 300→480（2026-09-20）
             }
         }
 

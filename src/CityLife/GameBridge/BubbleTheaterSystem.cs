@@ -85,7 +85,7 @@ namespace CityLife.GameBridge
     /// </summary>
     public partial class BubbleTheaterSystem : GameSystemBase
     {
-        private const double k_ForgeTtl = 300;   // 在飞请求 TTL（秒）：低频补给宁缺毋滥（闲聊炉同值）
+        private const double k_ForgeTtl = 480;   // 在飞请求 TTL（秒）：低频补给宁缺毋滥（2026-09-20 双轨定轨慢轨=v4-pro+high 130-221s/炉+排队，300 会误杀，抬 480）
         private const int k_MaxActive = 2;       // 同屏活剧场 ≤2（#48 上限定案）
         private const int k_MinParticipants = 2; // 一组 2-4 人（#48/M5）；街头闲谈上限=设置页（§12 #67，2-5 默认 3）
         private const int k_MaxParticipants = 4;

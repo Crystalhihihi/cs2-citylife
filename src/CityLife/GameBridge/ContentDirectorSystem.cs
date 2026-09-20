@@ -25,7 +25,7 @@ namespace CityLife.GameBridge
         private const int k_RefillWatermark = 5; // 池低于此数补炉
         private const int k_RecentKeep = 12;     // 已发正文保留数（去重反馈+查重共用）
         private const int k_TopicWatermark = 15; // 话题炉水位线：新鲜生成话题低于此数开炉（§12 #48）
-        private const double k_TopicForgeTtl = 300; // 话题炉 TTL（秒）：低频补给，宁缺毋滥
+        private const double k_TopicForgeTtl = 480; // 话题炉 TTL（秒）：低频补给，宁缺毋滥（慢轨 v4-pro+high 抬档 300→480，2026-09-20）
 
         private EntityQuery m_CitizenQuery = default!;
         private TopicRadarSystem m_Radar = default!;
@@ -346,7 +346,7 @@ namespace CityLife.GameBridge
                 var count = 2 + (int)(tSeq % 3); // 2-4 条，别千篇整数
                 Mod.Gateway.Enqueue(new Llm.CliRequest(
                     Content.PromptBuilder.BuildThreadPrompt(ReplyHead, tAuthor, tText, tComments, count),
-                    Llm.CliPriority.Low, 180, "thread:" + tSeq));
+                    Llm.CliPriority.Low, 480, "thread:" + tSeq)); // 慢轨 v4-pro+high 抬档 180→480（2026-09-20）
             }
 
             // ⑤ 话题创建炉（S3，§12 #48 水位触发）：新鲜生成话题（权重≥0.25/炉龄≤16）<15 条才开炉，

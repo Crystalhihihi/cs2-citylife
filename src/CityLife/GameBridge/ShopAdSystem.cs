@@ -27,7 +27,7 @@ namespace CityLife.GameBridge
     {
         private const uint k_ShopCooldownH = 72;
         private const int k_RushBase = 30;   // 氛围排队基数（normal 档）
-        private const double k_AdTtlSec = 180; // 广告请求 TTL（秒）：与下发 CliRequest 同值，兼作墙钟兜底基准
+        private const double k_AdTtlSec = 480; // 广告请求 TTL（秒）：与下发 CliRequest 同值，兼作墙钟兜底基准（慢轨 v4-pro+high 抬档 180→480，2026-09-20）
 
         private EntityQuery m_InjectQuery = default!;
         private EntityAnchorSystem m_AnchorSystem = default!;
@@ -152,7 +152,7 @@ namespace CityLife.GameBridge
                 var count = 2 + (int)(seq % 3); // 2-4 条，别千篇整数
                 Mod.Gateway.Enqueue(new Llm.CliRequest(
                     Content.PromptBuilder.BuildReplyPrompt(ContentDirectorSystem.ReplyHead, text, count),
-                    Llm.CliPriority.Low, 180, "ad-reply:" + seq));
+                    Llm.CliPriority.Low, 480, "ad-reply:" + seq)); // 慢轨抬档 180→480（2026-09-20）
             }
 
             // 打折广告 → 1 游戏小时后氛围排队（Leisure 通道，观感不承诺经济效果）

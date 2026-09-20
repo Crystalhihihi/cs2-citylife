@@ -213,7 +213,7 @@ namespace CityLife.GameBridge
                 s_BreakingHead ??= Content.PromptBuilder.BuildBreakingHead(); // 拼一次缓存复用（缓存纪律）
                 Mod.Gateway.Enqueue(new Llm.CliRequest(
                     Content.PromptBuilder.BuildBreakingPrompt(s_BreakingHead, breaking),
-                    Llm.CliPriority.Normal, 120, $"breaking:{e.Index}:{e.Version}")); // 快讯宁缺毋滥，120s 过期
+                    Llm.CliPriority.Normal, 480, $"breaking:{e.Index}:{e.Version}")); // 快讯宁缺毋滥；慢轨 v4-pro+high 抬档 120→480（2026-09-20，130-221s/炉必超 120）
             }
 
             // 热议档闸门：半个游戏日才准全城讨论一次（2026-08-20 玩家定案）

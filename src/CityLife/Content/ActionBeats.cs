@@ -16,17 +16,20 @@ namespace CityLife.Content
         /// <summary>场景子集键：街上（步行市民默认）/医院楼/通用。</summary>
         public enum SceneKind : byte { Street, Hospital, Generic }
 
-        /// <summary>街上动作拍（步行为主的沉默市民）。</summary>
+        /// <summary>街上动作拍（步行为主的沉默市民；大词小用是笑点——别光（打哈欠）；引语拍=拍里引用
+        /// 正在听的东西（直播间/电视/外放/楼上吵架），<b>拍内引用≠说话人腔</b>（§12 #72 二批）。</summary>
         private static readonly string[] k_Street =
-            { "刷手机", "看窗外", "赶路", "打电话", "东张西望", "抽烟", "看表" };
+            { "刷手机", "看窗外", "赶路", "打电话", "东张西望", "抽烟", "看表",
+              "一个超级大哈欠", "惊鸿一瞥", "猛地一激灵",
+              "今天直播间的家人们有福啦……", "电视里正放着广告", "手机外放听个响", "楼上又在吵架" };
 
         /// <summary>医院楼动作拍（候诊语境；当前无现场系统联动，医院锚点判到即用）。</summary>
         private static readonly string[] k_Hospital =
-            { "刷手机", "揉膝盖", "发呆", "看叫号屏", "排队等号" };
+            { "刷手机", "揉膝盖", "发呆", "看叫号屏", "排队等号", "一个超级大哈欠", "手机里刷着短视频" };
 
         /// <summary>通用动作拍（场景判不出时的兜底）。</summary>
         private static readonly string[] k_Generic =
-            { "刷手机", "看窗外", "发呆", "抠脑袋" };
+            { "刷手机", "看窗外", "发呆", "抠脑袋", "一个超级大哈欠", "惊鸿一瞥" };
 
         /// <summary>车辆环境声（#55 环境声层：快车喊话归此层不再做剧场；允许重复）。</summary>
         public static readonly string[] CarSounds = { "喇叭", "引擎" };

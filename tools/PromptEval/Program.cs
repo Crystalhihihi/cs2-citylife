@@ -549,6 +549,13 @@ internal static class Program
         var perHour = (sumPt + sumRt) * 15 / furnaces;
         var costLine = $"prompt Σ{sumPt}（~{sumPt / furnaces}/炉）· completion Σ{sumRt}（~{sumRt / furnaces}/炉）· reasoning Σ{sumRs}（~{sumRs / furnaces}/炉）｜×15≈每游戏小时 {perHour} tok";
 
+        // 延迟分位数（2026-09-20 硅基"慢"量化——即席剧拒收率与到货延迟挂钩，是切换硬门槛）：
+        // 单炉耗时 P50/P95（ms→s）
+        var lats = raws.Select(x => (double)x.Ms).OrderBy(x => x).ToArray();
+        var p50 = lats.Length > 0 ? lats[(int)((lats.Length - 1) * 0.5)] / 1000.0 : 0;
+        var p95 = lats.Length > 0 ? lats[(int)System.Math.Ceiling((lats.Length - 1) * 0.95)] / 1000.0 : 0;
+        var latLine = $"P50 {p50:0.0}s / P95 {p95:0.0}s（{lats.Length} 炉）";
+
         // §12 #71 场景贴题率：卡具里带"｜景：…｜话核：词1/词2"的卡，其条目含任一话核词的占比
         // （话核从卡文现解，不硬编码——卡具换词指标自动跟上）
         var sceneCores = new string[]?[cards.Length];
@@ -588,6 +595,7 @@ internal static class Program
         Console.WriteLine($"  规格服从   : 句长落档 {tierHit}/{tierTotal} = {Pct(tierHit, Math.Max(1, tierTotal))}（§12 #72 三档签，v0/v2=实测 v1=无签对照）");
         Console.WriteLine($"  50句归一率 : 近重复 {rollDupPairs} 对 / 相异bigram {rollRate:P0}（rolling 50，§12 #72 常驻）");
         Console.WriteLine($"  成本三段账 : {costLine}");
+        Console.WriteLine($"  延迟分位   : {latLine}");
         if (sceneTotal > 0)
             Console.WriteLine($"  场景贴题率 : {sceneHit}/{sceneTotal} = {Pct(sceneHit, sceneTotal)}（§12 #71 景签卡条目含话核词占比）");
 
@@ -606,6 +614,7 @@ internal static class Program
         report.Append($"- 规格服从（§12 #72 句型三档签条目落档率；v0/v2=实测 v1=无签对照）：{Pct(tierHit, Math.Max(1, tierTotal))} ({tierHit}/{tierTotal})\n");
         report.Append($"- 50句归一率（§12 #72 常驻：rolling 近 50 句近重复 {rollDupPairs} 对，相异 bigram {rollRate:P0}）\n");
         report.Append($"- 成本三段账：{costLine}\n");
+        report.Append($"- 延迟分位：{latLine}\n");
         if (sceneTotal > 0)
             report.Append($"- 场景贴题率（§12 #71 景签卡条目含话核词占比）：{Pct(sceneHit, sceneTotal)} ({sceneHit}/{sceneTotal})\n");
         if (topMirror.Count > 0)

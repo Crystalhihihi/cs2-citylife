@@ -108,6 +108,30 @@ internal static class Program
         ("", ""), ("", ""), ("", ""), ("", ""), ("", ""), ("", ""), ("", ""), ("", ""),
     };
 
+    // sameperson 具组（§12 #72 二批⑦，2026-09-20）：同一市民（性格签强制=毒舌）跨 6 场合 6 张卡——
+    // 验"同一人同一套口头禅"：口吻签应稳定落在该性格高权子集（harness 侧 Assign 性格索引强制=2）。
+    // 卡文照生产 DescribeCitizen 文风；pairs 全 false；场合跨 Walk/Indoor/Vehicle。
+    private static readonly string[] k_SamePerson =
+    {
+        "上班族，走路去上班路上",
+        "上班族，在建材厂里上班",
+        "上班族，在便利店里排队",
+        "上班族，在公园里溜达",
+        "上班族，坐公交下班回家路上",
+        "上班族，在住宅区呆着",
+    };
+
+    private static readonly BubbleOccasion[] k_SamePersonOcc =
+    {
+        BubbleOccasion.Walk, BubbleOccasion.Indoor, BubbleOccasion.Indoor,
+        BubbleOccasion.Walk, BubbleOccasion.Vehicle, BubbleOccasion.Indoor,
+    };
+
+    private static readonly bool[] k_SamePersonPair = { false, false, false, false, false, false };
+
+    private static readonly (string A, string B)[] k_SamePersonPairNames =
+        { ("", ""), ("", ""), ("", ""), ("", ""), ("", ""), ("", "") };
+
     // 双人卡拼装假名（与卡具对齐——模拟收炉时 m_CurrentPairs 里的 (nameA,nameB)，验证 40 硬顶防线）
     private static readonly (string A, string B)[] k_CollapsedPairNames =
     {
@@ -161,11 +185,24 @@ internal static class Program
         "这花开得还行，拍一张",
     };
 
-    // AI 腔巡检词表（直播腔/书面腔/动作神态描写——【语域】明令禁止的残留探针；emoji 另按代理对判）
+    // AI 腔巡检词表（直播腔/书面腔/动作神态描写——【语域】明令禁止的残留探针；emoji 另按代理对判。
+    // "家人们/宝子"不入表——§12 #72 二批④"腔 vs 字"口径：用法判不单词判，见 IsAiTone）
     private static readonly string[] k_AiToneWords =
-        { "家人们", "宝子", "谁懂", "绝绝子", "狠狠", "破防", "yyds", "emo",
+        { "谁懂", "绝绝子", "狠狠", "破防", "yyds", "emo", "冲冲冲",
           "笑了笑", "叹了口气", "耸耸肩", "挠头", "指着", "翻了个白眼",
           "进行", "相关", "予以", "据悉", "首先", "其次" };
+
+    /// <summary>AI 腔判定（§12 #72 二批④"腔 vs 字"口径）：直播腔=用法判不单词判——家人们/宝子
+    /// 作称呼（句首呼告）或与 谁懂/绝绝子/冲冲冲 同句共现才判；作普通名词（"你家人们呢"/"家人生病了"）放行不误报。</summary>
+    private static bool IsAiTone(string t)
+    {
+        if (t.StartsWith("家人们") || t.StartsWith("宝子"))
+            return true; // 句首呼告=称呼用法
+        if ((t.Contains("家人们") || t.Contains("宝子"))
+            && (t.Contains("谁懂") || t.Contains("绝绝子") || t.Contains("冲冲冲")))
+            return true; // 共现=直播腔语境
+        return k_AiToneWords.Any(w => t.Contains(w)) || t.Any(char.IsSurrogate);
+    }
 
     // —— 贴景措辞变体（2026-09-20 玩家指示"细分提示词优化"实验，--scenevar 轴）——
     // 诊断：景签解释塞【处境卡】头部超长连环句注意力稀释；"（学校/医院/车站这类）"是镜像诱饵
@@ -314,6 +351,8 @@ internal static class Program
                     exit |= await RunChatter(provider, reservoir, "diverse", v, sv, vv, k_Diverse, k_DiverseOcc, k_DiversePair, k_DiversePairNames, 200u, k, report);
                 if (setSel is "scene")
                     exit |= await RunChatter(provider, reservoir, "scene", v, sv, vv, k_Scene, k_SceneOcc, k_ScenePair, k_ScenePairNames, 300u, k, report);
+                if (setSel is "sameperson")
+                    exit |= await RunChatter(provider, reservoir, "sameperson", v, sv, vv, k_SamePerson, k_SamePersonOcc, k_SamePersonPair, k_SamePersonPairNames, 400u, k, report);
             }
         }
         if (scenario is "topics" or "all")
@@ -387,6 +426,7 @@ internal static class Program
         var all = new List<ParsedChatterLine>();
         var lineForge = new List<int>(); // 每条解析行出自哪炉（规格签按炉重抽，指标对照要按炉对号）
         var forgeShapes = new List<int[]>(); // 每炉每卡的句型签索引（对照指标用；v1 也照算=假设性对照）
+        var forgeVoices = new List<int[]>(); // 每炉每卡的口吻签索引（§12 #72 二批⑦ sameperson 一致性用）
         var raws = new List<(int Batch, string Raw, long Ms, int? Pt, int? Rt, int? Rs)>();
         var totalSkipped = 0;
         var pairCount = pairs.Count(p => p);
@@ -400,15 +440,19 @@ internal static class Program
             // #72 起三元=写×情×口——性格按卡序伪实体哈希（卡具无实体，i 当伪实体 Index，口吻权重走性格表）
             var used = new HashSet<(int Shape, int Mood, int Voice)>();
             var shapes = new int[cards.Length];
+            var voices = new int[cards.Length]; // §12 #72 二批⑦：每卡口吻签索引（sameperson 一致性指标用）
             var effCards = new string[cards.Length];
             for (var i = 0; i < cards.Length; i++)
             {
-                var (s, m, vo) = ChatterSpec.Assign(batchBase + (uint)b, i, used, i);
+                var personaIdx = setName == "sameperson" ? 2 : i; // sameperson 具组：同一市民（性格=毒舌）跨场合——口吻应稳定
+                var (s, m, vo) = ChatterSpec.Assign(batchBase + (uint)b, i, used, personaIdx);
                 shapes[i] = s;
+                voices[i] = vo;
                 effCards[i] = specOn && s >= 0 ? cards[i] + $"｜写：{ChatterSpec.Shapes[s]}｜情：{ChatterSpec.Moods[m]}｜口：{ChatterSpec.Voices[vo]}" : cards[i];
                 // 口吻签已转正进 ChatterSpec 三元（#72）——voicevar 轴的"｜口："卡签不再重复缀（V1 仅剩历史对照语义）
             }
             forgeShapes.Add(shapes);
+            forgeVoices.Add(voices);
             var prompt = PromptBuilder.BuildChatterPrompt(head, k_Snap, effCards, topics, k_Rumors, pairCardNos);
             prompt = ApplySceneVar(prompt, sceneVar); // 贴景措辞变体手术（2026-09-20；V0=原样直通）
             prompt = ApplyVoiceVar(prompt, voiceVar); // 口吻变体手术（2026-09-20；V0=原样直通）
@@ -515,7 +559,25 @@ internal static class Program
         var voiceDensity = voiceHits * 100.0 / Math.Max(1, bodies.Sum(b => b.Length));
 
         // AI 腔巡检：直播腔/书面腔/动作描写词表 + emoji（代理对）
-        var aiHits = bodies.Where(b => k_AiToneWords.Any(w => b.Contains(w)) || b.Any(char.IsSurrogate)).ToArray();
+        var aiHits = bodies.Where(IsAiTone).ToArray();
+
+        // §12 #72 二批⑦ sameperson 口吻一致性：同一市民（性格=毒舌）跨场合 6 卡×炉，
+        // 口吻落该性格高权前三签的占比（"同一人同一套口头禅"的粗量化）
+        var personaLine = "";
+        if (setName == "sameperson")
+        {
+            var top3 = new[] { 2, 0, 3 }; // 毒舌权重前三签索引（与 ChatterSpec.k_VoiceWeights[2] 人工对齐——表改了这里跟上）
+            var hit = 0; var tot = 0;
+            foreach (var fvs in forgeVoices)
+                foreach (var vo in fvs)
+                    if (vo >= 0)
+                    {
+                        tot++;
+                        if (top3.Contains(vo))
+                            hit++;
+                    }
+            personaLine = $"毒舌高权签命中 {hit}/{tot}（{Pct(hit, Math.Max(1, tot))}）";
+        }
 
         // 规格服从（§12 #72 句型三档后口径，退役"带数字长句"数字率探针）：按炉分配的句型签，
         // 条目句长落档占比（短≤12/中 13-25/长 26-40——ChatterSpec.InShapeTier 同尺）；v0/v2 实测，v1 无签对照
@@ -592,6 +654,8 @@ internal static class Program
         Console.WriteLine($"  词汇多样性 : 去重句 {distinctLines}/{bodies.Length}，相异bigram {vocabRate:P0}");
         Console.WriteLine($"  语气词密度 : {voiceDensity:0.0} 次/百字（活人感粗量化）");
         Console.WriteLine($"  AI腔       : {aiHits.Length}/{bodies.Length}{(aiHits.Length > 0 ? "（" + aiHits[0] + "）" : "")}");
+        if (personaLine.Length > 0)
+            Console.WriteLine($"  口吻一致性 : {personaLine}");
         Console.WriteLine($"  规格服从   : 句长落档 {tierHit}/{tierTotal} = {Pct(tierHit, Math.Max(1, tierTotal))}（§12 #72 三档签，v0/v2=实测 v1=无签对照）");
         Console.WriteLine($"  50句归一率 : 近重复 {rollDupPairs} 对 / 相异bigram {rollRate:P0}（rolling 50，§12 #72 常驻）");
         Console.WriteLine($"  成本三段账 : {costLine}");
@@ -611,6 +675,8 @@ internal static class Program
         report.Append($"- 词汇多样性：去重句 {distinctLines}/{bodies.Length}，相异 bigram 占比 {vocabRate:P0}\n");
         report.Append($"- 语气词密度：{voiceDensity:0.0} 次/百字（啊呢吧嘛呗咯嘞…？！，活人感粗量化）\n");
         report.Append($"- AI腔巡检：{aiHits.Length}/{bodies.Length} 命中\n");
+        if (personaLine.Length > 0)
+            report.Append($"- 口吻一致性（§12 #72 二批⑦ sameperson）：{personaLine}\n");
         report.Append($"- 规格服从（§12 #72 句型三档签条目落档率；v0/v2=实测 v1=无签对照）：{Pct(tierHit, Math.Max(1, tierTotal))} ({tierHit}/{tierTotal})\n");
         report.Append($"- 50句归一率（§12 #72 常驻：rolling 近 50 句近重复 {rollDupPairs} 对，相异 bigram {rollRate:P0}）\n");
         report.Append($"- 成本三段账：{costLine}\n");
@@ -733,7 +799,7 @@ internal static class Program
         var lens = bodies.Select(t => t.Length).ToArray();
         var (mean, std) = MeanStd(lens.Length > 0 ? lens : new[] { 0 });
         var (dupPairs, dupSample) = NearDup(bodies);
-        var aiHits = bodies.Where(t => k_AiToneWords.Any(w => t.Contains(w)) || t.Any(char.IsSurrogate)).ToArray();
+        var aiHits = bodies.Where(IsAiTone).ToArray();
 
         Console.WriteLine($"\n== reaction 汇总（{all.Count} 条，解析丢 {totalSkipped}）==");
         Console.WriteLine($"  句长       : 均值 {mean:0.0} 字，标准差 {std:0.0}，≤15字 {Pct(lens.Count(l => l <= 15), n)}，>30字 {Pct(lens.Count(l => l > 30), n)}");

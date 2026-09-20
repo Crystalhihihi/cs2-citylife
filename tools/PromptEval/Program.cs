@@ -634,7 +634,7 @@ internal static class Program
         var head = PromptBuilder.BuildTheaterStockHead();
         var stock = new TheaterScriptStock(); // 空库存：与低水位开炉时同形（各场景现存 0 部）
         var scripts = new List<TheaterScript>();
-        var raws = new List<(int Batch, string Raw, long Ms)>();
+        var raws = new List<(int Batch, string Raw, long Ms, int? Pt, int? Rt, int? Rs)>();
         var totalSkipped = 0;
         for (var b = 0; b < k; b++)
         {
@@ -651,8 +651,9 @@ internal static class Program
             var parsed = TheaterScriptStock.ParseBatch(r.Text, out var skipped);
             totalSkipped += skipped;
             scripts.AddRange(parsed);
-            raws.Add((b, r.Text, r.LatencyMs));
-            Console.WriteLine($"[Eval·theater] 第 {b + 1} 炉：{parsed.Count} 部（丢 {skipped}）{r.LatencyMs / 1000.0:0.0}s");
+            raws.Add((b, r.Text, r.LatencyMs, r.PromptTokens, r.ResponseTokens, r.ReasoningTokens));
+            Console.WriteLine($"[Eval·theater] 第 {b + 1} 炉：{parsed.Count} 部（丢 {skipped}）{r.LatencyMs / 1000.0:0.0}s" +
+                (r.ResponseTokens != null ? $"，resp {r.ResponseTokens} tok{(r.ReasoningTokens != null ? $"（推理 {r.ReasoningTokens}）" : "")}" : ""));
         }
 
         // —— 指标 ——
@@ -662,20 +663,29 @@ internal static class Program
         var slotBad = scripts.Count(s => s.Lines.Any(l => SlotInvalid(l.Text, s.Cast)));
         var linesPer = scripts.Select(s => (double)s.Lines.Count).ToArray();
         var slotUse = scripts.SelectMany(s => s.Lines).Count(l => l.Text.Contains("{place}") || RegexCount(l.Text, "{name") > 0);
+        // 成本三段账（2026-09-20 thinking A/B 口径，与 RunChatter 同款）：Σ、每炉均值、×15 炉/游戏小时折算
+        var furnaces = Math.Max(1, raws.Count);
+        var sumPt = raws.Sum(x => x.Pt ?? 0);
+        var sumRt = raws.Sum(x => x.Rt ?? 0);
+        var sumRs = raws.Sum(x => x.Rs ?? 0);
+        var costLine = $"prompt Σ{sumPt}（~{sumPt / furnaces}/炉）· completion Σ{sumRt}（~{sumRt / furnaces}/炉）· reasoning Σ{sumRs}（~{sumRs / furnaces}/炉）｜×15≈每游戏小时 {(sumPt + sumRt) * 15 / furnaces} tok";
 
         Console.WriteLine($"\n== theater 汇总（{scripts.Count} 部，解析丢 {totalSkipped}）==");
         Console.WriteLine($"  场景分布   : {string.Join("  ", byScene.Select(g => $"{g.Key}={g.Count()}"))}");
         Console.WriteLine($"  句数       : 均值 {linesPer.Average():0.0}（{linesPer.Min():0}-{linesPer.Max():0}）");
         Console.WriteLine($"  占位符     : {withSlot}/{scripts.Count} 部含占位（共 {slotUse} 处），越界无效占位 {slotBad} 部");
+        Console.WriteLine($"  成本三段账 : {costLine}");
 
         report.Append("## theater\n\n");
         report.Append("- 部数：").Append(scripts.Count).Append("（解析丢 ").Append(totalSkipped).Append("）\n");
         report.Append("- 场景：").Append(string.Join("  ", byScene.Select(g => $"{g.Key}={g.Count()}"))).Append("\n");
         report.Append($"- 句数：均值 {linesPer.Average():0.0}（{linesPer.Min():0}-{linesPer.Max():0}）\n");
-        report.Append($"- 占位符：{withSlot}/{scripts.Count} 部含占位（共 {slotUse} 处），越界无效占位 {slotBad} 部\n\n");
+        report.Append($"- 占位符：{withSlot}/{scripts.Count} 部含占位（共 {slotUse} 处），越界无效占位 {slotBad} 部\n");
+        report.Append($"- 成本三段账：{costLine}\n\n");
         foreach (var raw in raws)
             report.Append("### 第 ").Append(raw.Batch + 1).Append(" 炉原始输出（")
-                  .Append((raw.Ms / 1000.0).ToString("0.0", CultureInfo.InvariantCulture)).Append("s）\n\n```\n")
+                  .Append((raw.Ms / 1000.0).ToString("0.0", CultureInfo.InvariantCulture)).Append("s")
+                  .Append(raw.Pt != null ? $"，prompt {raw.Pt} tok / resp {raw.Rt} tok{(raw.Rs != null ? $"（推理 {raw.Rs}）" : "")}" : "").Append("）\n\n```\n")
                   .Append(raw.Raw.Trim()).Append("\n```\n\n");
         return 0;
     }

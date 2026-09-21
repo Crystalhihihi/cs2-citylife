@@ -4,6 +4,7 @@ using Game;
 using Game.Modding;
 using LlmFastProviderOption = CityLife.GameBridge.CityLifeSetting.LlmFastProviderOption;
 using LlmProviderOption = CityLife.GameBridge.CityLifeSetting.LlmProviderOption;
+using ThinkingTierOption = CityLife.GameBridge.CityLifeSetting.ThinkingTierOption;
 
 namespace CityLife
 {
@@ -183,8 +184,9 @@ namespace CityLife
             public string BaseUrl;
             public string Key;
             public string Model;
-            /// <summary>true=深度思考开（请求体不带 thinking 字段）；false=关（带 thinking.disabled）。KimiCli 轨忽略。</summary>
-            public bool Thinking;
+            /// <summary>thinking 档位（"off"/"high"，对应设置页 ThinkingTierOption 两档）：
+            /// "off"=请求体带 thinking.disabled；"high"=显式 effort=high。KimiCli 轨忽略。</summary>
+            public string Thinking;
         }
 
         /// <summary>
@@ -221,11 +223,15 @@ namespace CityLife
                         // 分轨字段（2026-09-20 llm.json 扩展）优先，全局 model/thinking 兜底
                         o.LlmSlowModel = cfg.EffectiveSlowModel;
                         o.LlmSlowApiKey = cfg.ApiKey;
-                        o.LlmSlowThinking = cfg.EffectiveSlowThinking != "disabled";
+                        // thinking 档位映射（2026-09-21 档位旋钮）：UI 两档 Off/High；json 手写其他档位值
+                        // （"medium"/"low" 等）不拦——一律按 High 落（非 "disabled" 即视为要思考），不校验不报错
+                        o.LlmSlowThinking = cfg.EffectiveSlowThinking != "disabled"
+                            ? ThinkingTierOption.High : ThinkingTierOption.Off;
                         if (cfg.EffectiveFastModel.Length > 0)
                         {
                             o.LlmFastModel = cfg.EffectiveFastModel; // 快轨分叉模型（SameAsSlow 预设下按此分叉）
-                            o.LlmFastThinking = cfg.EffectiveFastThinking != "disabled";
+                            o.LlmFastThinking = cfg.EffectiveFastThinking != "disabled"
+                                ? ThinkingTierOption.High : ThinkingTierOption.Off;
                         }
                         // 整 provider 分轨（2026-09-20）：fast 段带独立端点/key 时连快轨供给端一起迁
                         // （快轨硅基、慢轨官方的双端点形态；baseUrl/key 只在迁移期落设置页，永不进日志）
@@ -331,16 +337,16 @@ namespace CityLife
 
         // \x1/\x2 作分隔符防字段内容粘连串扰；签名只进内存比对，密钥原文绝不写日志
         private static string SlowSignature(GameBridge.CityLifeSetting o)
-            => string.Join("\x1", (int)o.LlmSlowProvider, o.LlmSlowBaseUrl, o.LlmSlowModel, o.LlmSlowApiKey, o.LlmSlowThinking);
+            => string.Join("\x1", (int)o.LlmSlowProvider, o.LlmSlowBaseUrl, o.LlmSlowModel, o.LlmSlowApiKey, (int)o.LlmSlowThinking);
 
         private static string FastSignature(GameBridge.CityLifeSetting o)
             => SlowSignature(o) + "\x2" + string.Join("\x1",
-                (int)o.LlmFastProvider, o.LlmFastBaseUrl, o.LlmFastModel, o.LlmFastApiKey, o.LlmFastThinking);
+                (int)o.LlmFastProvider, o.LlmFastBaseUrl, o.LlmFastModel, o.LlmFastApiKey, (int)o.LlmFastThinking);
 
         /// <summary>慢轨供给参数解析：KimiCli 无参数；DeepSeek/硅基流动 baseUrl 内置、模型空=推荐；自定义全取文本框。</summary>
         private static TrackParts ResolveSlowParts(GameBridge.CityLifeSetting o)
         {
-            var p = new TrackParts { Thinking = o.LlmSlowThinking };
+            var p = new TrackParts { Thinking = o.LlmSlowThinking == ThinkingTierOption.High ? "high" : "off" };
             switch (o.LlmSlowProvider)
             {
                 case LlmProviderOption.KimiCli:
@@ -361,15 +367,15 @@ namespace CityLife
             return p;
         }
 
-        /// <summary>快轨供给参数解析：SameAsSlow 继承慢轨 baseUrl/密钥/模型（模型可另填分叉），thinking 走自己的开关。</summary>
+        /// <summary>快轨供给参数解析：SameAsSlow 继承慢轨 baseUrl/密钥/模型（模型可另填分叉），thinking 走自己的档位。</summary>
         private static TrackParts ResolveFastParts(GameBridge.CityLifeSetting o, TrackParts slow)
         {
-            var p = new TrackParts { Thinking = o.LlmFastThinking };
+            var p = new TrackParts { Thinking = o.LlmFastThinking == ThinkingTierOption.High ? "high" : "off" };
             switch (o.LlmFastProvider)
             {
                 case LlmFastProviderOption.SameAsSlow:
                     p = slow;
-                    p.Thinking = o.LlmFastThinking;
+                    p.Thinking = o.LlmFastThinking == ThinkingTierOption.High ? "high" : "off";
                     var fork = (o.LlmFastModel ?? "").Trim();
                     if (fork.Length > 0)
                     {
@@ -400,9 +406,10 @@ namespace CityLife
         private static Llm.ICliProvider BuildProvider(TrackParts p)
             => p.IsKimi
                 ? (Llm.ICliProvider)new Llm.KimiCliProvider()
-                // thinking 开=显式 effort=high（2026-09-20 双轨定轨：厂商默认档位非 high 实锤，"开"定标推荐高档；
-                // v4-flash 实锤兼容 effort=high 不报错）；关=disabled。档位值透传在 OpenAiCompatibleProvider
-                : new Llm.OpenAiCompatibleProvider(p.BaseUrl, p.Key, p.Model, p.Thinking ? "high" : "disabled");
+                // thinking 档位透传（2026-09-21 档位旋钮）："high"=显式 effort=high（2026-09-20 双轨定轨：
+                // 厂商默认档位非 high 实锤，"开"定标推荐高档；v4-flash 实锤兼容 effort=high 不报错）；
+                // "off"=disabled。档位值→请求体字段的拼装细节在 OpenAiCompatibleProvider
+                : new Llm.OpenAiCompatibleProvider(p.BaseUrl, p.Key, p.Model, p.Thinking == "high" ? "high" : "disabled");
 
         /// <summary>预设内置端点（仅 DeepSeek/硅基流动；其余返回空）。</summary>
         private static string PresetBaseUrl(LlmProviderOption p)
@@ -426,10 +433,11 @@ namespace CityLife
             }
         }
 
-        /// <summary>日志描述（密钥永不进日志）。</summary>
+        /// <summary>日志描述（密钥永不进日志）。thinking 打档位原值（off/high）——
+        /// 档位变更触发热切换时本行即"快/慢轨 thinking=off/high"变更日志（§12 #59 旋钮）。</summary>
         private static string Describe(TrackParts p)
             => p.IsKimi
                 ? "KimiCli（本机 CLI 订阅轨）"
-                : $"OpenAiCompat 端点={p.BaseUrl} 模型={p.Model} thinking={(p.Thinking ? "开" : "关")}";
+                : $"OpenAiCompat 端点={p.BaseUrl} 模型={p.Model} thinking={p.Thinking}";
     }
 }

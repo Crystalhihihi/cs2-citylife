@@ -14,6 +14,8 @@ namespace CityLife.GameBridge
     /// 消费处直读 <c>Mod.Options?.属性 ?? 默认值</c>——必须容忍 null（主菜单期/未初始化）。
     /// LLM 供给组（kGroupLlm，§12 #59 快慢双轨）：配置主源在此，llm.json 仅在首次启动时
     /// 被读一次做迁移种子（LlmSeededFromJson 标记位，见 Mod.SeedLlmFromJson）。
+    /// 同步口径（写死，2026-09-21 档位旋钮立项时复核）：**.coc=运行时唯一真源，llm.json=首启种子/备份**——
+    /// 运行时绝不回读 llm.json，种子迁移后两处各自独立演化（llm.json 手写新值不会再进 .coc，除非重置标记位）。
     /// 热切换：游戏 UI 每次提交改动都走 ApplyAndSave→Apply（AutomaticSettings 逐字段实锤），
     /// 本类重写 Apply 回调 Mod.OnOptionsApplied()，由 Mod 比对供给签名决定是否热重建网关。
     ///
@@ -54,6 +56,13 @@ namespace CityLife.GameBridge
         /// <summary>快轨供给预设。SameAsSlow（默认）=与慢轨同一家（同 baseUrl/密钥，模型可另填），
         /// 其余取值语义同 <see cref="LlmProviderOption"/>。</summary>
         public enum LlmFastProviderOption { SameAsSlow, KimiCli, DeepSeek, SiliconFlow, CustomOpenAi }
+
+        /// <summary>thinking 档位（§12 #59 旋钮，2026-09-21 立项：玩家口径"high 不要 max"，UI 先两档）。
+        /// Off=关（请求体带 thinking.disabled）；High=高（显式 effort=high——厂商默认档位非 high 实锤，
+        /// "开"必须定标推荐高档，v4-flash 实锤兼容不报错）。底层值域是字符串（ProviderConfig 口径：
+        /// ""/"disabled"/"high"/"medium"/"low"），llm.json 手写其他档位种子迁移不拦（一律按 High 落，
+        /// 档位扩张只加枚举值+本地化键，不动映射）。</summary>
+        public enum ThinkingTierOption { Off, High }
 
         public CityLifeSetting(IMod mod) : base(mod)
         {
@@ -174,9 +183,11 @@ namespace CityLife.GameBridge
         [SettingsUITextInput]
         public string LlmSlowApiKey { get; set; } = "";
 
-        /// <summary>慢轨深度思考（默认开）。关=请求体带 thinking.disabled（支持的厂商生效），省 token 大头但降质量。</summary>
+        /// <summary>慢轨 thinking 档位（默认 High 高）。Off=请求体带 thinking.disabled（支持的厂商生效），
+        /// 省 token 大头但降质量；High=显式 effort=high（定标口径见 <see cref="ThinkingTierOption"/>）。
+        /// 2026-09-21 由 bool 开关换 enum 档位（同名换型：旧 .coc 值反序列化失败回落默认=与旧默认同语义）。</summary>
         [SettingsUISection(kTab, kGroupLlm)]
-        public bool LlmSlowThinking { get; set; } = true;
+        public ThinkingTierOption LlmSlowThinking { get; set; } = ThinkingTierOption.High;
 
         /// <summary>快轨供给预设（默认 SameAsSlow 同慢轨一家）。快轨服务气泡闲聊炉（量大句短，~5-10s 要的是省 token）。</summary>
         [SettingsUISection(kTab, kGroupLlm)]
@@ -197,9 +208,10 @@ namespace CityLife.GameBridge
         [SettingsUITextInput]
         public string LlmFastApiKey { get; set; } = "";
 
-        /// <summary>快轨深度思考（默认关——快轨收益主在省 token，思考链对短句是浪费；§12 #59）。</summary>
+        /// <summary>快轨 thinking 档位（默认 Off——快轨收益主在省 token，思考链对短句是浪费；§12 #59）。
+        /// 2026-09-21 由 bool 开关换 enum 档位（同名换型，同 <see cref="LlmSlowThinking"/> 注记）。</summary>
         [SettingsUISection(kTab, kGroupLlm)]
-        public bool LlmFastThinking { get; set; } = false;
+        public ThinkingTierOption LlmFastThinking { get; set; } = ThinkingTierOption.Off;
 
         /// <summary>llm.json 迁移种子已消费标记（隐藏字段不进 UI，只随 .coc 持久化）。
         /// false → Mod.OnLoad 读一次 llm.json 写进上面的字段并置 true（此后 llm.json 不再读取，设置页为唯一主源）。</summary>
@@ -240,12 +252,12 @@ namespace CityLife.GameBridge
             LlmSlowModel = "";
             LlmSlowBaseUrl = "";
             LlmSlowApiKey = "";
-            LlmSlowThinking = true;
+            LlmSlowThinking = ThinkingTierOption.High;
             LlmFastProvider = LlmFastProviderOption.SameAsSlow;
             LlmFastModel = "";
             LlmFastBaseUrl = "";
             LlmFastApiKey = "";
-            LlmFastThinking = false;
+            LlmFastThinking = ThinkingTierOption.Off;
         }
     }
 }
